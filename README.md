@@ -1,3 +1,17 @@
+> [!IMPORTANT]
+> **Fork Notice**
+>
+> This is a fork of [llama-swap](https://github.com/mostlygeek/llama-swap) maintained by [Anant Shrivastava](https://github.com/anantshri) for personal additions deemed necessary. The code is open sourced purely for reference purposes.
+>
+> **[Anant](https://github.com/anantshri) does not encourage others to use this fork**, as it will not be maintained beyond what the original author provides. Please use the original package: https://github.com/mostlygeek/llama-swap
+>
+> ### Changes in this fork
+>
+> 1. Ollama compatible API
+> 2. Attempt to extract metrics for vLLM backend requests in activity logs
+
+---
+
 ![llama-swap header image](docs/assets/hero3.webp)
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/mostlygeek/llama-swap/total)
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/mostlygeek/llama-swap/go-ci.yml)
