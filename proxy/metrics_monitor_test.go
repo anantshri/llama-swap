@@ -600,7 +600,7 @@ func TestMetricsMonitor_ParseMetrics(t *testing.T) {
 			"predicted_ms": 15.0
 		}`)
 
-		metrics, err := parseMetrics("test-model", start, usage, timings)
+		metrics, err := parseMetrics("test-model", start, usage, timings, gjson.Result{})
 		assert.NoError(t, err)
 		assert.Equal(t, 5, metrics.Tokens.InputTokens)
 		assert.Equal(t, 1, metrics.Tokens.OutputTokens)
@@ -681,6 +681,84 @@ func TestMetricsMonitor_ParseMetrics(t *testing.T) {
 		assert.Equal(t, 1, len(metrics))
 		assert.Equal(t, -1, metrics[0].Tokens.CachedTokens) // Default value when not present
 	})
+}
+
+func TestMetricsMonitor_BuildMetrics_TimingsTakesPrecedence(t *testing.T) {
+	// When timings is present, it must win even if streaming TTFT and in-body
+	// metrics would otherwise apply. Confirms tier 1 is the highest priority.
+	start := time.Now().Add(-2 * time.Second)
+	firstWrite := start.Add(200 * time.Millisecond)
+	timings := gjson.Parse(`{
+		"prompt_n": 80,
+		"predicted_n": 40,
+		"prompt_per_second": 400.0,
+		"predicted_per_second": 20.0,
+		"prompt_ms": 200.0,
+		"predicted_ms": 2000.0
+	}`)
+	inBody := gjson.Parse(`{"prompt_per_second": 9999.0, "tokens_per_second": 9999.0}`)
+
+	got := buildMetrics("m", start, firstWrite, 1, 1, -1, timings, inBody)
+
+	assert.Equal(t, 80, got.Tokens.InputTokens)
+	assert.Equal(t, 40, got.Tokens.OutputTokens)
+	assert.Equal(t, 400.0, got.Tokens.PromptPerSecond)
+	assert.Equal(t, 20.0, got.Tokens.TokensPerSecond)
+}
+
+func TestMetricsMonitor_BuildMetrics_StreamingTTFTSplit(t *testing.T) {
+	// No timings, no in-body metrics; firstWrite present → tier 3 splits
+	// duration into prefill and decode and derives both rates.
+	// 10s total, 1s prefill, ~9s decode. 500 input tokens, 4500 output tokens.
+	// Expected: promptPerSecond ≈ 500, tokensPerSecond ≈ 500.
+	start := time.Now().Add(-10 * time.Second)
+	firstWrite := start.Add(1 * time.Second)
+
+	got := buildMetrics("m", start, firstWrite, 500, 4500, -1, gjson.Result{}, gjson.Result{})
+
+	assert.InDelta(t, 500.0, got.Tokens.PromptPerSecond, 1.0)
+	assert.InDelta(t, 500.0, got.Tokens.TokensPerSecond, 1.0)
+	assert.Equal(t, 500, got.Tokens.InputTokens)
+	assert.Equal(t, 4500, got.Tokens.OutputTokens)
+}
+
+func TestMetricsMonitor_BuildMetrics_NonStreamingApproximation(t *testing.T) {
+	// No timings, no in-body metrics, firstWrite zero → tier 4. Only
+	// tokens_per_second is filled (output / duration); prompt_per_second
+	// stays -1 because there's no signal to separate prefill from decode.
+	// 2s duration, 200 output tokens → 100 tok/s.
+	start := time.Now().Add(-2 * time.Second)
+
+	got := buildMetrics("m", start, time.Time{}, 100, 200, -1, gjson.Result{}, gjson.Result{})
+
+	assert.Equal(t, -1.0, got.Tokens.PromptPerSecond)
+	assert.InDelta(t, 100.0, got.Tokens.TokensPerSecond, 1.0)
+	assert.Equal(t, 100, got.Tokens.InputTokens)
+	assert.Equal(t, 200, got.Tokens.OutputTokens)
+}
+
+func TestMetricsMonitor_BuildMetrics_InBodyMetrics(t *testing.T) {
+	// No timings; in-body metrics object present → tier 2 fills rates verbatim
+	// without computing from duration. Streaming TTFT inputs are ignored.
+	start := time.Now().Add(-2 * time.Second)
+	firstWrite := start.Add(100 * time.Millisecond)
+	inBody := gjson.Parse(`{"prompt_per_second": 250.0, "tokens_per_second": 75.5}`)
+
+	got := buildMetrics("m", start, firstWrite, 100, 200, -1, gjson.Result{}, inBody)
+
+	assert.Equal(t, 250.0, got.Tokens.PromptPerSecond)
+	assert.Equal(t, 75.5, got.Tokens.TokensPerSecond)
+}
+
+func TestMetricsMonitor_BuildMetrics_NoSignal(t *testing.T) {
+	// No timings, no in-body metrics, no firstWrite, zero output tokens → both
+	// rates remain -1 with no panic or divide-by-zero.
+	start := time.Now()
+
+	got := buildMetrics("m", start, time.Time{}, 0, 0, -1, gjson.Result{}, gjson.Result{})
+
+	assert.Equal(t, -1.0, got.Tokens.PromptPerSecond)
+	assert.Equal(t, -1.0, got.Tokens.TokensPerSecond)
 }
 
 func TestMetricsMonitor_StreamingResponse(t *testing.T) {
