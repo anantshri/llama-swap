@@ -48,7 +48,7 @@ func ServeCompressedFile(fs http.FileSystem, w http.ResponseWriter, r *http.Requ
 				// Get original file info for content type detection
 				origFile, err := fs.Open(name)
 				if err == nil {
-					origFile.Close()
+					_ = origFile.Close()
 				}
 
 				// Serve the compressed file

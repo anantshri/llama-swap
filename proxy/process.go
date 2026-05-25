@@ -315,7 +315,7 @@ func (p *Process) start() error {
 	defer p.waitStarting.Done()
 	cmdContext, ctxCancelUpstream := context.WithCancel(context.Background())
 
-	p.cmd = exec.CommandContext(cmdContext, args[0], args[1:]...)
+	p.cmd = exec.CommandContext(cmdContext, args[0], args[1:]...) // #nosec G204 -- command supplied by operator config, by design
 	p.cmd.Stdout = p.processLogger
 	p.cmd.Stderr = p.processLogger
 	p.cmd.Env = append(p.cmd.Environ(), p.config.Env...)
@@ -706,7 +706,7 @@ func (p *Process) cmdStopUpstreamProcess() error {
 
 		p.proxyLogger.Debugf("<%s> Executing stop command: %s", p.ID, strings.Join(stopArgs, " "))
 
-		stopCmd := exec.Command(stopArgs[0], stopArgs[1:]...)
+		stopCmd := exec.Command(stopArgs[0], stopArgs[1:]...) // #nosec G204 -- command supplied by operator config, by design
 		stopCmd.Stdout = p.processLogger
 		stopCmd.Stderr = p.processLogger
 		setProcAttributes(stopCmd)
@@ -847,7 +847,7 @@ func (s *statusResponseWriter) statusUpdates(ctx context.Context) {
 	ri := 0
 
 	// Pick a random duration to send a remark
-	nextRemarkIn := time.Duration(2+rand.Intn(4)) * time.Second
+	nextRemarkIn := time.Duration(2+rand.Intn(4)) * time.Second // #nosec G404 -- non-security UI message timing
 	lastRemarkTime := time.Now()
 
 	ticker := time.NewTicker(time.Second)
@@ -868,7 +868,7 @@ func (s *statusResponseWriter) statusUpdates(ctx context.Context) {
 				s.sendLine(fmt.Sprintf("\n%s", remark))
 				lastRemarkTime = time.Now()
 				// Pick a new random duration for the next remark
-				nextRemarkIn = time.Duration(5+rand.Intn(5)) * time.Second
+				nextRemarkIn = time.Duration(5+rand.Intn(5)) * time.Second // #nosec G404 -- non-security UI message timing
 			} else {
 				s.sendData(".")
 			}

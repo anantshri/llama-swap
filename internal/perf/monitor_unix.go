@@ -67,7 +67,7 @@ func tryLACT(ctx context.Context, every time.Duration, logger *logmon.Monitor) (
 	}
 	defer conn.Close()
 
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 
 	devices, err := lactListDevices(conn)
 	if err != nil {
@@ -99,11 +99,11 @@ func tryLACT(ctx context.Context, every time.Duration, logger *logmon.Monitor) (
 				if err != nil {
 					continue
 				}
-				conn.SetDeadline(time.Now().Add(5 * time.Second))
+				_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 
 				devices, err := lactListDevices(conn)
 				if err != nil {
-					conn.Close()
+					_ = conn.Close()
 					continue
 				}
 
@@ -118,7 +118,7 @@ func tryLACT(ctx context.Context, every time.Duration, logger *logmon.Monitor) (
 					}
 					stats = append(stats, stat)
 				}
-				conn.Close()
+				_ = conn.Close()
 
 				if len(stats) > 0 {
 					select {
@@ -143,6 +143,7 @@ func tryNvidiaSmi(ctx context.Context, every time.Duration, logger *logmon.Monit
 		sec = 1
 	}
 
+	// #nosec G204 -- literal binary name, literal flag strings, single numeric format arg; no shell expansion
 	cmd := exec.CommandContext(ctx, "nvidia-smi",
 		"--query-gpu=index,name,uuid,temperature.gpu,utilization.gpu,memory.used,memory.total,fan.speed,power.draw",
 		"--format=csv,noheader,nounits",
@@ -178,7 +179,7 @@ func tryNvidiaSmi(ctx context.Context, every time.Duration, logger *logmon.Monit
 				}
 			}
 		}
-		cmd.Wait()
+		_ = cmd.Wait()
 	}()
 
 	return ch, nil
@@ -339,7 +340,7 @@ func trySysfs(ctx context.Context, every time.Duration, logger *logmon.Monitor) 
 
 func lactSocketPath() string {
 	if p := os.Getenv("LACT_DAEMON_SOCKET_PATH"); p != "" {
-		if _, err := os.Stat(p); err == nil {
+		if _, err := os.Stat(p); err == nil { // #nosec G304,G703 -- env var set by operator at process start, same trust level as CLI flag
 			return p
 		}
 	}
@@ -457,10 +458,10 @@ func lactGetDeviceStats(conn net.Conn, id string, name string, index int) (GpuSt
 
 	var memUsedMB, memTotalMB int
 	if stats.Vram.Used != nil {
-		memUsedMB = int(*stats.Vram.Used / 1024 / 1024)
+		memUsedMB = int(*stats.Vram.Used / 1024 / 1024) // #nosec G115 -- VRAM-in-MB cannot overflow int on supported platforms
 	}
 	if stats.Vram.Total != nil {
-		memTotalMB = int(*stats.Vram.Total / 1024 / 1024)
+		memTotalMB = int(*stats.Vram.Total / 1024 / 1024) // #nosec G115 -- VRAM-in-MB cannot overflow int on supported platforms
 	}
 
 	var memUtil float64
@@ -543,8 +544,8 @@ func readSysStats() (SysStat, error) {
 
 	var swapTotalMB, swapUsedMB int
 	if swapStat, err := mem.SwapMemory(); err == nil {
-		swapTotalMB = int(swapStat.Total / toMB)
-		swapUsedMB = int(swapStat.Used / toMB)
+		swapTotalMB = int(swapStat.Total / toMB) // #nosec G115 -- MB-scale memory counter cannot overflow int on supported platforms
+		swapUsedMB = int(swapStat.Used / toMB)   // #nosec G115 -- MB-scale memory counter cannot overflow int on supported platforms
 	}
 
 	var loadAvg1, loadAvg5, loadAvg15 float64
@@ -571,9 +572,9 @@ func readSysStats() (SysStat, error) {
 	return SysStat{
 		Timestamp:      time.Now(),
 		CpuUtilPerCore: cpuPcts,
-		MemTotalMB:     int(vmStat.Total / toMB),
-		MemUsedMB:      int(vmStat.Used / toMB),
-		MemFreeMB:      int(vmStat.Free / toMB),
+		MemTotalMB:     int(vmStat.Total / toMB), // #nosec G115 -- MB-scale memory counter cannot overflow int on supported platforms
+		MemUsedMB:      int(vmStat.Used / toMB),  // #nosec G115 -- MB-scale memory counter cannot overflow int on supported platforms
+		MemFreeMB:      int(vmStat.Free / toMB),  // #nosec G115 -- MB-scale memory counter cannot overflow int on supported platforms
 		SwapTotalMB:    swapTotalMB,
 		SwapUsedMB:     swapUsedMB,
 		LoadAvg1:       loadAvg1,

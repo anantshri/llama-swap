@@ -58,7 +58,7 @@ func (pm *ProxyManager) streamLogsHandler(c *gin.Context) {
 	if !skipHistory {
 		history := logger.GetHistory()
 		if len(history) != 0 {
-			c.Writer.Write(history)
+			_, _ = c.Writer.Write(history)
 			flusher.Flush()
 		}
 	}
@@ -83,7 +83,7 @@ func (pm *ProxyManager) streamLogsHandler(c *gin.Context) {
 			cancel()
 			return
 		case data := <-sendChan:
-			c.Writer.Write(data)
+			_, _ = c.Writer.Write(data)
 			flusher.Flush()
 		}
 	}

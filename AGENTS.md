@@ -25,6 +25,7 @@ llama-swap is a light weight, transparent proxy server that provides automatic m
 - Use `make test-dev` after running new tests for a quick over all test run. This runs `go test` and `staticcheck`. Fix any static checking errors. Use this only when changes are made to any code under the `proxy/` directory
 - Use `make test-all` before completing work. This includes long running concurrency tests.
 - Use `make test-ui` after making changes to the UI in ui-svelte/
+- Run `make gosec` after every code change. It scans all three GOOS targets so build-tag-gated files (`monitor_{darwin,unix,windows}.go`, `process_windows.go`) are all covered — the same matrix runs in CI via `.github/workflows/gosec.yml`. Install once with `go install github.com/securego/gosec/v2/cmd/gosec@v2.26.1`. If a finding is a false positive, suppress with `// #nosec G<rule> -- <reason>` rather than restructuring code; never blanket-suppress.
 
 ### Commit message example format:
 

@@ -115,7 +115,8 @@ func main() {
 
 	// Create server with initial handlergit
 	srv := &http.Server{
-		Addr: *listenStr,
+		Addr:              *listenStr,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	// Support for watching config and reloading when it changes

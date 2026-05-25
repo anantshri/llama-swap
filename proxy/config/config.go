@@ -181,7 +181,7 @@ func (c *Config) FindConfig(modelName string) (ModelConfig, string, bool) {
 }
 
 func LoadConfig(path string) (Config, error) {
-	file, err := os.Open(path)
+	file, err := os.Open(path) // #nosec G304 -- config path supplied by operator on CLI
 	if err != nil {
 		return Config{}, err
 	}

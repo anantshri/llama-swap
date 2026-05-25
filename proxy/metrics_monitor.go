@@ -283,7 +283,7 @@ func (mp *metricsMonitor) wrapHandler(
 			if err != nil {
 				return fmt.Errorf("failed to read request body for capture: %w", err)
 			}
-			request.Body.Close()
+			_ = request.Body.Close()
 			request.Body = io.NopCloser(bytes.NewBuffer(reqBody))
 		}
 	}

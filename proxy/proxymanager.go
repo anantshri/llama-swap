@@ -1026,11 +1026,11 @@ func (pm *ProxyManager) mkPostFormHandler(cf captureFields) func(*gin.Context) {
 				}
 
 				if _, err = io.Copy(formFile, file); err != nil {
-					file.Close()
+					_ = file.Close()
 					pm.sendErrorResponse(c, http.StatusInternalServerError, "error copying file data")
 					return
 				}
-				file.Close()
+				_ = file.Close()
 			}
 		}
 

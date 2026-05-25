@@ -35,6 +35,14 @@ test: proxy/ui_dist/placeholder.txt
 test-all: proxy/ui_dist/placeholder.txt
 	go test -race -count=1 ./proxy/... ./internal/...
 
+# security static analysis - matches the gosec.yml CI job.
+# Scans each GOOS so build-tag-gated files (monitor_{darwin,unix,windows}.go,
+# process_windows.go) are all covered.
+gosec:
+	GOOS=linux   gosec ./...
+	GOOS=darwin  gosec ./...
+	GOOS=windows gosec ./...
+
 ui/node_modules:
 	cd ui-svelte && npm install
 
@@ -101,5 +109,5 @@ test-ui:
 	cd ui-svelte && npm ci && npm run check && npm test
 
 # Phony targets
-.PHONY: all clean ui mac windows simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy
+.PHONY: all clean ui mac windows simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy gosec
 .PHONE: linux linux-arm64 linux-amd64

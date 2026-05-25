@@ -38,6 +38,7 @@ func tryNvidiaSmiWindows(ctx context.Context, every time.Duration, logger *logmo
 		sec = 1
 	}
 
+	// #nosec G204 -- literal binary name, literal flag strings, single numeric format arg; no shell expansion
 	cmd := exec.CommandContext(ctx, "nvidia-smi",
 		"--query-gpu=index,name,uuid,temperature.gpu,utilization.gpu,memory.used,memory.total,fan.speed,power.draw",
 		"--format=csv,noheader,nounits",
@@ -73,7 +74,7 @@ func tryNvidiaSmiWindows(ctx context.Context, every time.Duration, logger *logmo
 				}
 			}
 		}
-		cmd.Wait()
+		_ = cmd.Wait()
 	}()
 
 	return ch, nil
@@ -106,9 +107,9 @@ func readSysStats() (SysStat, error) {
 	return SysStat{
 		Timestamp:      time.Now(),
 		CpuUtilPerCore: cpuPcts,
-		MemTotalMB:     int(vmStat.Total / toMB),
-		MemUsedMB:      int(vmStat.Used / toMB),
-		MemFreeMB:      int(vmStat.Free / toMB),
+		MemTotalMB:     int(vmStat.Total / toMB), // #nosec G115 -- MB-scale memory counter cannot overflow int on supported platforms
+		MemUsedMB:      int(vmStat.Used / toMB),  // #nosec G115 -- MB-scale memory counter cannot overflow int on supported platforms
+		MemFreeMB:      int(vmStat.Free / toMB),  // #nosec G115 -- MB-scale memory counter cannot overflow int on supported platforms
 		NetIO:          netIO,
 	}, nil
 }
