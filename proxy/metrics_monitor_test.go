@@ -824,6 +824,12 @@ data: [DONE]
 		assert.Equal(t, "test-model", metrics[0].Model)
 		assert.Equal(t, 0, metrics[0].Tokens.InputTokens)
 		assert.Equal(t, 0, metrics[0].Tokens.OutputTokens)
+		// Rates and cache must use the -1 sentinel so the UI shows "unknown"
+		// rather than a misleading "0 t/s" reading. Mirrors the vLLM streaming
+		// case where the upstream emits no usage chunks.
+		assert.Equal(t, -1.0, metrics[0].Tokens.PromptPerSecond)
+		assert.Equal(t, -1.0, metrics[0].Tokens.TokensPerSecond)
+		assert.Equal(t, -1, metrics[0].Tokens.CachedTokens)
 	})
 
 	t.Run("v1/responses format with nested response.usage", func(t *testing.T) {

@@ -311,7 +311,10 @@ func (mp *metricsMonitor) wrapHandler(
 	// after this point we have to assume that data was sent to the client
 	// and we can only log errors but not send them to clients
 
-	// Initialize default metrics - recorded for every request
+	// Initialize default metrics - recorded for every request.
+	// Rate and cache fields default to -1 (the "unknown" sentinel rendered
+	// as "unknown" in the UI) so failure paths don't surface 0 t/s as if
+	// it were a real measurement. Token counts stay at 0.
 	tm := ActivityLogEntry{
 		Timestamp:       time.Now(),
 		Model:           modelID,
@@ -319,6 +322,11 @@ func (mp *metricsMonitor) wrapHandler(
 		RespContentType: recorder.Header().Get("Content-Type"),
 		RespStatusCode:  recorder.Status(),
 		DurationMs:      int(time.Since(recorder.StartTime()).Milliseconds()),
+		Tokens: TokenMetrics{
+			CachedTokens:    -1,
+			PromptPerSecond: -1,
+			TokensPerSecond: -1,
+		},
 	}
 
 	if recorder.Status() != http.StatusOK {
