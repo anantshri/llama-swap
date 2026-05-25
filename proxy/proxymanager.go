@@ -440,6 +440,10 @@ func (pm *ProxyManager) setupGinEngine() {
 	pm.ginEngine.GET("/", func(c *gin.Context) {
 		c.Redirect(http.StatusFound, "/ui")
 	})
+	// Ollama clients (e.g. Enchanted via OllamaKit) probe HEAD / for reachability.
+	pm.ginEngine.HEAD("/", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
 
 	pm.ginEngine.GET("/upstream", func(c *gin.Context) {
 		c.Redirect(http.StatusFound, "/ui/models")
