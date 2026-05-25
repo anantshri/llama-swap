@@ -16,6 +16,7 @@
 >    - `POST /api/show` — show model details
 >    - `GET /api/ps` — list running models
 >    - `GET /api/version`
+>    - `HEAD` requests are honored on the Ollama endpoints (for Enchanted compatibility)
 >    - Model management endpoints (`/api/create`, `/api/copy`, `/api/delete`, `/api/pull`, `/api/push`, `/api/blobs/:digest`) are stubbed and return *not implemented* — llama-swap routes requests to user-managed processes
 > 2. Attempt to extract metrics for vLLM backend requests in activity logs
 
