@@ -7,7 +7,16 @@
 >
 > ### Changes in this fork
 >
-> 1. Ollama compatible API
+> 1. Ollama compatible API — translated to OpenAI shape and forwarded to the upstream server:
+>    - `POST /api/chat`
+>    - `POST /api/generate`
+>    - `POST /api/embed`
+>    - `POST /api/embeddings`
+>    - `GET /api/tags` — list available models
+>    - `POST /api/show` — show model details
+>    - `GET /api/ps` — list running models
+>    - `GET /api/version`
+>    - Model management endpoints (`/api/create`, `/api/copy`, `/api/delete`, `/api/pull`, `/api/push`, `/api/blobs/:digest`) are stubbed and return *not implemented* — llama-swap routes requests to user-managed processes
 > 2. Attempt to extract metrics for vLLM backend requests in activity logs
 
 ---
