@@ -37,8 +37,9 @@ test-all: proxy/ui_dist/placeholder.txt
 
 # security static analysis - matches the gosec.yml CI job.
 # Scans each GOOS so build-tag-gated files (monitor_{darwin,unix,windows}.go,
-# process_windows.go) are all covered.
-gosec:
+# process_windows.go) are all covered. Depends on the ui_dist placeholder so
+# the //go:embed in proxy/ui_embed.go resolves on a fresh checkout.
+gosec: proxy/ui_dist/placeholder.txt
 	GOOS=linux   gosec ./...
 	GOOS=darwin  gosec ./...
 	GOOS=windows gosec ./...
