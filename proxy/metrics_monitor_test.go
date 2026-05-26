@@ -289,6 +289,41 @@ data: [DONE]
 		assert.Equal(t, 20, metrics[0].Tokens.OutputTokens)
 	})
 
+	t.Run("Ollama NDJSON streaming still parses SSE body", func(t *testing.T) {
+		mm := newMetricsMonitor(testLogger, 10, 0)
+
+		// When the Ollama StreamWriter is in the chain, the Content-Type gets
+		// rewritten to application/x-ndjson but the body captured by
+		// responseBodyCopier is still the original SSE data.
+		responseBody := `data: {"choices":[{"text":"Hello"}]}
+
+data: {"usage":{"prompt_tokens":10,"completion_tokens":20}}
+
+data: [DONE]
+
+`
+
+		nextHandler := func(modelID string, w http.ResponseWriter, r *http.Request) error {
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(responseBody))
+			return nil
+		}
+
+		req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		rec := httptest.NewRecorder()
+		ginCtx, _ := gin.CreateTestContext(rec)
+
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		assert.NoError(t, err)
+
+		metrics := mm.getMetrics()
+		assert.Equal(t, 1, len(metrics))
+		assert.Equal(t, "test-model", metrics[0].Model)
+		assert.Equal(t, 10, metrics[0].Tokens.InputTokens)
+		assert.Equal(t, 20, metrics[0].Tokens.OutputTokens)
+	})
+
 	t.Run("non-OK status code records partial metrics", func(t *testing.T) {
 		mm := newMetricsMonitor(testLogger, 10, 0)
 

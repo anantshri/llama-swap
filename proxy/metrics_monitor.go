@@ -355,7 +355,9 @@ func (mp *metricsMonitor) wrapHandler(
 			return nil
 		}
 	}
-	if strings.Contains(recorder.Header().Get("Content-Type"), "text/event-stream") {
+	ct := recorder.Header().Get("Content-Type")
+	isStreaming := strings.Contains(ct, "text/event-stream") || strings.Contains(ct, "application/x-ndjson")
+	if isStreaming {
 		if parsed, err := processStreamingResponse(modelID, recorder.StartTime(), recorder.FirstWriteTime(), body); err != nil {
 			mp.logger.Warnf("error processing streaming response: %v, path=%s, recording minimal metrics", err, request.URL.Path)
 		} else {
