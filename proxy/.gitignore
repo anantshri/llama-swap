@@ -1,1 +1,4 @@
-ui_dist/*
+# The UI under ui_dist/ is now hand-authored and committed (no build step).
+# Only ignore generated pre-compressed variants, should any be produced locally.
+ui_dist/**/*.gz
+ui_dist/**/*.br

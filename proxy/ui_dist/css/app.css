@@ -1,0 +1,183 @@
+/* Theme tokens + base + layout + components, hand-authored (replaces Tailwind v4).
+   Token values ported verbatim from ui-svelte/src/index.css. */
+
+:root {
+  --color-background: rgba(252, 252, 249, 1);
+  --color-surface: rgba(255, 255, 253, 1);
+  --color-txtmain: rgba(19, 52, 59, 1);
+  --color-txtsecondary: rgba(98, 108, 113, 1);
+  --color-navlink-active: rgba(245, 245, 245, 1);
+  --color-primary: rgba(50, 184, 198, 1);
+  --color-primary-hover: rgba(29, 116, 128, 1);
+  --color-primary-active: rgba(26, 104, 115, 1);
+  --color-secondary: rgba(94, 82, 64, 0.12);
+  --color-secondary-hover: rgba(94, 82, 64, 0.2);
+  --color-secondary-active: rgba(94, 82, 64, 0.25);
+  --color-border: rgba(94, 82, 64, 0.3);
+  --color-btn-primary-text: rgba(252, 252, 249, 1);
+  --color-card-border: rgba(94, 82, 64, 0.12);
+  --color-card-border-inner: rgba(94, 82, 64, 0.12);
+  --color-error: rgba(192, 21, 47, 1);
+  --color-success: rgba(33, 128, 141, 1);
+  --color-warning: rgb(244, 155, 0);
+  --color-info: rgba(98, 108, 113, 1);
+  --color-focus-ring: rgba(33, 128, 141, 0.4);
+  --color-select-caret: rgba(19, 52, 59, 0.8);
+  --color-btn-border: rgba(94, 82, 64, 0.7);
+}
+
+[data-theme="dark"] {
+  --color-background: rgba(31, 33, 33, 1);
+  --color-surface: rgba(38, 40, 40, 1);
+  --color-txtmain: rgba(245, 245, 245, 1);
+  --color-txtsecondary: rgba(167, 169, 169, 0.7);
+  --color-navlink-active: rgba(245, 245, 245, 1);
+  --color-primary: rgba(33, 128, 141, 1);
+  --color-primary-hover: rgba(45, 166, 178, 1);
+  --color-primary-active: rgba(41, 150, 161, 1);
+  --color-secondary: rgba(119, 124, 124, 0.15);
+  --color-secondary-hover: rgba(119, 124, 124, 0.25);
+  --color-secondary-active: rgba(119, 124, 124, 0.3);
+  --color-border: rgba(119, 124, 124, 0.3);
+  --color-error: rgba(255, 84, 89, 1);
+  --color-success: rgba(50, 184, 198, 1);
+  --color-warning: rgb(244, 155, 0);
+  --color-info: rgba(167, 169, 169, 1);
+  --color-focus-ring: rgba(50, 184, 198, 0.4);
+  --color-btn-primary-text: rgba(19, 52, 59, 1);
+  --color-card-border: rgba(119, 124, 124, 0.2);
+  --color-card-border-inner: rgba(119, 124, 124, 0.15);
+  --button-border-secondary: rgba(119, 124, 124, 0.2);
+}
+
+/* ---- base ---- */
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+body {
+  background: var(--color-background);
+  color: var(--color-txtmain);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+}
+h1 { font-size: 2.25rem; font-weight: 700; padding-bottom: 1rem; }
+h2 { font-size: 1.875rem; font-weight: 700; padding-bottom: 1rem; }
+h3 { font-size: 1.5rem; font-weight: 700; padding-bottom: 1rem; }
+h4 { font-size: 1.25rem; font-weight: 700; padding-bottom: 1rem; }
+h5 { font-size: 1.125rem; font-weight: 700; padding-bottom: 1rem; }
+h6 { font-size: 1rem; font-weight: 700; padding-bottom: 1rem; }
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+table th { padding: 0.5rem; font-weight: 600; }
+table td { padding: 0.5rem; }
+
+/* ---- layout shell ---- */
+.app-shell { display: flex; flex-direction: column; height: 100vh; }
+.app-main { flex: 1; overflow: auto; padding: 1rem; }
+.route-host { height: 100%; }
+.page { height: 100%; }
+.muted { color: var(--color-txtsecondary); }
+
+.icon-5 { width: 1.25rem; height: 1.25rem; }
+
+/* ---- header ---- */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  padding: 0.5rem 1rem;
+  height: 75px;
+}
+.app-header.header-narrow { padding: 0.25rem 1rem; height: 60px; }
+.app-title {
+  font-size: 2.25rem;
+  font-weight: 700;
+  padding: 0;
+  margin: 0;
+  outline: none;
+  border-radius: 0.375rem;
+}
+.app-header.header-narrow .app-title { display: none; }
+.app-nav { display: flex; align-items: center; gap: 1rem; overflow-x: auto; margin: 0; padding: 0; }
+.navlink-top {
+  padding: 0.25rem;
+  white-space: nowrap;
+  color: var(--color-txtsecondary);
+}
+.navlink-top:hover { color: var(--color-txtmain); }
+.navlink-top.active { font-weight: 600; text-decoration: underline; text-underline-offset: 4px; }
+.theme-toggle { display: inline-flex; align-items: center; }
+
+.conn-status { display: flex; align-items: center; }
+.conn-dot {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 9999px;
+  margin-right: 0.5rem;
+  background: rgb(239, 68, 68);
+}
+.conn-dot.conn-connected { background: rgb(16, 185, 129); }
+.conn-dot.conn-connecting { background: rgb(245, 158, 11); }
+.conn-dot.conn-disconnected { background: rgb(239, 68, 68); }
+
+.activity-link {
+  background: linear-gradient(90deg, #6366f1, #8b5cf6, #a855f7, #8b5cf6, #6366f1);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: gradient-shift 2s linear infinite;
+}
+@keyframes gradient-shift {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+
+/* ---- components ---- */
+.card {
+  background: var(--color-surface);
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-card-border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  overflow: hidden;
+  padding: 1rem;
+}
+.card:hover { box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }
+
+.status {
+  display: inline-block;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 0.5rem;
+}
+.status--ready { background: color-mix(in srgb, var(--color-success) 10%, transparent); color: var(--color-success); }
+.status--starting,
+.status--stopping { background: color-mix(in srgb, var(--color-warning) 10%, transparent); color: var(--color-warning); }
+.status--stopped { background: color-mix(in srgb, var(--color-error) 10%, transparent); color: var(--color-error); }
+
+.btn {
+  background: var(--color-surface);
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  border-radius: 0.375rem;
+  border: 1px solid var(--color-btn-border);
+  transition: background-color 0.2s, color 0.2s;
+}
+.btn--sm { padding: 0.125rem 0.5rem; font-size: 0.75rem; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn--primary { background: var(--color-primary); color: var(--color-btn-primary-text); border-color: var(--color-primary); }
+
+/* hljs dark-mode override (port of the .dark .prose .hljs rule) */
+[data-theme="dark"] .prose .hljs { background: transparent; }
