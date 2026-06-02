@@ -99,4 +99,4 @@ wol-proxy: $(BUILD_DIR)
 
 # Phony targets
 .PHONY: all clean mac windows simple-responder simple-responder-windows test test-all test-dev wol-proxy gosec
-.PHONE: linux linux-arm64 linux-amd64
+.PHONY: linux linux-arm64 linux-amd64
