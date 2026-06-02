@@ -38,8 +38,13 @@ func TestProxyManager_ServeUIStaticFiles(t *testing.T) {
 		{"/ui/index.html", "text/html", "index.html explicit"},
 		{"/ui/js/main.js", "javascript", "ES module entry"},
 		{"/ui/js/store.js", "javascript", "ES module import target"},
+		{"/ui/js/markdown.js", "javascript", "chat markdown renderer"},
+		{"/ui/js/api/chat.js", "javascript", "chat streaming client"},
+		{"/ui/js/components/chatMessage.js", "javascript", "chat message component"},
 		{"/ui/vendor/marked.min.js", "javascript", "vendored library"},
 		{"/ui/css/app.css", "text/css", "hand-written stylesheet"},
+		{"/ui/css/chat.css", "text/css", "chat/prose stylesheet"},
+		{"/ui/__selftest.html", "text/html", "in-browser self-test page"},
 	}
 
 	for _, tc := range cases {

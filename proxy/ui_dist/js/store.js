@@ -48,14 +48,14 @@ export function persistent(key, initial) {
     const saved = localStorage.getItem(key);
     if (saved !== null) start = JSON.parse(saved);
   } catch (e) {
-    console.error(`Error parsing stored value for ${key}`, e);
+    console.error("Error parsing stored value for", key, e);
   }
   const store = observable(start);
   store.subscribe((value) => {
     try {
       localStorage.setItem(key, JSON.stringify(value));
     } catch (e) {
-      console.error(`Error saving value for ${key}`, e);
+      console.error("Error saving value for", key, e);
     }
   });
   return store;
