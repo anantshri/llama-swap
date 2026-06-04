@@ -19,6 +19,17 @@
 >    - `HEAD` requests are honored on the Ollama endpoints (for Enchanted compatibility)
 >    - Model management endpoints (`/api/create`, `/api/copy`, `/api/delete`, `/api/pull`, `/api/push`, `/api/blobs/:digest`) are stubbed and return *not implemented* — llama-swap routes requests to user-managed processes
 > 2. Attempt to extract metrics for vLLM backend requests in activity logs
+> 3. Per-model API translation via `backendApi`. Declare the API format a
+>    model's upstream speaks (`openai` (default), `anthropic`, `ollama`). When
+>    an Anthropic client calls `POST /v1/messages` against a model whose backend
+>    is `openai`, the request is translated to `POST /v1/chat/completions` and
+>    the response (streaming and non-streaming) is translated back to Anthropic
+>    shape — letting Anthropic clients (e.g. Claude Code) talk to any
+>    OpenAI-compatible backend (llama.cpp, vLLM, …).
+>    - Backward compatibility: `backendApi` defaults to `openai`, so `/v1/messages`
+>      requests are now translated rather than passed through. To keep raw
+>      pass-through to a backend that natively serves `/v1/messages` (e.g. recent
+>      llama.cpp), set `backendApi: anthropic` on that model.
 
 ---
 

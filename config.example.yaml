@@ -209,6 +209,19 @@ models:
     #   is different from the model's ID
     useModelName: "openai/gpt-oss-120B"
 
+    # backendApi: the API format this model's upstream process speaks
+    # - optional, default: "openai"
+    # - one of: openai, anthropic, ollama
+    # - when an incoming request's format differs from this, llama-swap
+    #   translates the request and response between the two formats. Currently
+    #   the Anthropic-client -> OpenAI-backend leg is implemented: an Anthropic
+    #   /v1/messages request to an "openai" backend is translated to
+    #   /v1/chat/completions (streaming and non-streaming).
+    # - NOTE: with the default "openai", /v1/messages requests are translated
+    #   rather than passed through. Set "anthropic" to keep raw pass-through to a
+    #   backend that natively serves /v1/messages.
+    backendApi: openai
+
     # filters: a dictionary of filter settings
     # - optional, default: empty dictionary
     # - same capabilities as peer filters (stripParams, setParams)

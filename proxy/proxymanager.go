@@ -19,6 +19,7 @@ import (
 	"github.com/mostlygeek/llama-swap/event"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/perf"
+	"github.com/mostlygeek/llama-swap/proxy/apiconv"
 	"github.com/mostlygeek/llama-swap/proxy/config"
 	"github.com/mostlygeek/llama-swap/proxy/ollama"
 	"github.com/tidwall/gjson"
@@ -343,8 +344,10 @@ func (pm *ProxyManager) setupGinEngine() {
 	// Support legacy /v1/completions api, see issue #12
 	pm.ginEngine.POST("/v1/completions", pm.apiKeyAuth(), pm.trackInflight(), llmHandler)
 	// Support anthropic /v1/messages (added https://github.com/ggml-org/llama.cpp/pull/17570)
-	pm.ginEngine.POST("/v1/messages", pm.apiKeyAuth(), pm.trackInflight(), llmHandler)
-	// Support anthropic count_tokens API (Also added in the above PR)
+	// Tagged as Anthropic so requests to an OpenAI backend are translated.
+	anthropicHandler := pm.mkProxyJSONHandlerFmt(captureAll, apiconv.FormatAnthropic)
+	pm.ginEngine.POST("/v1/messages", pm.apiKeyAuth(), pm.trackInflight(), anthropicHandler)
+	// count_tokens has no OpenAI equivalent; leave it as raw pass-through.
 	pm.ginEngine.POST("/v1/messages/count_tokens", pm.apiKeyAuth(), pm.trackInflight(), llmHandler)
 
 	// Support embeddings and reranking
@@ -360,7 +363,7 @@ func (pm *ProxyManager) setupGinEngine() {
 	pm.ginEngine.POST("/v/chat/completions", pm.apiKeyAuth(), pm.trackInflight(), llmHandler)
 	pm.ginEngine.POST("/v/responses", pm.apiKeyAuth(), pm.trackInflight(), llmHandler)
 	pm.ginEngine.POST("/v/completions", pm.apiKeyAuth(), pm.trackInflight(), llmHandler)
-	pm.ginEngine.POST("/v/messages", pm.apiKeyAuth(), pm.trackInflight(), llmHandler)
+	pm.ginEngine.POST("/v/messages", pm.apiKeyAuth(), pm.trackInflight(), anthropicHandler)
 	pm.ginEngine.POST("/v/messages/count_tokens", pm.apiKeyAuth(), pm.trackInflight(), llmHandler)
 	pm.ginEngine.POST("/v/embeddings", pm.apiKeyAuth(), pm.trackInflight(), llmHandler)
 	pm.ginEngine.POST("/v/rerank", pm.apiKeyAuth(), pm.trackInflight(), llmHandler)
@@ -765,13 +768,20 @@ func (pm *ProxyManager) proxyToUpstream(c *gin.Context) {
 }
 
 func (pm *ProxyManager) mkProxyJSONHandler(cf captureFields) func(*gin.Context) {
+	return pm.mkProxyJSONHandlerFmt(cf, apiconv.FormatOpenAI)
+}
+
+// mkProxyJSONHandlerFmt builds a JSON proxy handler that tags incoming requests
+// with the API format implied by the route (e.g. /v1/messages -> Anthropic), so
+// DispatchJSON can translate to the model's backend format when they differ.
+func (pm *ProxyManager) mkProxyJSONHandlerFmt(cf captureFields, in apiconv.Format) func(*gin.Context) {
 	return func(c *gin.Context) {
 		bodyBytes, err := io.ReadAll(c.Request.Body)
 		if err != nil {
 			pm.sendErrorResponse(c, http.StatusBadRequest, "could not ready request body")
 			return
 		}
-		pm.DispatchJSON(c, bodyBytes, cf)
+		pm.DispatchJSONWithFormat(c, bodyBytes, cf, in)
 	}
 }
 
@@ -786,11 +796,24 @@ func (pm *ProxyManager) mkProxyJSONHandler(cf captureFields) func(*gin.Context) 
 // compatibility layer translating SSE to NDJSON) should replace c.Writer
 // with a wrapping gin.ResponseWriter before calling.
 func (pm *ProxyManager) DispatchJSON(c *gin.Context, bodyBytes []byte, cf captureFields) {
+	pm.DispatchJSONWithFormat(c, bodyBytes, cf, apiconv.FormatOpenAI)
+}
+
+// DispatchJSONWithFormat is DispatchJSON with an explicit incoming API format.
+// When the resolved model's backendApi differs from in and a converter exists,
+// the request body is translated to the backend format before forwarding and
+// the response is translated back to in on the way out.
+func (pm *ProxyManager) DispatchJSONWithFormat(c *gin.Context, bodyBytes []byte, cf captureFields, in apiconv.Format) {
 	requestedModel := gjson.GetBytes(bodyBytes, "model").String()
 	if requestedModel == "" {
 		pm.sendErrorResponse(c, http.StatusBadRequest, "missing or invalid 'model' key")
 		return
 	}
+
+	// Capture streaming intent in the client's terms before any translation.
+	incomingStream := gjson.GetBytes(bodyBytes, "stream").Bool()
+	needTranslate := false
+	backendFmt := apiconv.FormatOpenAI
 
 	// Look for a matching local model first
 	var nextHandler func(modelID string, w http.ResponseWriter, r *http.Request) error
@@ -807,6 +830,21 @@ func (pm *ProxyManager) DispatchJSON(c *gin.Context, bodyBytes []byte, cf captur
 				return
 			}
 			localHandler = processGroup.ProxyRequest
+		}
+
+		// Translate the request to the backend's API format when it differs from
+		// the client's. Done before the filters below so stripParams/setParams
+		// operate on the body actually sent upstream.
+		backendFmt = apiconv.ParseFormat(pm.config.Models[modelID].BackendApi)
+		if apiconv.CanTranslate(in, backendFmt) {
+			converted, terr := apiconv.ConvertRequest(in, backendFmt, bodyBytes)
+			if terr != nil {
+				pm.sendErrorResponse(c, http.StatusBadRequest, fmt.Sprintf("error translating request from %s to %s: %s", in, backendFmt, terr.Error()))
+				return
+			}
+			bodyBytes = converted
+			c.Request.URL.Path = apiconv.BackendChatPath(backendFmt)
+			needTranslate = true
 		}
 
 		// issue #69 allow custom model names to be sent to upstream
@@ -918,19 +956,63 @@ func (pm *ProxyManager) DispatchJSON(c *gin.Context, bodyBytes []byte, cf captur
 	ctx = context.WithValue(ctx, proxyCtxKey("model"), modelID)
 	c.Request = c.Request.WithContext(ctx)
 
-	if pm.metricsMonitor != nil && c.Request.Method == "POST" {
-		if err := pm.metricsMonitor.wrapHandler(modelID, c.Writer, c.Request, cf, nextHandler); err != nil {
-			pm.sendErrorResponse(c, http.StatusInternalServerError, fmt.Sprintf("error proxying metrics wrapped request: %s", err.Error()))
-			pm.proxyLogger.Errorf("Error Proxying Metrics Wrapped Request model %s", modelID)
-			return
+	// runUpstream forwards to the resolved handler, wrapping with the metrics
+	// monitor when enabled. The metrics recorder tees the raw upstream
+	// (untranslated) bytes, which its OpenAI-aware parser already understands.
+	runUpstream := func() error {
+		if pm.metricsMonitor != nil && c.Request.Method == "POST" {
+			return pm.metricsMonitor.wrapHandler(modelID, c.Writer, c.Request, cf, nextHandler)
 		}
-	} else {
-		if err := nextHandler(modelID, c.Writer, c.Request); err != nil {
+		return nextHandler(modelID, c.Writer, c.Request)
+	}
+
+	if !needTranslate {
+		if err := runUpstream(); err != nil {
+			pm.sendErrorResponse(c, http.StatusInternalServerError, fmt.Sprintf("error proxying request: %s", err.Error()))
+			pm.proxyLogger.Errorf("Error Proxying Request for model %s", modelID)
+		}
+		return
+	}
+
+	// Translate the upstream response back to the client's format. The writer
+	// is swapped so the reverse proxy (and metrics recorder) write backend-format
+	// bytes into the translating writer, which emits client-format bytes.
+	original := c.Writer
+	if incomingStream {
+		sw := apiconv.NewStreamTranslator(in, backendFmt, original, requestedModel)
+		c.Writer = sw
+		err := runUpstream()
+		if err != nil {
+			c.Writer = original
 			pm.sendErrorResponse(c, http.StatusInternalServerError, fmt.Sprintf("error proxying request: %s", err.Error()))
 			pm.proxyLogger.Errorf("Error Proxying Request for model %s", modelID)
 			return
 		}
+		sw.Finalize()
+		c.Writer = original
+		return
 	}
+
+	bw := apiconv.NewBufferingWriter(original)
+	c.Writer = bw
+	err := runUpstream()
+	c.Writer = original
+	if err != nil {
+		pm.sendErrorResponse(c, http.StatusInternalServerError, fmt.Sprintf("error proxying request: %s", err.Error()))
+		pm.proxyLogger.Errorf("Error Proxying Request for model %s", modelID)
+		return
+	}
+	if status := bw.CapturedStatus(); status < 200 || status >= 300 {
+		bw.CommitPassThrough() // preserve upstream error body
+		return
+	}
+	translated, terr := apiconv.ConvertBufferedResponse(in, backendFmt, bw.CapturedBody(), requestedModel)
+	if terr != nil {
+		pm.proxyLogger.Errorf("Error translating response for model %s: %s", modelID, terr.Error())
+		bw.CommitPassThrough()
+		return
+	}
+	bw.CommitTranslated(translated, "application/json", http.StatusOK)
 }
 
 // mkPostFormHandler creates a POST form handler for inference backends
