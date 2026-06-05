@@ -206,23 +206,26 @@ func TestServeCompressedFile_RealFiles(t *testing.T) {
 		t.Skip("ui_dist not found, skipping real file test")
 	}
 
-	// Find a .js or .css file that has compressed versions
-	entries, err := os.ReadDir("./ui_dist/assets")
-	if err != nil {
-		t.Skipf("Could not read ui_dist/assets: %v", err)
-	}
-
+	// Walk ui_dist for any .js with a pre-compressed .js.gz sibling. The UI is now
+	// hand-authored static files committed without pre-compression, so this will
+	// normally find nothing and skip; it still exercises the real-file compressed
+	// path if a build ever produces .gz/.br variants locally.
 	var testFile string
-	for _, entry := range entries {
-		name := entry.Name()
-		if strings.HasSuffix(name, ".js") && !strings.HasSuffix(name, ".js.gz") && !strings.HasSuffix(name, ".js.br") {
-			// Check if compressed versions exist
-			base := strings.TrimSuffix(name, ".js")
-			if _, err := os.Stat(filepath.Join("./ui_dist/assets", base+".js.gz")); err == nil {
-				testFile = "assets/" + name
-				break
+	err := filepath.WalkDir("./ui_dist", func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() || testFile != "" {
+			return nil //nolint:nilerr // skip unreadable entries, keep walking
+		}
+		if strings.HasSuffix(d.Name(), ".js") {
+			if _, statErr := os.Stat(path + ".gz"); statErr == nil {
+				if rel, relErr := filepath.Rel("./ui_dist", path); relErr == nil {
+					testFile = filepath.ToSlash(rel)
+				}
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		t.Skipf("Could not walk ui_dist: %v", err)
 	}
 
 	if testFile == "" {

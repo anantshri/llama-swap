@@ -6,7 +6,10 @@ import (
 	"net/http"
 )
 
-//go:embed ui_dist
+// all: is required so files whose names begin with "_" (e.g. __selftest.html)
+// are embedded too — the default //go:embed pattern skips "_"/"." prefixes.
+//
+//go:embed all:ui_dist
 var reactStaticFS embed.FS
 
 // GetReactFS returns the embedded React filesystem
