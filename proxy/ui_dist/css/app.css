@@ -203,6 +203,16 @@ table td { padding: 0.5rem; }
 .models-thead tr { border-bottom: 1px solid var(--color-border); }
 .models-row { border-bottom: 1px solid var(--color-card-border-inner); }
 .models-row:hover { background: var(--color-secondary-hover); }
+
+/* Active models stand out from stopped ones: a left accent bar + subtle tint.
+   Loaded (ready) uses success green; transitional (starting/stopping) uses warning. */
+.models-row-loaded { background: color-mix(in srgb, var(--color-success) 7%, transparent); }
+.models-row-loaded:hover { background: color-mix(in srgb, var(--color-success) 13%, transparent); }
+.models-row-loaded .models-name { box-shadow: inset 3px 0 0 var(--color-success); }
+.models-row-loaded .models-link { font-weight: 700; }
+.models-row-transition { background: color-mix(in srgb, var(--color-warning) 7%, transparent); }
+.models-row-transition:hover { background: color-mix(in srgb, var(--color-warning) 13%, transparent); }
+.models-row-transition .models-name { box-shadow: inset 3px 0 0 var(--color-warning); }
 .models-name { padding: 0.5rem; }
 .models-name.model-unlisted { color: var(--color-txtsecondary); }
 .models-link { font-weight: 600; color: var(--color-primary); }

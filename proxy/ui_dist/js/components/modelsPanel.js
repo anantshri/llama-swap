@@ -39,8 +39,14 @@ export function ModelsPanel() {
       (acc[k] = acc[k] || []).push(m);
       return acc;
     }, {});
+    // Active (loaded / loading) models float to the top so they're quick to find
+    // and unload. Array.sort is stable, so the existing name ordering is preserved
+    // within the active and inactive groups.
+    const regularModels = filteredAll
+      .filter((m) => !m.peerID)
+      .sort((a, b) => (a.state === "stopped" ? 1 : 0) - (b.state === "stopped" ? 1 : 0));
     return {
-      regularModels: filteredAll.filter((m) => !m.peerID),
+      regularModels,
       peerModelsByPeerId: grouped,
     };
   }
@@ -53,12 +59,14 @@ export function ModelsPanel() {
         ? `<p class="model-aliases">Aliases: ${escapeHtml(m.aliases.join(", "))}</p>`
         : "";
     const unlistedCls = m.unlisted ? " model-unlisted" : "";
+    const rowCls =
+      m.state === "ready" ? " models-row-loaded" : m.state !== "stopped" ? " models-row-transition" : "";
     const action =
       m.state === "stopped"
         ? `<button class="btn btn--sm" data-load="${escapeHtml(m.id)}">Load</button>`
         : `<button class="btn btn--sm" data-unload="${escapeHtml(m.id)}" ${m.state !== "ready" ? "disabled" : ""}>Unload</button>`;
     return `
-      <tr class="models-row">
+      <tr class="models-row${rowCls}">
         <td class="models-name${unlistedCls}">
           <a class="models-link" href="/upstream/${encodeURIComponent(m.id)}/" target="_blank" rel="noopener">${display}</a>
           ${desc}${aliases}
