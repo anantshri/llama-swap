@@ -1481,6 +1481,52 @@ models:
 	assert.Equal(t, 90, modelConfig.Timeouts.IdleConn)
 }
 
+func TestConfig_BackendApiDefault(t *testing.T) {
+	configYaml := `
+models:
+  model1:
+    cmd: test-server --port ${PORT}
+`
+
+	config, err := LoadConfigFromReader(strings.NewReader(configYaml))
+	require.NoError(t, err)
+
+	modelConfig, found := config.Models["model1"]
+	require.True(t, found, "model1 should exist in config")
+
+	assert.Equal(t, BackendApiOpenAI, modelConfig.BackendApi)
+}
+
+func TestConfig_BackendApiNormalized(t *testing.T) {
+	configYaml := `
+models:
+  model1:
+    cmd: test-server --port ${PORT}
+    backendApi: "  Anthropic  "
+`
+
+	config, err := LoadConfigFromReader(strings.NewReader(configYaml))
+	require.NoError(t, err)
+
+	modelConfig, found := config.Models["model1"]
+	require.True(t, found, "model1 should exist in config")
+
+	assert.Equal(t, BackendApiAnthropic, modelConfig.BackendApi)
+}
+
+func TestConfig_BackendApiInvalid(t *testing.T) {
+	configYaml := `
+models:
+  model1:
+    cmd: test-server --port ${PORT}
+    backendApi: cohere
+`
+
+	_, err := LoadConfigFromReader(strings.NewReader(configYaml))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid backendApi")
+}
+
 func TestConfig_TimeoutsZeroAllowed(t *testing.T) {
 	configYaml := `
 models:

@@ -31,6 +31,12 @@ type ModelConfig struct {
 	Unlisted      bool     `yaml:"unlisted"`
 	UseModelName  string   `yaml:"useModelName"`
 
+	// BackendApi declares the API format the upstream process speaks.
+	// One of "openai" (default), "anthropic", "ollama". When the incoming
+	// request format differs from this, llama-swap translates the request and
+	// response between the two formats.
+	BackendApi string `yaml:"backendApi"`
+
 	// #179 for /v1/models
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
@@ -68,6 +74,7 @@ func (m *ModelConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		UnloadAfter:      MODEL_CONFIG_DEFAULT_TTL, // use GlobalTTL
 		Unlisted:         false,
 		UseModelName:     "",
+		BackendApi:       BackendApiOpenAI,
 		ConcurrencyLimit: 0,
 		Name:             "",
 		Description:      "",
