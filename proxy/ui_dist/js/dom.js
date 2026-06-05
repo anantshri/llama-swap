@@ -1,10 +1,18 @@
 // Tiny DOM helpers shared across components.
 
 // Build an element from an HTML string (single root node).
+//
+// The node is adopted into the live document before returning. A <template>'s
+// .content belongs to a separate inert document whose defaultView is null, so a
+// detached node created here would have no associated window. Libraries that read
+// layout at construction time (e.g. Chart.js calling
+// canvas.ownerDocument.defaultView.getComputedStyle) crash on such nodes when used
+// before the node is appended. Adopting up front gives the node the real window.
 export function el(htmlStr) {
   const t = document.createElement("template");
   t.innerHTML = htmlStr.trim();
-  return t.content.firstElementChild;
+  const node = t.content.firstElementChild;
+  return node ? document.adoptNode(node) : node;
 }
 
 // Build a document fragment from an HTML string (multiple roots).
