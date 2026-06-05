@@ -19,6 +19,7 @@
 >    - `HEAD` requests are honored on the Ollama endpoints (for Enchanted compatibility)
 >    - Model management endpoints (`/api/create`, `/api/copy`, `/api/delete`, `/api/pull`, `/api/push`, `/api/blobs/:digest`) are stubbed and return *not implemented* — llama-swap routes requests to user-managed processes
 > 2. Attempt to extract metrics for vLLM backend requests in activity logs
+> 3. Models page (`/ui/#/models`): active models (loaded or loading) are sorted to the top of the list and visually highlighted with a colored accent bar and tint, so the model you want to unload is always in reach
 
 ---
 

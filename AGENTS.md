@@ -5,7 +5,7 @@ llama-swap is a light weight, transparent proxy server that provides automatic m
 ## Tech stack
 
 - golang
-- typescript, vite and svelt5 for UI (located in ui/)
+- vanilla JavaScript (ES modules), no build step, for the web UI (source served directly from `proxy/ui_dist/` and embedded into the binary via `//go:embed`)
 
 ## Workflow Tasks
 
@@ -24,7 +24,7 @@ llama-swap is a light weight, transparent proxy server that provides automatic m
 - Run `gofmt -l .` before committing to verify formatting. Fix any reported files with `gofmt -w <file>`.
 - Use `make test-dev` after running new tests for a quick over all test run. This runs `go test` and `staticcheck`. Fix any static checking errors. Use this only when changes are made to any code under the `proxy/` directory
 - Use `make test-all` before completing work. This includes long running concurrency tests.
-- Use `make test-ui` after making changes to the UI in ui-svelte/
+- The web UI under `proxy/ui_dist/` is plain ES-module JavaScript with no build step; edit the served files directly. Go's `make test` covers serving/embedding (`proxy/ui_serve_test.go`, `proxy/ui_compress_test.go`).
 - Run `make gosec` after every code change. It scans all three GOOS targets so build-tag-gated files (`monitor_{darwin,unix,windows}.go`, `process_windows.go`) are all covered — the same matrix runs in CI via `.github/workflows/gosec.yml`. Install once with `go install github.com/securego/gosec/v2/cmd/gosec@v2.26.1`. If a finding is a false positive, suppress with `// #nosec G<rule> -- <reason>` rather than restructuring code; never blanket-suppress.
 
 ### Commit message example format:

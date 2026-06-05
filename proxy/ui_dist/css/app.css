@@ -1,5 +1,5 @@
 /* Theme tokens + base + layout + components, hand-authored (replaces Tailwind v4).
-   Token values ported verbatim from ui-svelte/src/index.css. */
+   Token values originate from the former Svelte UI's Tailwind theme. */
 
 :root {
   --color-background: rgba(252, 252, 249, 1);
