@@ -207,7 +207,9 @@ func chatHandler(ready <-chan struct{}) http.HandlerFunc {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			if err := json.NewEncoder(w).Encode(resp); err != nil {
+				log.Printf("error encoding response: %v", err)
+			}
 			return
 		}
 
@@ -281,8 +283,9 @@ func main() {
 	mux.HandleFunc("/v1/chat/completions", chatHandler(ready))
 
 	srv := &http.Server{
-		Addr:    *flagListen,
-		Handler: mux,
+		Addr:              *flagListen,
+		ReadHeaderTimeout: 30 * time.Second,
+		Handler:           mux,
 	}
 
 	go func() {

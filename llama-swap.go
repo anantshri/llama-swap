@@ -156,7 +156,8 @@ func main() {
 	activeSrv := initialSrv
 
 	httpServer := &http.Server{
-		Addr: listenAddr,
+		Addr:              listenAddr,
+		ReadHeaderTimeout: 30 * time.Second,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			activeMu.RLock()
 			srv := activeSrv

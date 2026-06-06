@@ -237,7 +237,9 @@ func main() {
 
 		c.Header("Content-Type", "text/plain")
 		for _, char := range echo {
-			c.Writer.Write([]byte(string(char)))
+			if _, err := c.Writer.Write([]byte(string(char))); err != nil {
+				return
+			}
 			c.Writer.Flush()
 
 			// wait
@@ -314,8 +316,9 @@ func main() {
 	address := "127.0.0.1:" + *port // Address with the specified port
 
 	srv := &http.Server{
-		Addr:    address,
-		Handler: r.Handler(),
+		Addr:              address,
+		ReadHeaderTimeout: 30 * time.Second,
+		Handler:           r.Handler(),
 	}
 
 	// Disable logging if the --silent flag is set

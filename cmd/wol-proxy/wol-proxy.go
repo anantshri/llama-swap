@@ -85,8 +85,9 @@ func main() {
 
 	proxy := newProxy(upstreamURL)
 	server := &http.Server{
-		Addr:    *flagListen,
-		Handler: proxy,
+		Addr:              *flagListen,
+		ReadHeaderTimeout: 30 * time.Second,
+		Handler:           proxy,
 	}
 
 	// start the server
@@ -100,7 +101,9 @@ func main() {
 	// graceful shutdown
 	ctx, _ := signal.NotifyContext(context.Background(), os.Interrupt)
 	<-ctx.Done()
-	server.Close()
+	if err := server.Close(); err != nil {
+		slog.Error("error closing server", "error", err)
+	}
 }
 
 type upstreamStatus string
