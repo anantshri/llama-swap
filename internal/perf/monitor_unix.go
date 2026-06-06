@@ -339,7 +339,7 @@ func trySysfs(ctx context.Context, every time.Duration, logger *logmon.Monitor) 
 
 func lactSocketPath() string {
 	if p := os.Getenv("LACT_DAEMON_SOCKET_PATH"); p != "" {
-		if _, err := os.Stat(p); err == nil {
+		if _, err := os.Stat(p); err == nil { // #nosec G703 -- operator-set env var (CLI-flag trust) naming the LACT daemon socket to dial; not untrusted input
 			return p
 		}
 	}
