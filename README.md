@@ -1,3 +1,27 @@
+> [!IMPORTANT]
+> **Fork Notice**
+>
+> This is a fork of [llama-swap](https://github.com/mostlygeek/llama-swap) maintained by [Anant Shrivastava](https://github.com/anantshri) for personal additions deemed necessary. The code is open sourced purely for reference purposes.
+>
+> **[Anant](https://github.com/anantshri) does not encourage others to use this fork**, as it will not be maintained beyond what the original author provides. Please use the original package: https://github.com/mostlygeek/llama-swap
+>
+> ### Where this branch diverges
+>
+> This `upstream-code` branch is re-based on top of current upstream (the rewritten `internal/` routing backend from [#790](https://github.com/mostlygeek/llama-swap/pull/790)) rather than the older `proxy/` package layout used by the fork's `main` branch. The fork's additions are re-applied on top of that upstream base as a small set of clean commits, so the divergence from upstream is easy to see. Divergence baseline: upstream commit `ccfba0d`.
+>
+> ### Changes in this fork (this branch)
+>
+> 1. **Ollama-compatible API** — inbound Ollama requests are translated to OpenAI shape and forwarded to the upstream server (set `passthroughOllama: true` on a model to forward unchanged):
+>    - `POST /api/chat`, `POST /api/generate` — chat / generate (streaming and non-streaming)
+>    - `POST /api/embed`, `POST /api/embeddings` — embeddings
+>    - `GET /api/tags` — list available models
+>    - `POST /api/show` — show model details
+>    - `GET /api/ps` — list running models
+>    - Model-management endpoints (`/api/create`, `/api/copy`, `/api/delete`, `/api/pull`, `/api/push`, `/api/blobs/:digest`) are stubbed and return *not implemented* — llama-swap routes requests to user-managed processes
+> 2. **Anthropic `/v1/messages` translation** — inbound Anthropic Messages requests are translated to OpenAI and the response is translated back (set `passthroughAnthropic: true` to forward unchanged). `/v1/messages/count_tokens` stays a raw pass-through.
+> 3. **No-npm web UI** — the Svelte/npm UI is replaced with hand-authored vanilla ES-module JavaScript committed under `internal/server/ui_dist/` and embedded via `//go:embed`. There is no Node.js/npm build step.
+> 4. **Removed the legacy `proxy/` implementation** (`cmd/legacy`) that upstream keeps alongside the new backend, so this fork ships a single implementation.
+
 ![llama-swap header image](docs/assets/hero3.webp)
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/mostlygeek/llama-swap/total)
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/mostlygeek/llama-swap/go-ci.yml)
