@@ -110,7 +110,7 @@ func New(
 	}
 	p.state.Store(StateStopped)
 
-	go p.run()
+	go p.run() // #nosec G118 -- lifecycle goroutine (one per model); terminates on parentCtx.Done(), not request-scoped
 	return p, nil
 }
 
