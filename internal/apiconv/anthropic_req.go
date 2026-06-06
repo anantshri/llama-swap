@@ -28,20 +28,41 @@ func AnthropicToOpenAIRequest(body []byte) ([]byte, error) {
 		out.StreamOptions = &streamOptions{IncludeUsage: true}
 	}
 
-	// System prompt -> leading system message.
-	if len(req.System) > 0 {
-		if sys := decodeAnthropicText(req.System); sys != "" {
-			out.Messages = append(out.Messages, openaiMessage{Role: "system", Content: sys})
+	// System content -> a single leading system message. Besides the top-level
+	// system field, Anthropic allows "mid-conversation system messages"
+	// (role:"system" entries inside messages[], a feature Claude Code uses since
+	// v2.1.154). Many OpenAI-compatible backends reject a system message that is
+	// not first -- e.g. the strict Qwen3 chat template raises "System message
+	// must be at the beginning" -- so hoist every system block, in order, into
+	// one leading system message.
+	systemText := decodeAnthropicText(req.System)
+	appendSystem := func(s string) {
+		if s == "" {
+			return
 		}
+		if systemText != "" {
+			systemText += "\n\n"
+		}
+		systemText += s
 	}
 
+	var rest []openaiMessage
 	for _, m := range req.Messages {
+		if m.Role == "system" {
+			appendSystem(decodeAnthropicText(m.Content))
+			continue
+		}
 		msgs, err := convertAnthropicMessage(m)
 		if err != nil {
 			return nil, err
 		}
-		out.Messages = append(out.Messages, msgs...)
+		rest = append(rest, msgs...)
 	}
+
+	if systemText != "" {
+		out.Messages = append(out.Messages, openaiMessage{Role: "system", Content: systemText})
+	}
+	out.Messages = append(out.Messages, rest...)
 
 	// Tools.
 	for _, t := range req.Tools {
