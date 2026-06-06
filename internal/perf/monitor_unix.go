@@ -67,7 +67,7 @@ func tryLACT(ctx context.Context, every time.Duration, logger *logmon.Monitor) (
 	}
 	defer conn.Close()
 
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 
 	devices, err := lactListDevices(conn)
 	if err != nil {
@@ -99,11 +99,11 @@ func tryLACT(ctx context.Context, every time.Duration, logger *logmon.Monitor) (
 				if err != nil {
 					continue
 				}
-				conn.SetDeadline(time.Now().Add(5 * time.Second))
+				_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 
 				devices, err := lactListDevices(conn)
 				if err != nil {
-					conn.Close()
+					_ = conn.Close()
 					continue
 				}
 
@@ -118,7 +118,7 @@ func tryLACT(ctx context.Context, every time.Duration, logger *logmon.Monitor) (
 					}
 					stats = append(stats, stat)
 				}
-				conn.Close()
+				_ = conn.Close()
 
 				if len(stats) > 0 {
 					select {
@@ -178,7 +178,7 @@ func tryNvidiaSmi(ctx context.Context, every time.Duration, logger *logmon.Monit
 				}
 			}
 		}
-		cmd.Wait()
+		_ = cmd.Wait()
 	}()
 
 	return ch, nil

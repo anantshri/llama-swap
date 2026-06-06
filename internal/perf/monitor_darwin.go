@@ -161,7 +161,7 @@ func tryMactop(ctx context.Context, every time.Duration, logger *logmon.Monitor)
 				}
 			}
 		}
-		cmd.Wait()
+		_ = cmd.Wait()
 	}()
 
 	return ch, nil

@@ -182,18 +182,18 @@ func SendResponse(w http.ResponseWriter, r *http.Request, status int, message st
 	if strings.Contains(acceptHeader, "text/plain") {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(status)
-		w.Write([]byte(fmt.Sprintf("llama-swap: %s", message)))
+		_, _ = w.Write([]byte(fmt.Sprintf("llama-swap: %s", message)))
 		return
 	}
 
 	if strings.Contains(acceptHeader, "text/html") {
 		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(status)
-		w.Write([]byte(fmt.Sprintf(`<html><body><h1>llama-swap</h1><p>%s</p></body></html>`, message)))
+		_, _ = w.Write([]byte(fmt.Sprintf(`<html><body><h1>llama-swap</h1><p>%s</p></body></html>`, message)))
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	w.Write([]byte(fmt.Sprintf(`{"src":"llama-swap", "error": "%s"}`, message)))
+	_, _ = w.Write([]byte(fmt.Sprintf(`{"src":"llama-swap", "error": "%s"}`, message)))
 }

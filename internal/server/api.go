@@ -74,7 +74,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"object": "list",
 		"data":   data,
 	})
@@ -96,7 +96,7 @@ type runningModel struct {
 func (s *Server) handleUnload(w http.ResponseWriter, r *http.Request) {
 	s.local.Unload(0)
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+	_, _ = w.Write([]byte("OK"))
 }
 
 // handleRunning lists local processes that are not stopped, joining each model
@@ -119,7 +119,7 @@ func (s *Server) handleRunning(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(list, func(i, j int) bool { return list[i].Model < list[j].Model })
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"running": list})
+	_ = json.NewEncoder(w).Encode(map[string]any{"running": list})
 }
 
 // discardResponseWriter satisfies http.ResponseWriter for preload requests,
@@ -179,7 +179,7 @@ func (s *Server) startPreload() {
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if s.perf == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte("# performance monitor not available\n"))
+		_, _ = w.Write([]byte("# performance monitor not available\n"))
 		return
 	}
 	s.perf.MetricsHandler().ServeHTTP(w, r)
@@ -187,7 +187,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+	_, _ = w.Write([]byte("OK"))
 }
 
 func handleRootRedirect(w http.ResponseWriter, r *http.Request) {

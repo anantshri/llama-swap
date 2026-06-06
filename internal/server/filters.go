@@ -152,10 +152,10 @@ func rewriteMultipartModel(form *multipart.Form, useModelName string) ([]byte, s
 				return nil, "", fmt.Errorf("error opening uploaded file %s: %w", key, err)
 			}
 			if _, err := io.Copy(part, file); err != nil {
-				file.Close()
+				_ = file.Close()
 				return nil, "", fmt.Errorf("error copying file data %s: %w", key, err)
 			}
-			file.Close()
+			_ = file.Close()
 		}
 	}
 

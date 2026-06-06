@@ -34,15 +34,15 @@ func SetupTreeCleanup() error {
 	if _, err := windows.SetInformationJobObject(
 		job,
 		windows.JobObjectExtendedLimitInformation,
-		uintptr(unsafe.Pointer(&info)),
+		uintptr(unsafe.Pointer(&info)), // #nosec G103 -- required unsafe.Pointer/Sizeof for the Win32 SetInformationJobObject syscall (x/sys/windows idiom)
 		uint32(unsafe.Sizeof(info)),
 	); err != nil {
-		windows.CloseHandle(job)
+		_ = windows.CloseHandle(job)
 		return fmt.Errorf("SetInformationJobObject: %w", err)
 	}
 
 	if err := windows.AssignProcessToJobObject(job, windows.CurrentProcess()); err != nil {
-		windows.CloseHandle(job)
+		_ = windows.CloseHandle(job)
 		return fmt.Errorf("AssignProcessToJobObject: %w", err)
 	}
 

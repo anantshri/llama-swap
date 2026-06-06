@@ -73,7 +73,7 @@ func tryNvidiaSmiWindows(ctx context.Context, every time.Duration, logger *logmo
 				}
 			}
 		}
-		cmd.Wait()
+		_ = cmd.Wait()
 	}()
 
 	return ch, nil

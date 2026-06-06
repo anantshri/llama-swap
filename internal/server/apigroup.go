@@ -68,7 +68,7 @@ func (s *Server) modelStatus() []apiModel {
 func (s *Server) handleAPIUnloadAll(w http.ResponseWriter, r *http.Request) {
 	s.local.Unload(0)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"msg": "ok"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"msg": "ok"})
 }
 
 // handleAPIUnloadModel stops a single named local process.
@@ -85,7 +85,7 @@ func (s *Server) handleAPIUnloadModel(w http.ResponseWriter, r *http.Request) {
 	}
 	s.local.Unload(0, realName)
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+	_, _ = w.Write([]byte("OK"))
 }
 
 // handleAPIMetrics serves the activity log as a JSON array.
@@ -96,7 +96,7 @@ func (s *Server) handleAPIMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(data)
+	_, _ = w.Write(data)
 }
 
 // handleAPIPerformance serves the buffered system/GPU stats, optionally
@@ -133,7 +133,7 @@ func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"sys_stats": sysStats,
 		"gpu_stats": gpuStats,
 	})
@@ -142,7 +142,7 @@ func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {
 // handleAPIVersion serves the build metadata.
 func (s *Server) handleAPIVersion(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"version":    s.build.Version,
 		"commit":     s.build.Commit,
 		"build_date": s.build.Date,
@@ -169,7 +169,7 @@ func (s *Server) handleAPICapture(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(jsonBytes)
+	_, _ = w.Write(jsonBytes)
 }
 
 type messageType string
