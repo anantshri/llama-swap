@@ -174,7 +174,7 @@ export function PerformancePage() {
           <div class="perf-btn-group" data-window-buttons></div>
           <div class="perf-btn-group">
             <span class="perf-refresh-label">Refresh:</span>
-            <div data-interval-buttons></div>
+            <div class="perf-btn-group" data-interval-buttons></div>
           </div>
           <button class="btn btn--sm perf-refresh-btn" data-refresh title="Refresh">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
