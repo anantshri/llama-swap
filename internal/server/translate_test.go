@@ -175,6 +175,25 @@ func TestServer_OllamaChat_BufferedTranslation(t *testing.T) {
 	}
 }
 
+// TestServer_OllamaHeadProbe verifies that HEAD / returns 200 (Ollama clients
+// such as Enchanted probe it for reachability) while GET / still redirects to
+// the UI.
+func TestServer_OllamaHeadProbe(t *testing.T) {
+	s := newTranslateServer(t, oneModelConfig(), &scriptedRouter{})
+
+	wHead := httptest.NewRecorder()
+	s.ServeHTTP(wHead, httptest.NewRequest(http.MethodHead, "/", nil))
+	if wHead.Code != http.StatusOK {
+		t.Errorf("HEAD / = %d, want 200", wHead.Code)
+	}
+
+	wGet := httptest.NewRecorder()
+	s.ServeHTTP(wGet, httptest.NewRequest(http.MethodGet, "/", nil))
+	if wGet.Code != http.StatusFound {
+		t.Errorf("GET / = %d, want 302", wGet.Code)
+	}
+}
+
 func TestServer_OllamaTags_ListsModels(t *testing.T) {
 	cfg := config.Config{Models: map[string]config.ModelConfig{
 		"alpha": {Name: "Alpha"},

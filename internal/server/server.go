@@ -245,6 +245,12 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("GET /wol-health", handleHealth)
 	mux.HandleFunc("GET /{$}", handleRootRedirect)
+	// Ollama clients (e.g. Enchanted via OllamaKit) probe HEAD / for
+	// reachability and expect 200, like a real Ollama server. Register it
+	// explicitly so it is not answered by the GET /{$} redirect.
+	mux.HandleFunc("HEAD /{$}", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 
 	// Embedded UI.
 	mux.HandleFunc("GET /ui/", s.handleUI)

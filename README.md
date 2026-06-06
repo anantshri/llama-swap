@@ -17,6 +17,7 @@
 >    - `GET /api/tags` — list available models
 >    - `POST /api/show` — show model details
 >    - `GET /api/ps` — list running models
+>    - `HEAD /` returns `200` so Ollama clients (e.g. Enchanted via OllamaKit) pass their reachability probe
 >    - Model-management endpoints (`/api/create`, `/api/copy`, `/api/delete`, `/api/pull`, `/api/push`, `/api/blobs/:digest`) are stubbed and return *not implemented* — llama-swap routes requests to user-managed processes
 > 2. **Anthropic `/v1/messages` translation** — inbound Anthropic Messages requests are translated to OpenAI and the response is translated back (set `passthroughAnthropic: true` to forward unchanged). `/v1/messages/count_tokens` stays a raw pass-through.
 > 3. **No-npm web UI** — the Svelte/npm UI is replaced with hand-authored vanilla ES-module JavaScript committed under `internal/server/ui_dist/` and embedded via `//go:embed`. There is no Node.js/npm build step.
