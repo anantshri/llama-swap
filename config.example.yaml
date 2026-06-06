@@ -209,18 +209,20 @@ models:
     #   is different from the model's ID
     useModelName: "openai/gpt-oss-120B"
 
-    # backendApi: the API format this model's upstream process speaks
-    # - optional, default: "openai"
-    # - one of: openai, anthropic, ollama
-    # - when an incoming request's format differs from this, llama-swap
-    #   translates the request and response between the two formats. Currently
-    #   the Anthropic-client -> OpenAI-backend leg is implemented: an Anthropic
-    #   /v1/messages request to an "openai" backend is translated to
-    #   /v1/chat/completions (streaming and non-streaming).
-    # - NOTE: with the default "openai", /v1/messages requests are translated
-    #   rather than passed through. Set "anthropic" to keep raw pass-through to a
-    #   backend that natively serves /v1/messages.
-    backendApi: openai
+    # passthroughAnthropic / passthroughOllama: API format pass-through controls
+    # - optional, both default: false
+    # - llama-swap assumes backends speak the OpenAI API. Non-OpenAI inbound
+    #   requests are translated to OpenAI before forwarding and the response is
+    #   translated back: Anthropic /v1/messages <-> /v1/chat/completions, and
+    #   Ollama /api/* <-> /v1/chat/completions (streaming and non-streaming).
+    #   OpenAI requests are always passed through unchanged.
+    # - set passthroughAnthropic: true only when this model's backend natively
+    #   speaks the Anthropic Messages API (e.g. recent llama.cpp); /v1/messages
+    #   is then forwarded raw instead of translated.
+    # - set passthroughOllama: true only when this model's backend natively
+    #   speaks the Ollama API; /api/* is then forwarded raw instead of translated.
+    passthroughAnthropic: false
+    passthroughOllama: false
 
     # filters: a dictionary of filter settings
     # - optional, default: empty dictionary

@@ -20,17 +20,23 @@
 >    - Model management endpoints (`/api/create`, `/api/copy`, `/api/delete`, `/api/pull`, `/api/push`, `/api/blobs/:digest`) are stubbed and return *not implemented* — llama-swap routes requests to user-managed processes
 > 2. Attempt to extract metrics for vLLM backend requests in activity logs
 > 3. Models page (`/ui/#/models`): active models (loaded or loading) are sorted to the top of the list and visually highlighted with a colored accent bar and tint, so the model you want to unload is always in reach
-> 4. Per-model API translation via `backendApi`. Declare the API format a
->    model's upstream speaks (`openai` (default), `anthropic`, `ollama`). When
->    an Anthropic client calls `POST /v1/messages` against a model whose backend
->    is `openai`, the request is translated to `POST /v1/chat/completions` and
->    the response (streaming and non-streaming) is translated back to Anthropic
->    shape — letting Anthropic clients (e.g. Claude Code) talk to any
->    OpenAI-compatible backend (llama.cpp, vLLM, …).
->    - Backward compatibility: `backendApi` defaults to `openai`, so `/v1/messages`
->      requests are now translated rather than passed through. To keep raw
->      pass-through to a backend that natively serves `/v1/messages` (e.g. recent
->      llama.cpp), set `backendApi: anthropic` on that model.
+> 4. API translation with OpenAI as the canonical backend format. llama-swap
+>    assumes backends speak the OpenAI API and translates non-OpenAI inbound
+>    requests down to OpenAI, then translates the response back (streaming and
+>    non-streaming):
+>    - Anthropic `POST /v1/messages` ⟷ `POST /v1/chat/completions`
+>    - Ollama `POST /api/*` ⟷ `POST /v1/chat/completions`
+>
+>    This lets Anthropic clients (e.g. Claude Code) and Ollama clients talk to any
+>    OpenAI-compatible backend (llama.cpp, vLLM, …). OpenAI requests pass through
+>    unchanged.
+>    - Per-model opt-out for backends that natively speak a non-OpenAI API:
+>      `passthroughAnthropic: true` forwards `/v1/messages` raw (e.g. recent
+>      llama.cpp), and `passthroughOllama: true` forwards `/api/*` raw to a real
+>      Ollama backend. Both default to `false` (translate).
+>    - NOTE: because the default translates, `/v1/messages` is no longer passed
+>      through by default — set `passthroughAnthropic: true` to keep raw fidelity
+>      to a backend that natively serves it.
 
 ---
 

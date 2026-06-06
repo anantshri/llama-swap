@@ -485,3 +485,40 @@ func TestHandler_MissingModelField_400(t *testing.T) {
 		}
 	}
 }
+
+func TestHandler_PassthroughOllama_ForwardsRaw(t *testing.T) {
+	d := &fakeDispatcher{
+		models: []ModelInfo{{ID: "native", PassthroughOllama: true}},
+		response: func(c *gin.Context, body []byte) {
+			c.Writer.Header().Set("Content-Type", "application/x-ndjson")
+			c.Writer.WriteHeader(http.StatusOK)
+			// A real Ollama backend's native response, returned unchanged.
+			_, _ = c.Writer.Write([]byte(`{"model":"native","message":{"role":"assistant","content":"hi"},"done":true}`))
+		},
+	}
+	router := newTestRouter(d, Options{})
+
+	reqBody := `{"model":"native","messages":[{"role":"user","content":"hello"}],"stream":false}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/chat", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", w.Code, w.Body.String())
+	}
+	if len(d.dispatched) != 1 {
+		t.Fatalf("dispatched %d calls, want 1", len(d.dispatched))
+	}
+	// Path is left as /api/chat (not rewritten) and the body is forwarded raw.
+	if d.dispatched[0].Path != "/api/chat" {
+		t.Errorf("path: got %s, want /api/chat", d.dispatched[0].Path)
+	}
+	if string(d.dispatched[0].Body) != reqBody {
+		t.Errorf("body was translated; got %s", string(d.dispatched[0].Body))
+	}
+	// Response flowed straight back, untranslated.
+	if !strings.Contains(w.Body.String(), `"done":true`) {
+		t.Errorf("unexpected response body: %s", w.Body.String())
+	}
+}

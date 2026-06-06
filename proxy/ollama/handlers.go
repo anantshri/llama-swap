@@ -21,6 +21,10 @@ type ModelInfo struct {
 	Name        string
 	Description string
 	Metadata    map[string]any
+
+	// PassthroughOllama forwards /api/* requests to the upstream unchanged
+	// instead of translating them to OpenAI (the backend natively speaks Ollama).
+	PassthroughOllama bool
 }
 
 // Dispatcher is the interface that proxy.ProxyManager (via an adapter)
@@ -110,6 +114,18 @@ func notImplementedHandler(msg string) gin.HandlerFunc {
 
 // --- inference handlers ---
 
+// passthroughOllama forwards the original request body to a backend that natively
+// speaks the Ollama API, leaving the /api/* path untouched so the upstream's
+// native response flows straight back. Returns true when it handled the request.
+func passthroughOllama(c *gin.Context, d Dispatcher, body []byte, model string) bool {
+	info, ok := d.FindModel(model)
+	if !ok || !info.PassthroughOllama {
+		return false
+	}
+	d.DispatchJSON(c, body)
+	return true
+}
+
 func makeChatHandler(d Dispatcher) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		body, err := io.ReadAll(c.Request.Body)
@@ -124,6 +140,10 @@ func makeChatHandler(d Dispatcher) gin.HandlerFunc {
 		}
 		if req.Model == "" {
 			writeError(c, http.StatusBadRequest, "missing 'model' field")
+			return
+		}
+
+		if passthroughOllama(c, d, body, req.Model) {
 			return
 		}
 
@@ -166,6 +186,10 @@ func makeGenerateHandler(d Dispatcher) gin.HandlerFunc {
 			return
 		}
 
+		if passthroughOllama(c, d, body, req.Model) {
+			return
+		}
+
 		translated, err := TranslateGenerateRequest(&req)
 		if err != nil {
 			writeError(c, http.StatusBadRequest, err.Error())
@@ -203,6 +227,9 @@ func makeEmbedHandler(d Dispatcher) gin.HandlerFunc {
 			writeError(c, http.StatusBadRequest, "missing 'model' field")
 			return
 		}
+		if passthroughOllama(c, d, body, req.Model) {
+			return
+		}
 		translated, err := TranslateEmbedRequest(&req)
 		if err != nil {
 			writeError(c, http.StatusBadRequest, err.Error())
@@ -227,6 +254,9 @@ func makeEmbeddingsHandler(d Dispatcher) gin.HandlerFunc {
 		}
 		if req.Model == "" {
 			writeError(c, http.StatusBadRequest, "missing 'model' field")
+			return
+		}
+		if passthroughOllama(c, d, body, req.Model) {
 			return
 		}
 		translated, err := TranslateEmbeddingsRequest(&req)

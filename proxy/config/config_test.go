@@ -1481,7 +1481,7 @@ models:
 	assert.Equal(t, 90, modelConfig.Timeouts.IdleConn)
 }
 
-func TestConfig_BackendApiDefault(t *testing.T) {
+func TestConfig_PassthroughDefault(t *testing.T) {
 	configYaml := `
 models:
   model1:
@@ -1494,15 +1494,17 @@ models:
 	modelConfig, found := config.Models["model1"]
 	require.True(t, found, "model1 should exist in config")
 
-	assert.Equal(t, BackendApiOpenAI, modelConfig.BackendApi)
+	assert.False(t, modelConfig.PassthroughAnthropic, "passthroughAnthropic should default to false")
+	assert.False(t, modelConfig.PassthroughOllama, "passthroughOllama should default to false")
 }
 
-func TestConfig_BackendApiNormalized(t *testing.T) {
+func TestConfig_PassthroughEnabled(t *testing.T) {
 	configYaml := `
 models:
   model1:
     cmd: test-server --port ${PORT}
-    backendApi: "  Anthropic  "
+    passthroughAnthropic: true
+    passthroughOllama: true
 `
 
 	config, err := LoadConfigFromReader(strings.NewReader(configYaml))
@@ -1511,20 +1513,8 @@ models:
 	modelConfig, found := config.Models["model1"]
 	require.True(t, found, "model1 should exist in config")
 
-	assert.Equal(t, BackendApiAnthropic, modelConfig.BackendApi)
-}
-
-func TestConfig_BackendApiInvalid(t *testing.T) {
-	configYaml := `
-models:
-  model1:
-    cmd: test-server --port ${PORT}
-    backendApi: cohere
-`
-
-	_, err := LoadConfigFromReader(strings.NewReader(configYaml))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid backendApi")
+	assert.True(t, modelConfig.PassthroughAnthropic)
+	assert.True(t, modelConfig.PassthroughOllama)
 }
 
 func TestConfig_TimeoutsZeroAllowed(t *testing.T) {

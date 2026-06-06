@@ -344,8 +344,9 @@ func (pm *ProxyManager) setupGinEngine() {
 	// Support legacy /v1/completions api, see issue #12
 	pm.ginEngine.POST("/v1/completions", pm.apiKeyAuth(), pm.trackInflight(), llmHandler)
 	// Support anthropic /v1/messages (added https://github.com/ggml-org/llama.cpp/pull/17570)
-	// Tagged as Anthropic so requests to an OpenAI backend are translated.
-	anthropicHandler := pm.mkProxyJSONHandlerFmt(captureAll, apiconv.FormatAnthropic)
+	// Tagged as Anthropic so requests are translated to OpenAI unless the model
+	// sets passthroughAnthropic.
+	anthropicHandler := pm.mkAnthropicJSONHandler(captureAll)
 	pm.ginEngine.POST("/v1/messages", pm.apiKeyAuth(), pm.trackInflight(), anthropicHandler)
 	// count_tokens has no OpenAI equivalent; leave it as raw pass-through.
 	pm.ginEngine.POST("/v1/messages/count_tokens", pm.apiKeyAuth(), pm.trackInflight(), llmHandler)
@@ -768,20 +769,25 @@ func (pm *ProxyManager) proxyToUpstream(c *gin.Context) {
 }
 
 func (pm *ProxyManager) mkProxyJSONHandler(cf captureFields) func(*gin.Context) {
-	return pm.mkProxyJSONHandlerFmt(cf, apiconv.FormatOpenAI)
+	return pm.mkJSONHandler(cf, false)
 }
 
-// mkProxyJSONHandlerFmt builds a JSON proxy handler that tags incoming requests
-// with the API format implied by the route (e.g. /v1/messages -> Anthropic), so
-// DispatchJSON can translate to the model's backend format when they differ.
-func (pm *ProxyManager) mkProxyJSONHandlerFmt(cf captureFields, in apiconv.Format) func(*gin.Context) {
+// mkAnthropicJSONHandler builds a JSON proxy handler for Anthropic-format inbound
+// routes (e.g. /v1/messages). Unless the resolved model sets passthroughAnthropic,
+// the request is translated to OpenAI before dispatch and the response is
+// translated back to Anthropic shape.
+func (pm *ProxyManager) mkAnthropicJSONHandler(cf captureFields) func(*gin.Context) {
+	return pm.mkJSONHandler(cf, true)
+}
+
+func (pm *ProxyManager) mkJSONHandler(cf captureFields, inboundAnthropic bool) func(*gin.Context) {
 	return func(c *gin.Context) {
 		bodyBytes, err := io.ReadAll(c.Request.Body)
 		if err != nil {
 			pm.sendErrorResponse(c, http.StatusBadRequest, "could not ready request body")
 			return
 		}
-		pm.DispatchJSONWithFormat(c, bodyBytes, cf, in)
+		pm.dispatchJSON(c, bodyBytes, cf, inboundAnthropic)
 	}
 }
 
@@ -796,14 +802,15 @@ func (pm *ProxyManager) mkProxyJSONHandlerFmt(cf captureFields, in apiconv.Forma
 // compatibility layer translating SSE to NDJSON) should replace c.Writer
 // with a wrapping gin.ResponseWriter before calling.
 func (pm *ProxyManager) DispatchJSON(c *gin.Context, bodyBytes []byte, cf captureFields) {
-	pm.DispatchJSONWithFormat(c, bodyBytes, cf, apiconv.FormatOpenAI)
+	pm.dispatchJSON(c, bodyBytes, cf, false)
 }
 
-// DispatchJSONWithFormat is DispatchJSON with an explicit incoming API format.
-// When the resolved model's backendApi differs from in and a converter exists,
-// the request body is translated to the backend format before forwarding and
-// the response is translated back to in on the way out.
-func (pm *ProxyManager) DispatchJSONWithFormat(c *gin.Context, bodyBytes []byte, cf captureFields, in apiconv.Format) {
+// dispatchJSON dispatches a JSON-bodied request, optionally translating an
+// Anthropic /v1/messages request to OpenAI. When inboundAnthropic is true and the
+// resolved model does not set passthroughAnthropic, the request body is translated
+// to OpenAI before forwarding and the response is translated back to Anthropic
+// shape on the way out.
+func (pm *ProxyManager) dispatchJSON(c *gin.Context, bodyBytes []byte, cf captureFields, inboundAnthropic bool) {
 	requestedModel := gjson.GetBytes(bodyBytes, "model").String()
 	if requestedModel == "" {
 		pm.sendErrorResponse(c, http.StatusBadRequest, "missing or invalid 'model' key")
@@ -813,7 +820,6 @@ func (pm *ProxyManager) DispatchJSONWithFormat(c *gin.Context, bodyBytes []byte,
 	// Capture streaming intent in the client's terms before any translation.
 	incomingStream := gjson.GetBytes(bodyBytes, "stream").Bool()
 	needTranslate := false
-	backendFmt := apiconv.FormatOpenAI
 
 	// Look for a matching local model first
 	var nextHandler func(modelID string, w http.ResponseWriter, r *http.Request) error
@@ -832,18 +838,17 @@ func (pm *ProxyManager) DispatchJSONWithFormat(c *gin.Context, bodyBytes []byte,
 			localHandler = processGroup.ProxyRequest
 		}
 
-		// Translate the request to the backend's API format when it differs from
-		// the client's. Done before the filters below so stripParams/setParams
+		// Translate an Anthropic request to OpenAI unless the backend speaks
+		// Anthropic natively. Done before the filters below so stripParams/setParams
 		// operate on the body actually sent upstream.
-		backendFmt = apiconv.ParseFormat(pm.config.Models[modelID].BackendApi)
-		if apiconv.CanTranslate(in, backendFmt) {
-			converted, terr := apiconv.ConvertRequest(in, backendFmt, bodyBytes)
+		if inboundAnthropic && !pm.config.Models[modelID].PassthroughAnthropic {
+			converted, terr := apiconv.AnthropicToOpenAIRequest(bodyBytes)
 			if terr != nil {
-				pm.sendErrorResponse(c, http.StatusBadRequest, fmt.Sprintf("error translating request from %s to %s: %s", in, backendFmt, terr.Error()))
+				pm.sendErrorResponse(c, http.StatusBadRequest, fmt.Sprintf("error translating Anthropic request to OpenAI: %s", terr.Error()))
 				return
 			}
 			bodyBytes = converted
-			c.Request.URL.Path = apiconv.BackendChatPath(backendFmt)
+			c.Request.URL.Path = "/v1/chat/completions"
 			needTranslate = true
 		}
 
@@ -974,12 +979,12 @@ func (pm *ProxyManager) DispatchJSONWithFormat(c *gin.Context, bodyBytes []byte,
 		return
 	}
 
-	// Translate the upstream response back to the client's format. The writer
-	// is swapped so the reverse proxy (and metrics recorder) write backend-format
-	// bytes into the translating writer, which emits client-format bytes.
+	// Translate the upstream OpenAI response back to Anthropic shape. The writer
+	// is swapped so the reverse proxy (and metrics recorder) write OpenAI bytes
+	// into the translating writer, which emits Anthropic bytes.
 	original := c.Writer
 	if incomingStream {
-		sw := apiconv.NewStreamTranslator(in, backendFmt, original, requestedModel)
+		sw := apiconv.NewAnthropicStreamWriter(original, requestedModel)
 		c.Writer = sw
 		err := runUpstream()
 		if err != nil {
@@ -1006,7 +1011,7 @@ func (pm *ProxyManager) DispatchJSONWithFormat(c *gin.Context, bodyBytes []byte,
 		bw.CommitPassThrough() // preserve upstream error body
 		return
 	}
-	translated, terr := apiconv.ConvertBufferedResponse(in, backendFmt, bw.CapturedBody(), requestedModel)
+	translated, terr := apiconv.OpenAIToAnthropicResponse(bw.CapturedBody(), requestedModel)
 	if terr != nil {
 		pm.proxyLogger.Errorf("Error translating response for model %s: %s", modelID, terr.Error())
 		bw.CommitPassThrough()
@@ -1362,19 +1367,21 @@ func (od *ollamaDispatcher) ListModels() []ollama.ModelInfo {
 			continue
 		}
 		out = append(out, ollama.ModelInfo{
-			ID:          id,
-			Aliases:     mc.Aliases,
-			Name:        mc.Name,
-			Description: mc.Description,
-			Metadata:    mc.Metadata,
+			ID:                id,
+			Aliases:           mc.Aliases,
+			Name:              mc.Name,
+			Description:       mc.Description,
+			Metadata:          mc.Metadata,
+			PassthroughOllama: mc.PassthroughOllama,
 		})
 		if od.pm.config.IncludeAliasesInList {
 			for _, alias := range mc.Aliases {
 				out = append(out, ollama.ModelInfo{
-					ID:          alias,
-					Name:        mc.Name,
-					Description: mc.Description,
-					Metadata:    mc.Metadata,
+					ID:                alias,
+					Name:              mc.Name,
+					Description:       mc.Description,
+					Metadata:          mc.Metadata,
+					PassthroughOllama: mc.PassthroughOllama,
 				})
 			}
 		}
@@ -1389,11 +1396,12 @@ func (od *ollamaDispatcher) FindModel(name string) (ollama.ModelInfo, bool) {
 	}
 	mc := od.pm.config.Models[realID]
 	return ollama.ModelInfo{
-		ID:          realID,
-		Aliases:     mc.Aliases,
-		Name:        mc.Name,
-		Description: mc.Description,
-		Metadata:    mc.Metadata,
+		ID:                realID,
+		Aliases:           mc.Aliases,
+		Name:              mc.Name,
+		Description:       mc.Description,
+		Metadata:          mc.Metadata,
+		PassthroughOllama: mc.PassthroughOllama,
 	}, true
 }
 

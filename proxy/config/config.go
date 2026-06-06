@@ -23,13 +23,6 @@ const (
 	LogToStdoutNone     = "none"
 )
 
-// backendApi values: the API format a model's upstream process speaks.
-const (
-	BackendApiOpenAI    = "openai"
-	BackendApiAnthropic = "anthropic"
-	BackendApiOllama    = "ollama"
-)
-
 type MacroEntry struct {
 	Name  string
 	Value any
@@ -451,15 +444,6 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 
 		if _, err := url.Parse(modelConfig.Proxy); err != nil {
 			return Config{}, fmt.Errorf("model %s: invalid proxy URL: %w", modelId, err)
-		}
-
-		// Normalize and validate the declared backend API format.
-		modelConfig.BackendApi = strings.ToLower(strings.TrimSpace(modelConfig.BackendApi))
-		switch modelConfig.BackendApi {
-		case BackendApiOpenAI, BackendApiAnthropic, BackendApiOllama:
-		default:
-			return Config{}, fmt.Errorf("model %s: invalid backendApi %q, must be one of %s|%s|%s",
-				modelId, modelConfig.BackendApi, BackendApiOpenAI, BackendApiAnthropic, BackendApiOllama)
 		}
 
 		if modelConfig.SendLoadingState == nil {

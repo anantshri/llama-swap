@@ -33,7 +33,6 @@ logLevel: error
 models:
   m1:
     cmd: {{RESPONDER}} --port ${PORT} --silent --respond m1
-    backendApi: openai
 `)
 	proxy := New(testConfig)
 	defer proxy.StopProcesses(StopImmediately)
@@ -77,7 +76,6 @@ logLevel: error
 models:
   m1:
     cmd: {{RESPONDER}} --port ${PORT} --silent --respond m1
-    backendApi: openai
 `)
 	proxy := New(testConfig)
 	defer proxy.StopProcesses(StopImmediately)
@@ -133,7 +131,7 @@ logLevel: error
 models:
   m1:
     cmd: {{RESPONDER}} --port ${PORT} --silent --respond m1
-    backendApi: anthropic
+    passthroughAnthropic: true
 `)
 	proxy := New(testConfig)
 	defer proxy.StopProcesses(StopImmediately)
