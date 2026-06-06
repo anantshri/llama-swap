@@ -27,8 +27,13 @@ Built in Go for performance and simplicity, llama-swap has zero dependencies and
   - `v1/images/generations`
   - `v1/images/edits`
 - ✅ Anthropic API supported endpoints:
-  - `v1/messages`
-  - `v1/messages/count_tokens`
+  - `v1/messages` - translated to OpenAI `v1/chat/completions` unless the model sets `passthroughAnthropic: true`
+  - `v1/messages/count_tokens` - raw pass-through (no OpenAI equivalent)
+- ✅ Ollama API compatible endpoints (translated to OpenAI unless the model sets `passthroughOllama: true`):
+  - `POST /api/chat`, `POST /api/generate` - chat/generate (streaming and non-streaming)
+  - `POST /api/embed`, `POST /api/embeddings` - embeddings
+  - `GET /api/tags`, `POST /api/show`, `GET /api/ps` - model listing/info answered from config
+  - model-management endpoints (`/api/create`, `/api/pull`, …) return `501 Not Implemented`
 - ✅ llama-server (llama.cpp) supported endpoints
   - `v1/rerank`, `v1/reranking`, `/rerank`
   - `/infill` - for code infilling
@@ -174,7 +179,7 @@ Binaries are available on the [release](https://github.com/mostlygeek/llama-swap
 
 ### Building from source
 
-1. Building requires Go and Node.js (for UI).
+1. Building requires only Go. The web UI is hand-authored vanilla JavaScript committed under `internal/server/ui_dist/` and embedded via `//go:embed`; there is no Node.js/npm build step.
 1. `git clone https://github.com/mostlygeek/llama-swap.git`
 1. `make clean all`
 1. look in the `build/` subdirectory for the llama-swap binary
