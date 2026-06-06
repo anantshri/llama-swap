@@ -106,9 +106,9 @@ func readSysStats() (SysStat, error) {
 	return SysStat{
 		Timestamp:      time.Now(),
 		CpuUtilPerCore: cpuPcts,
-		MemTotalMB:     int(vmStat.Total / toMB),
-		MemUsedMB:      int(vmStat.Used / toMB),
-		MemFreeMB:      int(vmStat.Free / toMB),
+		MemTotalMB:     int(vmStat.Total / toMB), // #nosec G115 -- uint64 bytes /(1024*1024) <= 17592186044415 < MaxInt64 on 64-bit build targets
+		MemUsedMB:      int(vmStat.Used / toMB),  // #nosec G115 -- uint64 bytes /(1024*1024) <= 17592186044415 < MaxInt64 on 64-bit build targets
+		MemFreeMB:      int(vmStat.Free / toMB),  // #nosec G115 -- uint64 bytes /(1024*1024) <= 17592186044415 < MaxInt64 on 64-bit build targets
 		NetIO:          netIO,
 	}, nil
 }
