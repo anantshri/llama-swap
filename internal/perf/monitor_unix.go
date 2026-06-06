@@ -143,7 +143,7 @@ func tryNvidiaSmi(ctx context.Context, every time.Duration, logger *logmon.Monit
 		sec = 1
 	}
 
-	cmd := exec.CommandContext(ctx, "nvidia-smi",
+	cmd := exec.CommandContext(ctx, "nvidia-smi", // #nosec G204 -- literal binary and flags, single integer loop arg; no shell, no untrusted input
 		"--query-gpu=index,name,uuid,temperature.gpu,utilization.gpu,memory.used,memory.total,fan.speed,power.draw",
 		"--format=csv,noheader,nounits",
 		"--loop", fmt.Sprintf("%d", sec),

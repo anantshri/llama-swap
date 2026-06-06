@@ -114,7 +114,7 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 	_, skipHistory := r.URL.Query()["no-history"]
 	if !skipHistory {
 		if history := logger.GetHistory(); len(history) != 0 {
-			w.Write(history)
+			w.Write(history) // #nosec G705 -- response is text/plain + nosniff; log bytes are not rendered as HTML
 			flusher.Flush()
 		}
 	}

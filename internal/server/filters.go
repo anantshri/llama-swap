@@ -96,7 +96,7 @@ func CreateFormFilterMiddleware(cfg config.Config) chain.Middleware {
 				return
 			}
 
-			if err := r.ParseMultipartForm(32 << 20); err != nil {
+			if err := r.ParseMultipartForm(32 << 20); err != nil { // #nosec G120 -- multipart parsing bounded at 32 MiB; required for audio/image upload endpoints
 				router.SendResponse(w, r, http.StatusBadRequest, fmt.Sprintf("error parsing multipart form: %s", err.Error()))
 				return
 			}

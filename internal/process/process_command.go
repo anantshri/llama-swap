@@ -414,7 +414,7 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 	// cmd.WaitDelay only acts as the inherited-pipe backstop measured from
 	// process exit (see killProcess).
 	cmdCtx, cmdCancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(cmdCtx, args[0], args[1:]...)
+	cmd := exec.CommandContext(cmdCtx, args[0], args[1:]...) // #nosec G204 -- launches the operator-configured model command (config.SanitizedCommand); not untrusted input
 	cmd.Stderr = p.processLogger
 	cmd.Stdout = p.processLogger
 	cmd.Env = append(cmd.Environ(), p.config.Env...)
@@ -529,7 +529,7 @@ func (p *ProcessCommand) sendStopSignal(cmd *exec.Cmd) error {
 		)
 		if err == nil {
 			p.processLogger.Debugf("<%s> sendStopSignal() running stop command: %s", p.id, strings.Join(stopArgs, " "))
-			stopCmd := exec.Command(stopArgs[0], stopArgs[1:]...)
+			stopCmd := exec.Command(stopArgs[0], stopArgs[1:]...) // #nosec G204 -- operator-configured cmdStop (config.SanitizeCommand), ${PID} is an integer; not untrusted input
 			stopCmd.Env = cmd.Env
 			setProcAttributes(stopCmd)
 			runErr := stopCmd.Run()

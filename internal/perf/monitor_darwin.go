@@ -121,7 +121,7 @@ func tryMactop(ctx context.Context, every time.Duration, logger *logmon.Monitor)
 		intervalMs = 1000
 	}
 
-	cmd := exec.CommandContext(ctx, "mactop",
+	cmd := exec.CommandContext(ctx, "mactop", // #nosec G204 -- literal binary and flags, single integer interval arg; no shell, no untrusted input
 		"--headless",
 		"--format", "json",
 		"--interval", fmt.Sprintf("%d", intervalMs),

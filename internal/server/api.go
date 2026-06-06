@@ -217,9 +217,9 @@ func (s *Server) handleUpstream(w http.ResponseWriter, r *http.Request) {
 			newPath += "?" + r.URL.RawQuery
 		}
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
-			http.Redirect(w, r, newPath, http.StatusMovedPermanently)
+			http.Redirect(w, r, newPath, http.StatusMovedPermanently) // #nosec G710 -- same-origin /upstream/<configured-model>/ path; cannot redirect off-site
 		} else {
-			http.Redirect(w, r, newPath, http.StatusPermanentRedirect)
+			http.Redirect(w, r, newPath, http.StatusPermanentRedirect) // #nosec G710 -- same-origin /upstream/<configured-model>/ path; cannot redirect off-site
 		}
 		return
 	}

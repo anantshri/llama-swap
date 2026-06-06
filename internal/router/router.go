@@ -144,7 +144,7 @@ func ExtractContext(r *http.Request) (ReqContextData, error) {
 	// after parsing.
 	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	if strings.Contains(contentType, "multipart/form-data") {
-		if err := r.ParseMultipartForm(32 << 20); err != nil {
+		if err := r.ParseMultipartForm(32 << 20); err != nil { // #nosec G120 -- multipart parsing bounded at 32 MiB; required for audio/image upload endpoints
 			return ReqContextData{}, fmt.Errorf("error parsing multipart form: %w", err)
 		}
 	} else {
