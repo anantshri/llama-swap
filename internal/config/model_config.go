@@ -31,6 +31,16 @@ type ModelConfig struct {
 	Unlisted      bool     `yaml:"unlisted"`
 	UseModelName  string   `yaml:"useModelName"`
 
+	// PassthroughAnthropic forwards an inbound Anthropic /v1/messages request to
+	// the backend unchanged instead of translating it to OpenAI. Set this when
+	// the backend natively speaks the Anthropic Messages API.
+	PassthroughAnthropic bool `yaml:"passthroughAnthropic"`
+
+	// PassthroughOllama forwards inbound Ollama /api/* requests to the backend
+	// unchanged instead of translating them to OpenAI. Set this when the backend
+	// natively speaks the Ollama API.
+	PassthroughOllama bool `yaml:"passthroughOllama"`
+
 	// #179 for /v1/models
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
@@ -62,18 +72,20 @@ type ModelConfig struct {
 func (m *ModelConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	type rawModelConfig ModelConfig
 	defaults := rawModelConfig{
-		Cmd:              "",
-		CmdStop:          "",
-		Proxy:            "http://localhost:${PORT}",
-		Aliases:          []string{},
-		Env:              []string{},
-		CheckEndpoint:    "/health",
-		UnloadAfter:      MODEL_CONFIG_DEFAULT_TTL, // use GlobalTTL
-		Unlisted:         false,
-		UseModelName:     "",
-		ConcurrencyLimit: 0,
-		Name:             "",
-		Description:      "",
+		Cmd:                  "",
+		CmdStop:              "",
+		Proxy:                "http://localhost:${PORT}",
+		Aliases:              []string{},
+		Env:                  []string{},
+		CheckEndpoint:        "/health",
+		UnloadAfter:          MODEL_CONFIG_DEFAULT_TTL, // use GlobalTTL
+		Unlisted:             false,
+		UseModelName:         "",
+		PassthroughAnthropic: false,
+		PassthroughOllama:    false,
+		ConcurrencyLimit:     0,
+		Name:                 "",
+		Description:          "",
 
 		// matches http.DefaultTransport
 		Timeouts: TimeoutsConfig{

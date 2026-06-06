@@ -13,6 +13,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/chain"
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
+	"github.com/mostlygeek/llama-swap/internal/ollama"
 	"github.com/mostlygeek/llama-swap/internal/perf"
 	"github.com/mostlygeek/llama-swap/internal/router"
 )
@@ -37,6 +38,12 @@ type Server struct {
 
 	mux     *http.ServeMux
 	handler http.Handler
+
+	// translatedDispatch is the dispatch pipeline (request filters + token
+	// metrics + local/peer routing) used by the Anthropic and Ollama
+	// translation layers. The translating writer is installed by the caller
+	// outside this chain so metrics tees the raw OpenAI bytes.
+	translatedDispatch http.Handler
 
 	shutdownCtx  context.Context
 	shutdownFn   context.CancelFunc
@@ -194,7 +201,23 @@ func (s *Server) routes() {
 	mux := http.NewServeMux()
 	dispatch := http.HandlerFunc(s.localPeerHandler)
 
+	// translatedDispatch applies the request body filters and token metrics
+	// before routing. The Anthropic/Ollama handlers wrap the response writer
+	// (outside this chain) so metrics records the raw OpenAI bytes while the
+	// client receives the translated shape.
+	s.translatedDispatch = chain.New(
+		filterMW,
+		formFilterMW,
+		CreateMetricsMiddleware(s.metrics, s.cfg),
+	).Then(dispatch)
+
 	for _, path := range modelPostJSONRoutes {
+		// /v1/messages and /v/messages get Anthropic translation (registered
+		// below); their count_tokens variants stay plain pass-through.
+		if path == "/v1/messages" || path == "/v/messages" {
+			mux.Handle("POST "+path, chain.New(authMW, CreateInflightMiddleware(s.inflight)).ThenFunc(s.handleAnthropicMessages))
+			continue
+		}
 		mux.Handle("POST "+path, modelChain.Then(dispatch))
 	}
 	for _, path := range modelPostFormRoutes {
@@ -203,6 +226,15 @@ func (s *Server) routes() {
 	for _, path := range modelGetRoutes {
 		mux.Handle("GET "+path, modelChain.Then(dispatch))
 	}
+
+	// Ollama-compatible API surface (see internal/ollama). llama-swap already
+	// serves /api/version, so SkipVersion is true. Each route gets auth +
+	// in-flight tracking; translation + metrics happen inside the handler.
+	ollamaChain := chain.New(authMW, CreateInflightMiddleware(s.inflight))
+	registerOllama := func(method, path string, h http.HandlerFunc) {
+		mux.Handle(method+" "+path, ollamaChain.ThenFunc(h))
+	}
+	ollama.Register(registerOllama, &ollamaDispatcher{s: s}, ollama.Options{SkipVersion: true})
 
 	// llama-swap API + custom endpoints.
 	mux.Handle("GET /v1/models", apiChain.ThenFunc(s.handleListModels))

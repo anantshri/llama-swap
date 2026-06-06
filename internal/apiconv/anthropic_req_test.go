@@ -1,0 +1,127 @@
+package apiconv
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
+)
+
+func TestAnthropicToOpenAIRequest_BasicTextAndSystem(t *testing.T) {
+	body := []byte(`{
+		"model": "m",
+		"max_tokens": 100,
+		"system": "be brief",
+		"temperature": 0.5,
+		"stop_sequences": ["END"],
+		"messages": [
+			{"role": "user", "content": "hello"}
+		]
+	}`)
+
+	out, err := AnthropicToOpenAIRequest(body)
+	require.NoError(t, err)
+	r := gjson.ParseBytes(out)
+
+	assert.Equal(t, "m", r.Get("model").String())
+	assert.Equal(t, int64(100), r.Get("max_tokens").Int())
+	assert.InDelta(t, 0.5, r.Get("temperature").Float(), 0.0001)
+	assert.Equal(t, "END", r.Get("stop.0").String())
+
+	assert.Equal(t, "system", r.Get("messages.0.role").String())
+	assert.Equal(t, "be brief", r.Get("messages.0.content").String())
+	assert.Equal(t, "user", r.Get("messages.1.role").String())
+	assert.Equal(t, "hello", r.Get("messages.1.content").String())
+}
+
+func TestAnthropicToOpenAIRequest_StreamSetsIncludeUsage(t *testing.T) {
+	body := []byte(`{"model":"m","max_tokens":10,"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	out, err := AnthropicToOpenAIRequest(body)
+	require.NoError(t, err)
+	r := gjson.ParseBytes(out)
+	assert.True(t, r.Get("stream").Bool())
+	assert.True(t, r.Get("stream_options.include_usage").Bool())
+}
+
+func TestAnthropicToOpenAIRequest_SystemAsBlocks(t *testing.T) {
+	body := []byte(`{
+		"model":"m","max_tokens":10,
+		"system":[{"type":"text","text":"part1 "},{"type":"text","text":"part2"}],
+		"messages":[{"role":"user","content":"hi"}]
+	}`)
+	out, err := AnthropicToOpenAIRequest(body)
+	require.NoError(t, err)
+	r := gjson.ParseBytes(out)
+	assert.Equal(t, "system", r.Get("messages.0.role").String())
+	assert.Equal(t, "part1 part2", r.Get("messages.0.content").String())
+}
+
+func TestAnthropicToOpenAIRequest_ImageBlock(t *testing.T) {
+	body := []byte(`{
+		"model":"m","max_tokens":10,
+		"messages":[{"role":"user","content":[
+			{"type":"text","text":"what is this"},
+			{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}
+		]}]
+	}`)
+	out, err := AnthropicToOpenAIRequest(body)
+	require.NoError(t, err)
+	r := gjson.ParseBytes(out)
+	parts := r.Get("messages.0.content")
+	require.True(t, parts.IsArray())
+	assert.Equal(t, "text", parts.Get("0.type").String())
+	assert.Equal(t, "image_url", parts.Get("1.type").String())
+	assert.Equal(t, "data:image/png;base64,AAAA", parts.Get("1.image_url.url").String())
+}
+
+func TestAnthropicToOpenAIRequest_Tools(t *testing.T) {
+	body := []byte(`{
+		"model":"m","max_tokens":10,
+		"tools":[{"name":"get_weather","description":"gets weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}}}}],
+		"tool_choice":{"type":"auto"},
+		"messages":[{"role":"user","content":"weather?"}]
+	}`)
+	out, err := AnthropicToOpenAIRequest(body)
+	require.NoError(t, err)
+	r := gjson.ParseBytes(out)
+	assert.Equal(t, "function", r.Get("tools.0.type").String())
+	assert.Equal(t, "get_weather", r.Get("tools.0.function.name").String())
+	assert.Equal(t, "object", r.Get("tools.0.function.parameters.type").String())
+	assert.Equal(t, "auto", r.Get("tool_choice").String())
+}
+
+func TestAnthropicToOpenAIRequest_ToolUseAndResult(t *testing.T) {
+	body := []byte(`{
+		"model":"m","max_tokens":10,
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"text","text":"let me check"},
+				{"type":"tool_use","id":"toolu_1","name":"get_weather","input":{"city":"SF"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"toolu_1","content":"sunny"}
+			]}
+		]
+	}`)
+	out, err := AnthropicToOpenAIRequest(body)
+	require.NoError(t, err)
+	r := gjson.ParseBytes(out)
+
+	// assistant message with tool_calls
+	assert.Equal(t, "assistant", r.Get("messages.0.role").String())
+	assert.Equal(t, "let me check", r.Get("messages.0.content").String())
+	assert.Equal(t, "toolu_1", r.Get("messages.0.tool_calls.0.id").String())
+	assert.Equal(t, "get_weather", r.Get("messages.0.tool_calls.0.function.name").String())
+	assert.Equal(t, "SF", gjson.Parse(r.Get("messages.0.tool_calls.0.function.arguments").String()).Get("city").String())
+
+	// tool result becomes role:tool message
+	assert.Equal(t, "tool", r.Get("messages.1.role").String())
+	assert.Equal(t, "toolu_1", r.Get("messages.1.tool_call_id").String())
+	assert.Equal(t, "sunny", r.Get("messages.1.content").String())
+}
+
+func TestAnthropicToOpenAIRequest_InvalidJSON(t *testing.T) {
+	_, err := AnthropicToOpenAIRequest([]byte(`{not json`))
+	require.Error(t, err)
+}

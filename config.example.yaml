@@ -321,6 +321,23 @@ models:
     unlisted: true
     cmd: llama-server --port ${PORT} -m Llama-3.2-1B-Instruct-Q4_K_M.gguf -ngl 0
 
+  # API translation passthrough example:
+  "native-anthropic-model":
+    # passthroughAnthropic: boolean, true or false
+    # - optional, default: false
+    # - by default an inbound Anthropic /v1/messages request is translated to
+    #   OpenAI /v1/chat/completions before being sent upstream, and the response
+    #   is translated back to Anthropic shape
+    # - set true when the backend already speaks the Anthropic Messages API, to
+    #   forward the request unchanged
+    passthroughAnthropic: true
+    # passthroughOllama: boolean, true or false
+    # - optional, default: false
+    # - by default inbound Ollama /api/* requests are translated to OpenAI; set
+    #   true when the backend natively speaks the Ollama API
+    passthroughOllama: false
+    cmd: llama-server --port ${PORT} -m some-model.gguf
+
   # Docker example:
   # container runtimes like Docker and Podman can be used reliably with
   # a combination of cmd, cmdStop, and ${MODEL_ID}
