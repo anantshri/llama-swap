@@ -304,6 +304,16 @@
                         "default": false,
                         "description": "If true the model will not show up in /v1/models responses. It can still be used as normal in API requests."
                     },
+                    "passthroughAnthropic": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "If true, inbound Anthropic /v1/messages requests are forwarded to the backend unchanged instead of being translated to OpenAI. Set this when the backend natively speaks the Anthropic Messages API."
+                    },
+                    "passthroughOllama": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "If true, inbound Ollama /api/* requests are forwarded to the backend unchanged instead of being translated to OpenAI. Set this when the backend natively speaks the Ollama API."
+                    },
                     "timeouts": {
                         "$ref": "#/definitions/timeouts"
                     }

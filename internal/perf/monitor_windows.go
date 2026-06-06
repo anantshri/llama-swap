@@ -38,8 +38,7 @@ func tryNvidiaSmiWindows(ctx context.Context, every time.Duration, logger *logmo
 		sec = 1
 	}
 
-	// #nosec G204 -- literal binary name, literal flag strings, single numeric format arg; no shell expansion
-	cmd := exec.CommandContext(ctx, "nvidia-smi",
+	cmd := exec.CommandContext(ctx, "nvidia-smi", // #nosec G204 -- literal binary and flags, single integer loop arg; no shell, no untrusted input
 		"--query-gpu=index,name,uuid,temperature.gpu,utilization.gpu,memory.used,memory.total,fan.speed,power.draw",
 		"--format=csv,noheader,nounits",
 		"--loop", fmt.Sprintf("%d", sec),
@@ -107,9 +106,9 @@ func readSysStats() (SysStat, error) {
 	return SysStat{
 		Timestamp:      time.Now(),
 		CpuUtilPerCore: cpuPcts,
-		MemTotalMB:     int(vmStat.Total / toMB), // #nosec G115 -- MB-scale memory counter cannot overflow int on supported platforms
-		MemUsedMB:      int(vmStat.Used / toMB),  // #nosec G115 -- MB-scale memory counter cannot overflow int on supported platforms
-		MemFreeMB:      int(vmStat.Free / toMB),  // #nosec G115 -- MB-scale memory counter cannot overflow int on supported platforms
+		MemTotalMB:     int(vmStat.Total / toMB), // #nosec G115 -- uint64 bytes /(1024*1024) <= 17592186044415 < MaxInt64 on 64-bit build targets
+		MemUsedMB:      int(vmStat.Used / toMB),  // #nosec G115 -- uint64 bytes /(1024*1024) <= 17592186044415 < MaxInt64 on 64-bit build targets
+		MemFreeMB:      int(vmStat.Free / toMB),  // #nosec G115 -- uint64 bytes /(1024*1024) <= 17592186044415 < MaxInt64 on 64-bit build targets
 		NetIO:          netIO,
 	}, nil
 }

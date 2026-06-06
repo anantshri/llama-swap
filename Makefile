@@ -19,56 +19,48 @@ all: mac linux simple-responder
 clean:
 	rm -rf $(BUILD_DIR)
 
-proxy/ui_dist/placeholder.txt:
-	mkdir -p proxy/ui_dist
-	touch $@
-
 # use cached test results while developing
-test-dev: proxy/ui_dist/placeholder.txt
-	go test -short ./proxy/... ./internal/...
-	staticcheck ./proxy/... ./internal/... || true
+test-dev:
+	go test -short ./internal/...
+	staticcheck ./internal/... || true
 
-test: proxy/ui_dist/placeholder.txt
-	go test -short -count=1 ./proxy/... ./internal/...
+test:
+	go test -short -count=1 ./internal/...
 
 # for CI - full test (takes longer)
-test-all: proxy/ui_dist/placeholder.txt
-	go test -race -count=1 ./proxy/... ./internal/...
+test-all:
+	go test -race -count=1 ./internal/...
 
 # security static analysis - matches the gosec.yml CI job.
 # Scans each GOOS so build-tag-gated files (monitor_{darwin,unix,windows}.go,
-# process_windows.go) are all covered. Depends on the ui_dist placeholder so
-# the //go:embed in proxy/ui_embed.go resolves on a fresh checkout.
-gosec: proxy/ui_dist/placeholder.txt
+# process_windows.go) are all covered.
+gosec:
 	GOOS=linux   gosec ./...
 	GOOS=darwin  gosec ./...
 	GOOS=windows gosec ./...
 
-ui/node_modules:
-	cd ui-svelte && npm install
-
-# build react UI
-ui: ui/node_modules
-	cd ui-svelte && npm run build
+# The web UI under internal/server/ui_dist/ is hand-authored static HTML/CSS/JS,
+# committed to the repo. There is no JS build step; the Go binary embeds it via
+# //go:embed.
 
 # Build OSX binary
-mac: ui
+mac:
 	@echo "Building Mac binary..."
 	GOOS=darwin GOARCH=arm64 go build -ldflags="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-darwin-arm64
 
 # Build Linux binary
 linux: linux-arm64 linux-amd64
 
-linux-amd64: ui
+linux-amd64:
 	@echo "Building Linux AMD64 binary..."
 	GOOS=linux GOARCH=amd64 go build -ldflags="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-linux-amd64
 
-linux-arm64: ui
+linux-arm64:
 	@echo "Building Linux ARM64 binary..."
 	GOOS=linux GOARCH=arm64 go build -ldflags="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-linux-arm64
 
 # Build Windows binary
-windows: ui
+windows:
 	@echo "Building Windows binary..."
 	GOOS=windows GOARCH=amd64 go build -ldflags="-X main.commit=${GIT_HASH} -X main.version=local_${GIT_HASH} -X main.date=${BUILD_DATE}" -o $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe
 
@@ -106,9 +98,6 @@ wol-proxy: $(BUILD_DIR)
 	@echo "Building wol-proxy"
 	go build -o $(BUILD_DIR)/wol-proxy-$(GOOS)-$(GOARCH)-$(shell date +%Y-%m-%d) cmd/wol-proxy/wol-proxy.go
 
-test-ui:
-	cd ui-svelte && npm ci && npm run check && npm test
-
 # Phony targets
-.PHONY: all clean ui mac windows simple-responder simple-responder-windows test test-all test-dev test-ui wol-proxy gosec
+.PHONY: all clean gosec mac windows simple-responder simple-responder-windows test test-all test-dev wol-proxy
 .PHONE: linux linux-arm64 linux-amd64

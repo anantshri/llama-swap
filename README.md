@@ -5,22 +5,24 @@
 >
 > **[Anant](https://github.com/anantshri) does not encourage others to use this fork**, as it will not be maintained beyond what the original author provides. Please use the original package: https://github.com/mostlygeek/llama-swap
 >
-> ### Changes in this fork
+> ### Where this branch diverges
 >
-> 1. Ollama compatible API — translated to OpenAI shape and forwarded to the upstream server:
->    - `POST /api/chat`
->    - `POST /api/generate`
->    - `POST /api/embed`
->    - `POST /api/embeddings`
+> This `upstream-code` branch is re-based on top of current upstream (the rewritten `internal/` routing backend from [#790](https://github.com/mostlygeek/llama-swap/pull/790)) rather than the older `proxy/` package layout used by the fork's `main` branch. The fork's additions are re-applied on top of that upstream base as a small set of clean commits, so the divergence from upstream is easy to see. Divergence baseline: upstream commit `ccfba0d`.
+>
+> ### Changes in this fork (this branch)
+>
+> 1. **Ollama-compatible API** — inbound Ollama requests are translated to OpenAI shape and forwarded to the upstream server (set `passthroughOllama: true` on a model to forward unchanged):
+>    - `POST /api/chat`, `POST /api/generate` — chat / generate (streaming and non-streaming)
+>    - `POST /api/embed`, `POST /api/embeddings` — embeddings
 >    - `GET /api/tags` — list available models
 >    - `POST /api/show` — show model details
 >    - `GET /api/ps` — list running models
->    - `GET /api/version`
->    - `HEAD` requests are honored on the Ollama endpoints (for Enchanted compatibility)
->    - Model management endpoints (`/api/create`, `/api/copy`, `/api/delete`, `/api/pull`, `/api/push`, `/api/blobs/:digest`) are stubbed and return *not implemented* — llama-swap routes requests to user-managed processes
-> 2. Attempt to extract metrics for vLLM backend requests in activity logs
-
----
+>    - `HEAD /` returns `200` so Ollama clients (e.g. Enchanted via OllamaKit) pass their reachability probe
+>    - Model-management endpoints (`/api/create`, `/api/copy`, `/api/delete`, `/api/pull`, `/api/push`, `/api/blobs/:digest`) are stubbed and return *not implemented* — llama-swap routes requests to user-managed processes
+> 2. **Anthropic `/v1/messages` translation** — inbound Anthropic Messages requests are translated to OpenAI and the response is translated back (set `passthroughAnthropic: true` to forward unchanged). `/v1/messages/count_tokens` stays a raw pass-through.
+> 3. **No-npm web UI** — the Svelte/npm UI is replaced with hand-authored vanilla ES-module JavaScript committed under `internal/server/ui_dist/` and embedded via `//go:embed`. There is no Node.js/npm build step.
+> 4. **Removed the legacy `proxy/` implementation** (`cmd/legacy`) that upstream keeps alongside the new backend, so this fork ships a single implementation.
+> 5. **vLLM-friendly activity metrics** — rate and cache fields default to an `unknown` sentinel instead of `0` on failure paths and for vLLM streaming requests that omit `usage` chunks, so the Activity dashboard shows `unknown` rather than a misleading `0 t/s`. See the vLLM tip in [docs/configuration.md](docs/configuration.md).
 
 ![llama-swap header image](docs/assets/hero3.webp)
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/mostlygeek/llama-swap/total)
@@ -51,8 +53,13 @@ Built in Go for performance and simplicity, llama-swap has zero dependencies and
   - `v1/images/generations`
   - `v1/images/edits`
 - ✅ Anthropic API supported endpoints:
-  - `v1/messages`
-  - `v1/messages/count_tokens`
+  - `v1/messages` - translated to OpenAI `v1/chat/completions` unless the model sets `passthroughAnthropic: true`
+  - `v1/messages/count_tokens` - raw pass-through (no OpenAI equivalent)
+- ✅ Ollama API compatible endpoints (translated to OpenAI unless the model sets `passthroughOllama: true`):
+  - `POST /api/chat`, `POST /api/generate` - chat/generate (streaming and non-streaming)
+  - `POST /api/embed`, `POST /api/embeddings` - embeddings
+  - `GET /api/tags`, `POST /api/show`, `GET /api/ps` - model listing/info answered from config
+  - model-management endpoints (`/api/create`, `/api/pull`, …) return `501 Not Implemented`
 - ✅ llama-server (llama.cpp) supported endpoints
   - `v1/rerank`, `v1/reranking`, `/rerank`
   - `/infill` - for code infilling
@@ -198,7 +205,7 @@ Binaries are available on the [release](https://github.com/mostlygeek/llama-swap
 
 ### Building from source
 
-1. Building requires Go and Node.js (for UI).
+1. Building requires only Go. The web UI is hand-authored vanilla JavaScript committed under `internal/server/ui_dist/` and embedded via `//go:embed`; there is no Node.js/npm build step.
 1. `git clone https://github.com/mostlygeek/llama-swap.git`
 1. `make clean all`
 1. look in the `build/` subdirectory for the llama-swap binary

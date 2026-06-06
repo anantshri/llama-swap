@@ -5,3 +5,8 @@ dist/
 .vscode
 .DS_Store
 .dev/
+
+# The web UI under internal/server/ui_dist/ is hand-authored and committed; no
+# build output is generated, so nothing here is ignored.
+.claude/
+/llama-swap

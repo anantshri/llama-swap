@@ -237,7 +237,9 @@ func main() {
 
 		c.Header("Content-Type", "text/plain")
 		for _, char := range echo {
-			_, _ = c.Writer.Write([]byte(string(char)))
+			if _, err := c.Writer.Write([]byte(string(char))); err != nil {
+				return
+			}
 			c.Writer.Flush()
 
 			// wait
@@ -315,8 +317,8 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              address,
+		ReadHeaderTimeout: 30 * time.Second,
 		Handler:           r.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	// Disable logging if the --silent flag is set
