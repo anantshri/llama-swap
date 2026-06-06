@@ -217,6 +217,9 @@ func (s *Server) routes() {
 	// Embedded UI.
 	mux.HandleFunc("GET /ui/", s.handleUI)
 	mux.HandleFunc("GET /favicon.ico", s.handleFavicon)
+	for _, asset := range rootUIAssets {
+		mux.HandleFunc("GET /"+asset, s.handleRootAsset)
+	}
 
 	// Prometheus metrics (no auth, matches the legacy endpoint).
 	mux.HandleFunc("GET /metrics", s.handleMetrics)

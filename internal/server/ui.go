@@ -8,11 +8,12 @@ import (
 	"strings"
 )
 
-// uiStaticFS holds the embedded UI build. The build is copied into ui_dist by
-// the Makefile's `ui` target; placeholder.txt keeps the embed valid before a
-// build has run.
+// uiStaticFS holds the embedded UI. The UI under ui_dist is hand-authored
+// vanilla ES-module JavaScript committed to the repo (no build step). The all:
+// prefix is required so dot/underscore-prefixed files (e.g. __selftest.html)
+// are embedded too.
 //
-//go:embed ui_dist
+//go:embed all:ui_dist
 var uiStaticFS embed.FS
 
 // uiFS is the embedded UI rooted at ui_dist.
@@ -106,6 +107,28 @@ func serveUI(fsys http.FileSystem, w http.ResponseWriter, r *http.Request) {
 // handleFavicon serves /favicon.ico from the embedded UI build.
 func (s *Server) handleFavicon(w http.ResponseWriter, r *http.Request) {
 	if err := serveCompressedFile(uiFS, w, r, "favicon.ico"); err != nil {
+		http.NotFound(w, r)
+	}
+}
+
+// rootUIAssets are files that index.html and the web app manifest reference at
+// the site root (not under /ui/). They live in the embedded UI FS root and are
+// served at / so browsers and the PWA manifest can resolve them. favicon.ico has
+// its own handler (handleFavicon).
+var rootUIAssets = []string{
+	"favicon.svg",
+	"favicon-96x96.png",
+	"apple-touch-icon.png",
+	"site.webmanifest",
+	"web-app-manifest-192x192.png",
+	"web-app-manifest-512x512.png",
+}
+
+// handleRootAsset serves a single embedded UI asset by its base name from the
+// FS root.
+func (s *Server) handleRootAsset(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/")
+	if err := serveCompressedFile(uiFS, w, r, name); err != nil {
 		http.NotFound(w, r)
 	}
 }

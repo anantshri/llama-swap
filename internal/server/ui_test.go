@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -88,5 +89,54 @@ func TestServer_ServeUI_MissingFile(t *testing.T) {
 	w := serveUIRequest(t, "/ui/missing.js", "")
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
+// TestServer_EmbeddedUIAssets exercises the real embedded uiFS to verify the
+// committed no-npm UI is embedded and served. It guards the //go:embed all:
+// directive (underscore-prefixed files like __selftest.html are only embedded
+// with the all: prefix) and that real ES modules carry a JS MIME type.
+func TestServer_EmbeddedUIAssets(t *testing.T) {
+	cases := []struct {
+		path        string
+		wantType    string // substring expected in Content-Type, "" to skip
+		description string
+	}{
+		{"/ui/index.html", "text/html", "SPA entry point"},
+		{"/ui/js/main.js", "javascript", "ES module bootstrap"},
+		{"/ui/css/app.css", "text/css", "core stylesheet"},
+		{"/ui/__selftest.html", "text/html", "underscore-prefixed file (needs all: embed)"},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(http.MethodGet, c.path, nil)
+		w := httptest.NewRecorder()
+		serveUI(uiFS, w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("%s (%s): status = %d, want 200", c.path, c.description, w.Code)
+			continue
+		}
+		if w.Body.Len() == 0 {
+			t.Errorf("%s (%s): empty body", c.path, c.description)
+		}
+		if c.wantType != "" && !strings.Contains(w.Header().Get("Content-Type"), c.wantType) {
+			t.Errorf("%s: Content-Type = %q, want substring %q", c.path, w.Header().Get("Content-Type"), c.wantType)
+		}
+	}
+}
+
+// TestServer_RootAssets verifies the site-root files referenced by index.html
+// and the web app manifest (served outside /ui/) resolve from the embedded FS.
+func TestServer_RootAssets(t *testing.T) {
+	s := &Server{}
+	for _, asset := range rootUIAssets {
+		req := httptest.NewRequest(http.MethodGet, "/"+asset, nil)
+		w := httptest.NewRecorder()
+		s.handleRootAsset(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("/%s: status = %d, want 200", asset, w.Code)
+		}
+		if w.Body.Len() == 0 {
+			t.Errorf("/%s: empty body", asset)
+		}
 	}
 }
