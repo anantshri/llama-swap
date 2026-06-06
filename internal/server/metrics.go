@@ -124,6 +124,10 @@ func (mp *metricsMonitor) getMetricsJSON() ([]byte, error) {
 // requests, with cf controlling which request/response parts are retained.
 // reqBody and reqHeaders are the request data buffered before dispatch.
 func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *responseBodyCopier, cf captureFields, reqBody []byte, reqHeaders map[string]string) {
+	// Rate and cache fields default to -1 (the "unknown" sentinel rendered as
+	// "unknown" in the UI) so failure paths — and vLLM streaming requests that
+	// omit usage chunks — don't surface 0 t/s as if it were a real measurement.
+	// Token counts stay at 0. Successful parses overwrite tm.Tokens below.
 	tm := ActivityLogEntry{
 		Timestamp:       time.Now(),
 		Model:           modelID,
@@ -131,6 +135,11 @@ func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *resp
 		RespContentType: recorder.Header().Get("Content-Type"),
 		RespStatusCode:  recorder.Status(),
 		DurationMs:      int(time.Since(recorder.StartTime()).Milliseconds()),
+		Tokens: TokenMetrics{
+			CachedTokens:    -1,
+			PromptPerSecond: -1,
+			TokensPerSecond: -1,
+		},
 	}
 
 	queueAndEmit := func() {

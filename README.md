@@ -22,6 +22,7 @@
 > 2. **Anthropic `/v1/messages` translation** — inbound Anthropic Messages requests are translated to OpenAI and the response is translated back (set `passthroughAnthropic: true` to forward unchanged). `/v1/messages/count_tokens` stays a raw pass-through.
 > 3. **No-npm web UI** — the Svelte/npm UI is replaced with hand-authored vanilla ES-module JavaScript committed under `internal/server/ui_dist/` and embedded via `//go:embed`. There is no Node.js/npm build step.
 > 4. **Removed the legacy `proxy/` implementation** (`cmd/legacy`) that upstream keeps alongside the new backend, so this fork ships a single implementation.
+> 5. **vLLM-friendly activity metrics** — rate and cache fields default to an `unknown` sentinel instead of `0` on failure paths and for vLLM streaming requests that omit `usage` chunks, so the Activity dashboard shows `unknown` rather than a misleading `0 t/s`. See the vLLM tip in [docs/configuration.md](docs/configuration.md).
 
 ![llama-swap header image](docs/assets/hero3.webp)
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/mostlygeek/llama-swap/total)

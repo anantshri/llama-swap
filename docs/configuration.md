@@ -68,6 +68,9 @@ models:
         --trust-remote-code
 ```
 
+> [!TIP]
+> **vLLM streaming requests:** to populate the `Prompt Speed` column on the Activity dashboard for streaming requests, clients must send `stream_options: {"include_usage": true}` in the request body. Without it vLLM emits no `usage` chunks in the SSE stream and llama-swap has no token counts to measure rates against. vLLM non-streaming responses include `usage` but no per-request prefill timing, so `Prompt Speed` will read `unknown` — this is honest, not a bug.
+
 ## Many more features..
 
 llama-swap supports many more features to customize how you want to manage your environment.
