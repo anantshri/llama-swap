@@ -57,6 +57,42 @@ func TestAnthropicToOpenAIRequest_SystemAsBlocks(t *testing.T) {
 	assert.Equal(t, "part1 part2", r.Get("messages.0.content").String())
 }
 
+func TestAnthropicToOpenAIRequest_MidConversationSystemHoisted(t *testing.T) {
+	// Claude Code (v2.1.154+) emits role:"system" messages inside messages[].
+	// Strict backends (e.g. Qwen3) require exactly one system message, first, so
+	// all system content must be merged into a single leading system message.
+	body := []byte(`{
+		"model":"m","max_tokens":10,
+		"system":"top system",
+		"messages":[
+			{"role":"user","content":"hi"},
+			{"role":"system","content":"mid-stream note"},
+			{"role":"assistant","content":"ok"},
+			{"role":"system","content":[{"type":"text","text":"another note"}]},
+			{"role":"user","content":"bye"}
+		]
+	}`)
+	out, err := AnthropicToOpenAIRequest(body)
+	require.NoError(t, err)
+	r := gjson.ParseBytes(out)
+
+	// Exactly one system message, at index 0, with all system text merged in order.
+	assert.Equal(t, "system", r.Get("messages.0.role").String())
+	assert.Equal(t, "top system\n\nmid-stream note\n\nanother note", r.Get("messages.0.content").String())
+	r.Get("messages").ForEach(func(i, m gjson.Result) bool {
+		if i.Int() > 0 {
+			assert.NotEqual(t, "system", m.Get("role").String(), "no system message past index 0")
+		}
+		return true
+	})
+	// Non-system messages preserve their order after the system message.
+	assert.Equal(t, "user", r.Get("messages.1.role").String())
+	assert.Equal(t, "hi", r.Get("messages.1.content").String())
+	assert.Equal(t, "assistant", r.Get("messages.2.role").String())
+	assert.Equal(t, "user", r.Get("messages.3.role").String())
+	assert.Equal(t, "bye", r.Get("messages.3.content").String())
+}
+
 func TestAnthropicToOpenAIRequest_ImageBlock(t *testing.T) {
 	body := []byte(`{
 		"model":"m","max_tokens":10,

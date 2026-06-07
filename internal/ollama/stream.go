@@ -215,6 +215,11 @@ func (w *StreamWriter) emitFinal() error {
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	duration := time.Since(w.startTime).Nanoseconds()
+	if duration <= 0 {
+		// Guard against a zero reading on coarse-resolution clocks so the
+		// total_duration field (omitempty) is always emitted, matching Ollama.
+		duration = 1
+	}
 	var payload []byte
 	var err error
 	switch w.mode {

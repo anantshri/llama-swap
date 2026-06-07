@@ -171,7 +171,7 @@ func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *resp
 	}
 
 	if strings.Contains(recorder.Header().Get("Content-Type"), "text/event-stream") {
-		if parsed, err := processStreamingResponse(modelID, recorder.StartTime(), body); err != nil {
+		if parsed, err := processStreamingResponse(modelID, recorder.StartTime(), recorder.FirstWriteTime(), body); err != nil {
 			mp.logger.Warnf("error processing streaming response: %v, path=%s, recording minimal metrics", err, r.URL.Path)
 		} else {
 			tm.Tokens = parsed.Tokens
@@ -181,6 +181,7 @@ func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *resp
 		parsed := gjson.ParseBytes(body)
 		usage := parsed.Get("usage")
 		timings := parsed.Get("timings")
+		inBodyMetrics := findInBodyMetrics(parsed)
 
 		// /infill responses are arrays; timings live in the last element (#463).
 		if strings.HasPrefix(r.URL.Path, "/infill") {
@@ -189,8 +190,8 @@ func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *resp
 			}
 		}
 
-		if usage.Exists() || timings.Exists() {
-			if parsedMetrics, err := parseMetrics(modelID, recorder.StartTime(), usage, timings); err != nil {
+		if usage.Exists() || timings.Exists() || inBodyMetrics.Exists() {
+			if parsedMetrics, err := parseMetrics(modelID, recorder.StartTime(), usage, timings, inBodyMetrics); err != nil {
 				mp.logger.Warnf("error parsing metrics: %v, path=%s, recording minimal metrics", err, r.URL.Path)
 			} else {
 				tm.Tokens = parsedMetrics.Tokens
@@ -229,6 +230,24 @@ func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *resp
 // usagePaths lists the JSON paths where a per-event usage object can live.
 var usagePaths = []string{"usage", "response.usage", "message.usage"}
 
+// inBodyMetricsPaths lists the JSON paths where an upstream may emit a
+// per-request metrics object directly in the response body. Currently
+// opportunistic: covers possible vLLM in-body metrics and any other upstream
+// that chooses to emit one.
+var inBodyMetricsPaths = []string{"metrics", "vllm_metrics"}
+
+// findInBodyMetrics returns the first existing per-request metrics object at one
+// of the known paths in the parsed JSON. Returns a zero gjson.Result when none
+// is present.
+func findInBodyMetrics(parsed gjson.Result) gjson.Result {
+	for _, path := range inBodyMetricsPaths {
+		if m := parsed.Get(path); m.Exists() {
+			return m
+		}
+	}
+	return gjson.Result{}
+}
+
 // extractUsageTokens reads input/output/cached token counts from a usage
 // gjson.Result, handling the field-name differences across endpoints.
 func extractUsageTokens(usage gjson.Result) (input, output, cached int64, ok bool) {
@@ -266,12 +285,13 @@ func extractUsageTokens(usage gjson.Result) (input, output, cached int64, ok boo
 	return
 }
 
-func processStreamingResponse(modelID string, start time.Time, body []byte) (ActivityLogEntry, error) {
+func processStreamingResponse(modelID string, start, firstWrite time.Time, body []byte) (ActivityLogEntry, error) {
 	var (
 		inputTokens, outputTokens int64
 		cachedTokens              int64 = -1
 		hasAny                    bool
 		timings                   gjson.Result
+		inBodyMetrics             gjson.Result
 	)
 
 	prefix := []byte("data:")
@@ -323,29 +343,48 @@ func processStreamingResponse(modelID string, start time.Time, body []byte) (Act
 			timings = t
 			hasAny = true
 		}
+		if m := findInBodyMetrics(parsed); m.Exists() {
+			inBodyMetrics = m
+			hasAny = true
+		}
 	}
 
 	if !hasAny {
 		return ActivityLogEntry{}, fmt.Errorf("no valid JSON data found in stream")
 	}
 
-	return buildMetrics(modelID, start, inputTokens, outputTokens, cachedTokens, timings), nil
+	return buildMetrics(modelID, start, firstWrite, inputTokens, outputTokens, cachedTokens, timings, inBodyMetrics), nil
 }
 
-func parseMetrics(modelID string, start time.Time, usage, timings gjson.Result) (ActivityLogEntry, error) {
+func parseMetrics(modelID string, start time.Time, usage, timings, inBodyMetrics gjson.Result) (ActivityLogEntry, error) {
 	input, output, cached, _ := extractUsageTokens(usage)
-	return buildMetrics(modelID, start, input, output, cached, timings), nil
+	// Non-streaming requests have no meaningful TTFT signal; pass a zero
+	// firstWrite so buildMetrics falls through to the non-streaming tier.
+	return buildMetrics(modelID, start, time.Time{}, input, output, cached, timings, inBodyMetrics), nil
 }
 
 // buildMetrics composes an ActivityLogEntry from accumulated token counts and
-// optional llama-server timings (which override input/output and provide rates).
-func buildMetrics(modelID string, start time.Time, inputTokens, outputTokens, cachedTokens int64, timings gjson.Result) ActivityLogEntry {
-	wallDurationMs := int(time.Since(start).Milliseconds())
+// derives per-request rates using a four-tier fallback (highest precedence
+// first):
+//  1. Upstream-emitted timings block (llama-server /v1/chat/completions), which
+//     also overrides input/output token counts.
+//  2. Opportunistic in-body metrics object (e.g., vLLM-style metrics).
+//  3. Streaming TTFT split — when firstWrite is set, split the duration into
+//     prefill (start..firstWrite) and decode (firstWrite..now) to derive rates.
+//  4. Non-streaming approximation — fill tokens_per_second from output / duration
+//     and leave prompt_per_second at -1 (no signal to separate prefill).
+//
+// Rates that cannot be derived honestly stay at -1 (the "unknown" sentinel);
+// 0 and non-finite values are never emitted.
+func buildMetrics(modelID string, start, firstWrite time.Time, inputTokens, outputTokens, cachedTokens int64, timings, inBodyMetrics gjson.Result) ActivityLogEntry {
+	now := time.Now()
+	wallDurationMs := int(now.Sub(start).Milliseconds())
 	durationMs := wallDurationMs
 	tokensPerSecond := -1.0
 	promptPerSecond := -1.0
 
-	if timings.Exists() {
+	switch {
+	case timings.Exists():
 		inputTokens = timings.Get("prompt_n").Int()
 		outputTokens = timings.Get("predicted_n").Int()
 		promptPerSecond = timings.Get("prompt_per_second").Float()
@@ -357,10 +396,38 @@ func buildMetrics(modelID string, start time.Time, inputTokens, outputTokens, ca
 		if cachedValue := timings.Get("cache_n"); cachedValue.Exists() {
 			cachedTokens = cachedValue.Int()
 		}
+
+	case inBodyMetrics.Exists():
+		if v := inBodyMetrics.Get("prompt_per_second"); v.Exists() && v.Float() > 0 {
+			promptPerSecond = v.Float()
+		}
+		if v := inBodyMetrics.Get("tokens_per_second"); v.Exists() && v.Float() > 0 {
+			tokensPerSecond = v.Float()
+		}
+
+	case !firstWrite.IsZero() && firstWrite.After(start) && !firstWrite.After(now):
+		// Streaming TTFT split: prefill is the time to first byte, decode is the
+		// remaining wall time. Guard each division on positive inputs so a
+		// degenerate split leaves the rate at -1 rather than emitting 0/Inf.
+		prefillMs := firstWrite.Sub(start).Milliseconds()
+		decodeMs := int64(wallDurationMs) - prefillMs
+		if prefillMs > 0 && inputTokens > 0 {
+			promptPerSecond = float64(inputTokens) * 1000.0 / float64(prefillMs)
+		}
+		if decodeMs > 0 && outputTokens > 0 {
+			tokensPerSecond = float64(outputTokens) * 1000.0 / float64(decodeMs)
+		}
+
+	default:
+		// Non-streaming, no timings, no in-body metrics: only tokens_per_second
+		// can be approximated; prompt_per_second stays -1 (no prefill signal).
+		if wallDurationMs > 0 && outputTokens > 0 {
+			tokensPerSecond = float64(outputTokens) * 1000.0 / float64(wallDurationMs)
+		}
 	}
 
 	return ActivityLogEntry{
-		Timestamp: time.Now(),
+		Timestamp: now,
 		Model:     modelID,
 		Tokens: TokenMetrics{
 			CachedTokens:    int(cachedTokens),
@@ -419,6 +486,7 @@ type responseBodyCopier struct {
 	status      int
 	wroteHeader bool
 	start       time.Time
+	firstWrite  time.Time
 }
 
 func newBodyCopier(w http.ResponseWriter) *responseBodyCopier {
@@ -435,6 +503,9 @@ func newBodyCopier(w http.ResponseWriter) *responseBodyCopier {
 func (w *responseBodyCopier) Write(b []byte) (int, error) {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
+	}
+	if w.firstWrite.IsZero() && len(b) > 0 {
+		w.firstWrite = time.Now()
 	}
 	return w.tee.Write(b)
 }
@@ -457,3 +528,8 @@ func (w *responseBodyCopier) Flush() {
 
 func (w *responseBodyCopier) Status() int          { return w.status }
 func (w *responseBodyCopier) StartTime() time.Time { return w.start }
+
+// FirstWriteTime returns the time at which the first non-empty byte was written
+// to the response. Used to derive a proxy-side TTFT for streaming responses.
+// Zero when no data has been written.
+func (w *responseBodyCopier) FirstWriteTime() time.Time { return w.firstWrite }
