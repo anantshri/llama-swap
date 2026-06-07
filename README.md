@@ -250,6 +250,24 @@ When a request is made to an OpenAI compatible endpoint, llama-swap will extract
 
 In the most basic configuration llama-swap handles one model at a time. For more advanced use cases, using a `matrix` allows multiple models to be loaded at the same time. You have complete control over how your system resources are used.
 
+## Using Anthropic Clients (Claude Code / Claude Desktop)
+
+llama-swap translates Anthropic `/v1/messages` requests to OpenAI before dispatching to your model. Set `defaultAnthropicModel` in your config to catch any unknown model name an Anthropic client sends:
+
+```yaml
+# If Claude Code sends "claude-sonnet-4-20250514" and no model/alias
+# matches, it falls back to "my-local-model" instead of failing.
+defaultAnthropicModel: my-local-model
+```
+
+Then point your client at llama-swap:
+
+```sh
+export ANTHROPIC_BASE_URL=http://localhost:5800
+```
+
+Known model names (those that match a model ID or alias in your config) resolve normally — only unknown names trigger the fallback. See the [configuration example](config.example.yaml#L333-L346) for details on the translation layer.
+
 ## Reverse Proxy Configuration (nginx)
 
 If you deploy llama-swap behind nginx, disable response buffering for streaming endpoints. By default, nginx buffers responses which breaks Server‑Sent Events (SSE) and streaming chat completion. ([#236](https://github.com/mostlygeek/llama-swap/issues/236))
