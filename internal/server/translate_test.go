@@ -221,3 +221,93 @@ func TestServer_OllamaTags_ListsModels(t *testing.T) {
 		t.Errorf("tags = %+v, want only alpha", resp.Models)
 	}
 }
+
+func TestServer_AnthropicMessages_DefaultModelFallback(t *testing.T) {
+	var gotBody []byte
+	local := &scriptedRouter{
+		handled: map[string]bool{"fallback-model": true},
+		handler: func(w http.ResponseWriter, r *http.Request) {
+			gotBody, _ = io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(openAIChatJSON))
+		},
+	}
+	cfg := config.Config{
+		Models: map[string]config.ModelConfig{
+			"fallback-model": {},
+		},
+		DefaultAnthropicModel: "fallback-model",
+	}
+	s := newTranslateServer(t, cfg, local)
+
+	// Send a request with an unknown model name; it should be caught by the
+	// fallback and translated to OpenAI before reaching the upstream.
+	body := `{"model":"claude-sonnet-4-99999999","max_tokens":10,"messages":[{"role":"user","content":"hello"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", w.Code, w.Body.String())
+	}
+	// The upstream received an OpenAI-shaped body with the fallback model.
+	if !gjson.GetBytes(gotBody, "messages").Exists() {
+		t.Errorf("upstream body not OpenAI-shaped: %s", gotBody)
+	}
+	if model := gjson.GetBytes(gotBody, "model").String(); model != "fallback-model" {
+		t.Errorf("upstream model = %q, want fallback-model", model)
+	}
+	// The client got an Anthropic-shaped response with its original model name.
+	got := gjson.ParseBytes(w.Body.Bytes())
+	if got.Get("type").String() != "message" {
+		t.Errorf("response type = %q, want message", got.Get("type").String())
+	}
+	if model := got.Get("model").String(); model != "claude-sonnet-4-99999999" {
+		t.Errorf("response model = %q, want original client model name", model)
+	}
+}
+
+func TestServer_AnthropicMessages_DefaultModelFallback_Streaming(t *testing.T) {
+	sse := strings.Join([]string{
+		`data: {"id":"chatcmpl-x","choices":[{"delta":{"role":"assistant","content":"Hi"},"finish_reason":null}]}`,
+		``,
+		`data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":1}}`,
+		``,
+		`data: [DONE]`,
+		``,
+		``,
+	}, "\n")
+	local := &scriptedRouter{
+		handled: map[string]bool{"fallback-model": true},
+		handler: func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(sse))
+		},
+	}
+	cfg := config.Config{
+		Models: map[string]config.ModelConfig{
+			"fallback-model": {},
+		},
+		DefaultAnthropicModel: "fallback-model",
+	}
+	s := newTranslateServer(t, cfg, local)
+
+	body := `{"model":"claude-sonnet-4-99999999","stream":true,"max_tokens":10,"messages":[{"role":"user","content":"hello"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+
+	out := w.Body.String()
+	for _, want := range []string{"event: message_start", "event: content_block_delta", "event: message_stop"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("streamed output missing %q:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, `"model":"claude-sonnet-4-99999999"`) {
+		t.Errorf("streamed output should contain original client model name")
+	}
+}

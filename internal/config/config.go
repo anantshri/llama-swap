@@ -160,6 +160,12 @@ type Config struct {
 
 	// support remote peers, see issue #433, #296
 	Peers PeerDictionaryConfig `yaml:"peers"`
+
+	// defaultAnthropicModel: fallback model for unrecognised Anthropic requests
+	// - optional, default: ""
+	// - when set, any /v1/messages request with an unknown model name is routed
+	//   to this model instead of failing. The model must exist in the models map.
+	DefaultAnthropicModel string `yaml:"defaultAnthropicModel"`
 }
 
 func (c *Config) RealModelName(search string) (string, bool) {
@@ -252,6 +258,13 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 				return Config{}, fmt.Errorf("duplicate alias %s found in model: %s", alias, modelName)
 			}
 			config.aliases[alias] = modelName
+		}
+	}
+
+	// Validate defaultAnthropicModel (must resolve to a real model, not an alias)
+	if config.DefaultAnthropicModel != "" {
+		if _, found := config.Models[config.DefaultAnthropicModel]; !found {
+			return Config{}, fmt.Errorf("defaultAnthropicModel %q is not a defined model", config.DefaultAnthropicModel)
 		}
 	}
 

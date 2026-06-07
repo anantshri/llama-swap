@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	"github.com/mostlygeek/llama-swap/internal/apiconv"
 	"github.com/mostlygeek/llama-swap/internal/router"
@@ -46,11 +47,17 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 
 	// Translate only when the model resolves to a local model that does not opt
 	// out via passthroughAnthropic. Unknown or peer models are forwarded as-is.
+	// When defaultAnthropicModel is set, unknown model names fall back to it.
 	translate := false
 	if modelID, ok := s.cfg.RealModelName(requestedModel); ok {
 		if mc, ok := s.cfg.Models[modelID]; !ok || !mc.PassthroughAnthropic {
 			translate = true
 		}
+	} else if fallback := s.cfg.DefaultAnthropicModel; fallback != "" {
+		if newBody, err := sjson.SetBytes(body, "model", fallback); err == nil {
+			body = newBody
+		}
+		translate = true
 	}
 
 	if !translate {

@@ -87,6 +87,15 @@ sendLoadingState: true
 #   all fields except for Id so chat UIs can use the alias equivalent to the original.
 includeAliasesInList: false
 
+# defaultAnthropicModel: catch-all model for the Anthropic /v1/messages endpoint
+# - optional, default: ""
+# - when set, any /v1/messages request with an unknown model name is routed to
+#   this model instead of failing — the request is still translated to/from the
+#   Anthropic Messages format. This lets Anthropic clients (Claude Code, Claude
+#   Desktop) work without client-side model name overrides or config aliases.
+# - the value must match a model ID in the models section (not an alias)
+# - example: defaultAnthropicModel: "my-local-model"
+
 # globalTTL: the default TTL in seconds before unloading a model
 # - optional, default: 0 (never automatically unload)
 # - must be >= 0
@@ -322,19 +331,10 @@ models:
     cmd: llama-server --port ${PORT} -m Llama-3.2-1B-Instruct-Q4_K_M.gguf -ngl 0
 
   # API translation passthrough example:
-  "native-anthropic-model":
-    # passthroughAnthropic: boolean, true or false
-    # - optional, default: false
-    # - by default an inbound Anthropic /v1/messages request is translated to
-    #   OpenAI /v1/chat/completions before being sent upstream, and the response
-    #   is translated back to Anthropic shape
-    # - set true when the backend already speaks the Anthropic Messages API, to
-    #   forward the request unchanged
+  # Set passthroughAnthropic: true when your backend natively speaks the
+  # Anthropic Messages API (rare — only for non-llama.cpp backends).
+  "native-anthropic":
     passthroughAnthropic: true
-    # passthroughOllama: boolean, true or false
-    # - optional, default: false
-    # - by default inbound Ollama /api/* requests are translated to OpenAI; set
-    #   true when the backend natively speaks the Ollama API
     passthroughOllama: false
     cmd: llama-server --port ${PORT} -m some-model.gguf
 
