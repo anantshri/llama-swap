@@ -524,10 +524,6 @@ func lactGetDeviceStats(conn net.Conn, id string, name string, index int) (GpuSt
 	}, nil
 }
 
-func readSysfs() ([]GpuStat, error) {
-	return nil, ErrNotImplemented
-}
-
 func readSysStats() (SysStat, error) {
 	cpuPcts, err := cpu.Percent(0, true)
 	if err != nil {
