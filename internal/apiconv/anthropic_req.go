@@ -79,7 +79,72 @@ func AnthropicToOpenAIRequest(body []byte) ([]byte, error) {
 		out.ToolChoice = tc
 	}
 
+	// Strict chat templates (Mistral/Devstral/Magistral, Gemma, ...) raise a Jinja
+	// exception -- "roles must alternate user and assistant roles except for tool
+	// calls and results" -- when two same-role messages appear back to back. Claude
+	// Code's resume and tool flows produce exactly that, surfacing as an HTTP 500.
+	// tool/system messages are exempt per the templates, so only consecutive user
+	// (or assistant) messages need merging.
+	out.Messages = coalesceAdjacentRoles(out.Messages)
+
 	return json.Marshal(out)
+}
+
+// coalesceAdjacentRoles merges consecutive user/user and assistant/assistant
+// messages into one, so strict chat templates that require alternating roles do
+// not reject Claude Code's message shapes. tool and system messages are left
+// untouched, preserving tool_call_id linkage and system-message hoisting.
+func coalesceAdjacentRoles(msgs []openaiMessage) []openaiMessage {
+	out := make([]openaiMessage, 0, len(msgs))
+	for _, m := range msgs {
+		if len(out) > 0 && (m.Role == "user" || m.Role == "assistant") && out[len(out)-1].Role == m.Role {
+			prev := &out[len(out)-1]
+			prev.Content = mergeContent(prev.Content, m.Content)
+			prev.ToolCalls = append(prev.ToolCalls, m.ToolCalls...)
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// mergeContent combines two openaiMessage Content values. Two plain strings join
+// with a blank line; otherwise both are normalized to parts and re-simplified, so
+// a pure-text merge stays a string (what strict templates expect).
+func mergeContent(a, b any) any {
+	if as, aok := a.(string); aok {
+		if bs, bok := b.(string); bok {
+			switch {
+			case as == "":
+				return bs
+			case bs == "":
+				return as
+			default:
+				return as + "\n\n" + bs
+			}
+		}
+	}
+	parts := append(toParts(a), toParts(b)...)
+	if len(parts) == 0 {
+		return nil
+	}
+	return simplifyParts(parts)
+}
+
+// toParts normalizes an openaiMessage Content value (string, parts slice, or nil)
+// into a parts slice for merging.
+func toParts(c any) []openaiContentPart {
+	switch v := c.(type) {
+	case string:
+		if v == "" {
+			return nil
+		}
+		return []openaiContentPart{{Type: "text", Text: v}}
+	case []openaiContentPart:
+		return v
+	default:
+		return nil
+	}
 }
 
 // convertAnthropicMessage converts one Anthropic message into one or more

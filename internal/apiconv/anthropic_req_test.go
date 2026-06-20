@@ -157,6 +157,84 @@ func TestAnthropicToOpenAIRequest_ToolUseAndResult(t *testing.T) {
 	assert.Equal(t, "sunny", r.Get("messages.1.content").String())
 }
 
+func TestAnthropicToOpenAIRequest_ConsecutiveUserMerged(t *testing.T) {
+	// Claude Code's resume flow can emit two user messages back to back. Strict
+	// templates reject that; coalesce them into one so roles alternate.
+	body := []byte(`{
+		"model":"m","max_tokens":10,
+		"system":"sys",
+		"messages":[
+			{"role":"user","content":"first"},
+			{"role":"user","content":"second"},
+			{"role":"assistant","content":"ok"}
+		]
+	}`)
+	out, err := AnthropicToOpenAIRequest(body)
+	require.NoError(t, err)
+	r := gjson.ParseBytes(out)
+
+	// system, merged user, assistant -- three messages total.
+	assert.Equal(t, 3, len(r.Get("messages").Array()))
+	assert.Equal(t, "system", r.Get("messages.0.role").String())
+	assert.Equal(t, "user", r.Get("messages.1.role").String())
+	assert.Equal(t, "first\n\nsecond", r.Get("messages.1.content").String())
+	assert.Equal(t, "assistant", r.Get("messages.2.role").String())
+	assert.Equal(t, "ok", r.Get("messages.2.content").String())
+}
+
+func TestAnthropicToOpenAIRequest_ConsecutiveAssistantMerged(t *testing.T) {
+	// An assistant text turn followed by an assistant tool_use turn must collapse
+	// into one message carrying both content and tool_calls.
+	body := []byte(`{
+		"model":"m","max_tokens":10,
+		"messages":[
+			{"role":"assistant","content":"thinking"},
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"toolu_1","name":"get_weather","input":{"city":"SF"}}
+			]}
+		]
+	}`)
+	out, err := AnthropicToOpenAIRequest(body)
+	require.NoError(t, err)
+	r := gjson.ParseBytes(out)
+
+	assert.Equal(t, 1, len(r.Get("messages").Array()))
+	assert.Equal(t, "assistant", r.Get("messages.0.role").String())
+	assert.Equal(t, "thinking", r.Get("messages.0.content").String())
+	assert.Equal(t, "toolu_1", r.Get("messages.0.tool_calls.0.id").String())
+	assert.Equal(t, "get_weather", r.Get("messages.0.tool_calls.0.function.name").String())
+}
+
+func TestAnthropicToOpenAIRequest_ToolResultNotMerged(t *testing.T) {
+	// A normal assistant(tool_calls) -> tool_result -> user sequence must NOT be
+	// merged: the role:tool message stays separate with its tool_call_id intact.
+	body := []byte(`{
+		"model":"m","max_tokens":10,
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"toolu_1","name":"get_weather","input":{"city":"SF"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"toolu_1","content":"sunny"}
+			]},
+			{"role":"user","content":"thanks"}
+		]
+	}`)
+	out, err := AnthropicToOpenAIRequest(body)
+	require.NoError(t, err)
+	r := gjson.ParseBytes(out)
+
+	// assistant, tool, user -- the tool message keeps roles non-adjacent so the
+	// two user-origin messages are not merged across it.
+	assert.Equal(t, 3, len(r.Get("messages").Array()))
+	assert.Equal(t, "assistant", r.Get("messages.0.role").String())
+	assert.Equal(t, "tool", r.Get("messages.1.role").String())
+	assert.Equal(t, "toolu_1", r.Get("messages.1.tool_call_id").String())
+	assert.Equal(t, "sunny", r.Get("messages.1.content").String())
+	assert.Equal(t, "user", r.Get("messages.2.role").String())
+	assert.Equal(t, "thanks", r.Get("messages.2.content").String())
+}
+
 func TestAnthropicToOpenAIRequest_InvalidJSON(t *testing.T) {
 	_, err := AnthropicToOpenAIRequest([]byte(`{not json`))
 	require.Error(t, err)
