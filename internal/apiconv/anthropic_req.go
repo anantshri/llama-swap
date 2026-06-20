@@ -81,13 +81,50 @@ func AnthropicToOpenAIRequest(body []byte) ([]byte, error) {
 
 	// Strict chat templates (Mistral/Devstral/Magistral, Gemma, ...) raise a Jinja
 	// exception -- "roles must alternate user and assistant roles except for tool
-	// calls and results" -- when two same-role messages appear back to back. Claude
-	// Code's resume and tool flows produce exactly that, surfacing as an HTTP 500.
-	// tool/system messages are exempt per the templates, so only consecutive user
-	// (or assistant) messages need merging.
-	out.Messages = coalesceAdjacentRoles(out.Messages)
+	// calls and results" -- which surfaces to the caller as an HTTP 500. Claude
+	// Code's resume/tool flows trip it two ways, both handled here.
+	out.Messages = normalizeForStrictTemplate(out.Messages)
 
 	return json.Marshal(out)
+}
+
+// normalizeForStrictTemplate rewrites the message list so chat templates that
+// demand strict user/assistant alternation accept it. Two transforms:
+//
+//  1. Merge consecutive same-role user/assistant messages (e.g. two user turns
+//     produced by a resume) -- see coalesceAdjacentRoles.
+//
+//  2. Insert a minimal empty bridge turn when two "counted" messages of the same
+//     role end up adjacent across an exempt tool exchange. These templates exclude
+//     tool results AND tool-call assistant turns from the alternation check (that
+//     is what "except for tool calls and results" means), so a plain user message
+//     following a tool_result counts as two users in a row and is rejected -- the
+//     exact shape Claude Code emits when it resumes after a tool call. An empty
+//     assistant turn between the tool result and the next user message satisfies
+//     the check (verified against llama.cpp's Mistral/Devstral template).
+func normalizeForStrictTemplate(msgs []openaiMessage) []openaiMessage {
+	merged := coalesceAdjacentRoles(msgs)
+
+	out := make([]openaiMessage, 0, len(merged)+1)
+	lastCounted := "" // role of the last non-exempt (counted) message
+	for _, m := range merged {
+		// Exempt from the alternation check: system, tool results, and assistant
+		// turns carrying tool_calls. They never update lastCounted.
+		if m.Role == "system" || m.Role == "tool" || (m.Role == "assistant" && len(m.ToolCalls) > 0) {
+			out = append(out, m)
+			continue
+		}
+		if m.Role == lastCounted {
+			bridge := "assistant"
+			if m.Role == "assistant" {
+				bridge = "user"
+			}
+			out = append(out, openaiMessage{Role: bridge, Content: ""})
+		}
+		out = append(out, m)
+		lastCounted = m.Role
+	}
+	return out
 }
 
 // coalesceAdjacentRoles merges consecutive user/user and assistant/assistant

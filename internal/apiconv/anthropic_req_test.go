@@ -235,6 +235,45 @@ func TestAnthropicToOpenAIRequest_ToolResultNotMerged(t *testing.T) {
 	assert.Equal(t, "thanks", r.Get("messages.2.content").String())
 }
 
+func TestAnthropicToOpenAIRequest_ToolThenUserBridged(t *testing.T) {
+	// The real resume shape Claude Code emits: user -> assistant(tool_call) ->
+	// tool_result -> user continuation. Strict templates (Mistral/Devstral) exempt
+	// the tool_call and tool_result turns from their alternation check, so the two
+	// user turns read as consecutive and are rejected. An empty assistant bridge
+	// must be inserted between the tool result and the trailing user message.
+	body := []byte(`{
+		"model":"m","max_tokens":10,
+		"messages":[
+			{"role":"user","content":"what time is it"},
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"toolu_1","name":"get_time","input":{}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"toolu_1","content":"10:00"}
+			]},
+			{"role":"user","content":"continue"}
+		]
+	}`)
+	out, err := AnthropicToOpenAIRequest(body)
+	require.NoError(t, err)
+	r := gjson.ParseBytes(out)
+
+	// user, assistant(tool_call), tool, assistant(""), user -- five messages with
+	// the empty bridge separating the tool result from the user continuation.
+	msgs := r.Get("messages").Array()
+	require.Equal(t, 5, len(msgs))
+	assert.Equal(t, "user", msgs[0].Get("role").String())
+	assert.Equal(t, "assistant", msgs[1].Get("role").String())
+	assert.Equal(t, "toolu_1", msgs[1].Get("tool_calls.0.id").String())
+	assert.Equal(t, "tool", msgs[2].Get("role").String())
+	assert.Equal(t, "10:00", msgs[2].Get("content").String())
+	assert.Equal(t, "assistant", msgs[3].Get("role").String())
+	assert.Equal(t, "", msgs[3].Get("content").String())
+	assert.Empty(t, msgs[3].Get("tool_calls").Array())
+	assert.Equal(t, "user", msgs[4].Get("role").String())
+	assert.Equal(t, "continue", msgs[4].Get("content").String())
+}
+
 func TestAnthropicToOpenAIRequest_InvalidJSON(t *testing.T) {
 	_, err := AnthropicToOpenAIRequest([]byte(`{not json`))
 	require.Error(t, err)
