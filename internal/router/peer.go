@@ -62,14 +62,14 @@ func NewPeer(cfg config.Config, logger *logmon.Monitor) (*Peer, error) {
 			IdleConnTimeout:       time.Duration(peer.Timeouts.IdleConn) * time.Second,
 		}
 
-		reverseProxy := httputil.NewSingleHostReverseProxy(peer.ProxyURL)
-		reverseProxy.Transport = peerTransport
-
-		originalDirector := reverseProxy.Director
-		reverseProxy.Director = func(req *http.Request) {
-			originalDirector(req)
-			req.Host = req.URL.Host
+		// SetURL already rewrites the outbound Host header to the target host,
+		// matching the previous Director that set req.Host = req.URL.Host.
+		reverseProxy := &httputil.ReverseProxy{
+			Rewrite: func(r *httputil.ProxyRequest) {
+				r.SetURL(peer.ProxyURL)
+			},
 		}
+		reverseProxy.Transport = peerTransport
 
 		reverseProxy.ModifyResponse = func(resp *http.Response) error {
 			if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
