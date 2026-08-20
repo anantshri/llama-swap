@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // Fixture mirrors a real Intel Arc Pro B70 (xe driver) as observed on kernel
@@ -203,6 +204,35 @@ func TestPollReportsVramViaFdinfo(t *testing.T) {
 	}
 	if stat.MemUtilPct < 50.4 || stat.MemUtilPct > 50.6 {
 		t.Errorf("MemUtilPct = %.2f, want ~50.4", stat.MemUtilPct)
+	}
+}
+
+// Even while active, hwmon must not be read more than once per
+// sysfsHwmonMinInterval -- each read wakes a sleeping card.
+func TestHwmonThrottledWhileActive(t *testing.T) {
+	sysRoot := fakeSysfs(t)
+	withSysfs(t, sysRoot)
+
+	procRootLocal := t.TempDir()
+	writeFiles(t, procRootLocal, map[string]string{"1234/fdinfo/17": xeFdinfo})
+	symlink(t, procRootLocal, "1234/fd/17", "/dev/dri/renderD128")
+	oldProc := procRoot
+	procRoot = procRootLocal
+	t.Cleanup(func() { procRoot = oldProc })
+
+	g := discoverSysfsGpus()[0]
+	first, err := g.poll()
+	if err != nil || first.TempC != 48 {
+		t.Fatalf("first poll should read hwmon (TempC=48), got %+v err=%v", first, err)
+	}
+	second, _ := g.poll()
+	if second.TempC != 0 {
+		t.Errorf("immediate second poll must skip hwmon, got TempC=%d", second.TempC)
+	}
+	g.lastHwmonAt = time.Now().Add(-2 * sysfsHwmonMinInterval)
+	third, _ := g.poll()
+	if third.TempC != 48 {
+		t.Errorf("poll after interval must read hwmon again, got TempC=%d", third.TempC)
 	}
 }
 

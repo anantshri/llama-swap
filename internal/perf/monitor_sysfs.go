@@ -39,6 +39,14 @@ var (
 
 const minVramBarBytes = 1 << 30 // BARs >= 1 GiB count as VRAM
 
+// sysfsHwmonMinInterval bounds how often hwmon sensors are read while the
+// GPU is active. Every hwmon read passes through the GPU firmware and wakes
+// a runtime-suspended card; polling at the monitor's base tick (often 1 s)
+// while a model is merely resident (not generating) keeps the GPU awake
+// continuously (~40 W) and can wedge runtime PM. 5 s refreshes the perf
+// charts plenty while capping the wake duty cycle.
+const sysfsHwmonMinInterval = 5 * time.Second
+
 type sysfsGpu struct {
 	id          int
 	name        string
@@ -56,6 +64,7 @@ type sysfsGpu struct {
 	// fdinfo engine state, keyed by drm-client-id -> engine -> sample
 	fdState     map[string]map[string]fdEngineSample
 	fdSampledAt time.Time
+	lastHwmonAt time.Time
 }
 
 type fdEngineSample struct {
@@ -160,15 +169,17 @@ func (g *sysfsGpu) poll() (GpuStat, error) {
 	// fdinfo first: reading /proc never wakes the GPU. It doubles as an
 	// activity check -- hwmon/power reads go through the GPU's firmware
 	// and wake a runtime-suspended card, so only touch them when a process
-	// already holds the GPU (it is awake regardless). A sleeping GPU
+	// holds the GPU, and at most once per sysfsHwmonMinInterval (a resident
+	// but idle model is not a reason to keep the GPU awake). A sleeping GPU
 	// reports zeroed telemetry, which is exactly the truth.
 	active := g.readFdInfo(&stat)
 
-	if active {
+	if active && time.Since(g.lastHwmonAt) >= sysfsHwmonMinInterval {
 		g.readHwmon(&stat)
 		if g.amdgpu {
 			g.readAmdgpuSysfs(&stat)
 		}
+		g.lastHwmonAt = time.Now()
 	}
 
 	if stat.MemTotalMB == 0 {
