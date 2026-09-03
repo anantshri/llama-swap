@@ -44,15 +44,15 @@ export function StatsPage() {
         <table class="stats-table">
           <thead>
             <tr>
-              <th class="stats-th stats-th-model">Model</th>
-              <th class="stats-th stats-th-num">Requests</th>
-              <th class="stats-th stats-th-num">Input Tokens</th>
-              <th class="stats-th stats-th-num">Output Tokens</th>
-              <th class="stats-th stats-th-num">Cached Tokens</th>
-              <th class="stats-th stats-th-num">Avg Prompt Speed</th>
-              <th class="stats-th stats-th-num">Avg Gen Speed</th>
-              <th class="stats-th stats-th-num">Avg Duration</th>
-              <th class="stats-th stats-th-num">Last Used</th>
+              <th class="stats-th stats-th-model stats-th-sortable" data-sort="model">Model<span class="stats-sort-ind"></span></th>
+              <th class="stats-th stats-th-num stats-th-sortable" data-sort="requests">Requests<span class="stats-sort-ind"></span></th>
+              <th class="stats-th stats-th-num stats-th-sortable" data-sort="inputTokens">Input Tokens<span class="stats-sort-ind"></span></th>
+              <th class="stats-th stats-th-num stats-th-sortable" data-sort="outputTokens">Output Tokens<span class="stats-sort-ind"></span></th>
+              <th class="stats-th stats-th-num stats-th-sortable" data-sort="cachedTokens">Cached Tokens<span class="stats-sort-ind"></span></th>
+              <th class="stats-th stats-th-num stats-th-sortable" data-sort="avgPromptSpeed">Avg Prompt Speed<span class="stats-sort-ind"></span></th>
+              <th class="stats-th stats-th-num stats-th-sortable" data-sort="avgGenSpeed">Avg Gen Speed<span class="stats-sort-ind"></span></th>
+              <th class="stats-th stats-th-num stats-th-sortable" data-sort="avgDuration">Avg Duration<span class="stats-sort-ind"></span></th>
+              <th class="stats-th stats-th-num stats-th-sortable" data-sort="lastTimestamp">Last Used<span class="stats-sort-ind"></span></th>
             </tr>
           </thead>
           <tbody data-body></tbody>
@@ -64,6 +64,11 @@ export function StatsPage() {
   const summaryEl = root.querySelector("[data-summary]");
   const timespanEl = root.querySelector("[data-timespan]");
   const body = root.querySelector("[data-body]");
+
+  // Client-side column sorting. Default matches the previous behaviour:
+  // most requests first.
+  let sortKey = "requests";
+  let sortOrder = "desc";
 
   async function fetchMetrics() {
     try {
@@ -176,35 +181,78 @@ export function StatsPage() {
     timespanEl.textContent = `Data range: ${fmt(first)} — ${fmt(last)} (${nf.format(totalReqs)} requests across ${modelCount} models)`;
   }
 
+  function toRow(model, s) {
+    const avgPromptSpeed = s.promptSpeeds.length > 0
+      ? s.promptSpeeds.reduce((a, b) => a + b, 0) / s.promptSpeeds.length
+      : -1;
+    const avgGenSpeed = s.genSpeeds.length > 0
+      ? s.genSpeeds.reduce((a, b) => a + b, 0) / s.genSpeeds.length
+      : -1;
+    const totalDuration = s.durations.reduce((a, b) => a + b, 0);
+    return {
+      model,
+      requests: s.requests,
+      inputTokens: s.inputTokens,
+      outputTokens: s.outputTokens,
+      cachedTokens: s.cachedTokens,
+      avgPromptSpeed,
+      avgGenSpeed,
+      avgDuration: s.requests > 0 ? totalDuration / s.requests : 0,
+      totalDuration,
+      lastTimestamp: s.lastTimestamp || 0,
+    };
+  }
+
+  function compareRows(a, b) {
+    const dir = sortOrder === "asc" ? 1 : -1;
+    let cmp;
+    if (sortKey === "model") {
+      cmp = a.model.localeCompare(b.model);
+    } else {
+      cmp = a[sortKey] - b[sortKey];
+    }
+    if (cmp === 0) cmp = a.model.localeCompare(b.model);
+    return cmp * dir;
+  }
+
+  function renderSortIndicator() {
+    root.querySelectorAll("th[data-sort]").forEach((th) => {
+      const span = th.querySelector(".stats-sort-ind");
+      if (!span) return;
+      if (th.dataset.sort === sortKey) {
+        span.textContent = sortOrder === "asc" ? "▲" : "▼";
+        span.classList.add("active");
+      } else {
+        span.textContent = "";
+        span.classList.remove("active");
+      }
+    });
+  }
+
   function renderTable(stats) {
     if (stats.totalRequests === 0) {
       body.innerHTML = `<tr><td class="stats-empty" colspan="9">No activity recorded</td></tr>`;
+      renderSortIndicator();
       return;
     }
 
-    // Sort models by most requests descending
-    const sorted = [...stats.models.entries()].sort((a, b) => b[1].requests - a[1].requests);
+    const sorted = [...stats.models.entries()]
+      .map(([model, s]) => toRow(model, s))
+      .sort(compareRows);
+    renderSortIndicator();
 
     body.innerHTML = sorted
-      .map(([model, s]) => {
-        const avgPromptSpeed = s.promptSpeeds.length > 0
-          ? s.promptSpeeds.reduce((a, b) => a + b, 0) / s.promptSpeeds.length
-          : -1;
-        const avgGenSpeed = s.genSpeeds.length > 0
-          ? s.genSpeeds.reduce((a, b) => a + b, 0) / s.genSpeeds.length
-          : -1;
-        const totalDuration = s.durations.reduce((a, b) => a + b, 0);
-
+      .map((row) => {
         return `<tr class="stats-tr">
-          <td class="stats-td stats-td-model">${escapeHtml(model)}</td>
-          <td class="stats-td stats-td-num">${nf.format(s.requests)}</td>
-          <td class="stats-td stats-td-num">${nf.format(s.inputTokens)}</td>
-          <td class="stats-td stats-td-num">${nf.format(s.outputTokens)}</td>
-          <td class="stats-td stats-td-num">${s.cachedTokens > 0 ? nf.format(s.cachedTokens) : "—"}</td>
-          <td class="stats-td stats-td-num">${formatSpeed(avgPromptSpeed)}</td>
-          <td class="stats-td stats-td-num">${formatSpeed(avgGenSpeed)}</td>
-          <td class="stats-td stats-td-num">${formatDuration(totalDuration, s.requests)}</td>
-          <td class="stats-td stats-td-num">${s.lastTimestamp ? formatRelativeTime(s.lastTimestamp) : "—"}</td>
+          <td class="stats-td stats-td-model">${escapeHtml(row.model)}</td>
+          <td class="stats-td stats-td-num">${nf.format(row.requests)}</td>
+          <td class="stats-td stats-td-num">${nf.format(row.inputTokens)}</td>
+          <td class="stats-td stats-td-num">${nf.format(row.outputTokens)}</td>
+          <td class="stats-td stats-td-num">${row.cachedTokens > 0 ? nf.format(row.cachedTokens) : "—"}</td>
+          <td class="stats-td stats-td-num">${formatSpeed(row.avgPromptSpeed)}</td>
+          <td class="stats-td stats-td-num">${formatSpeed(row.avgGenSpeed)}</td>
+          <td class="stats-td stats-td-num">${formatDuration(row.totalDuration, row.requests)}</td>
+          <td class="stats-td stats-td-num">${row.lastTimestamp ? formatRelativeTime(row.lastTimestamp) : "—"}</td>
         </tr>`;
       })
       .join("");
@@ -218,6 +266,21 @@ export function StatsPage() {
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
   }
+
+  // Click a column header to sort; click again to toggle asc/desc.
+  root.querySelector("thead").addEventListener("click", (e) => {
+    const th = e.target.closest("th[data-sort]");
+    if (!th) return;
+    const key = th.dataset.sort;
+    if (key === sortKey) {
+      sortOrder = sortOrder === "asc" ? "desc" : "asc";
+    } else {
+      sortKey = key;
+      sortOrder = "desc";
+    }
+    renderSortIndicator();
+    renderTable(stats);
+  });
 
   // Initial load
   let stats = { models: new Map(), totalRequests: 0, totalInput: 0, totalOutput: 0, totalCached: 0, firstTime: null, lastTime: null };
