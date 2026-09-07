@@ -86,15 +86,24 @@ func (mp *metricsMonitor) emitMetric(metric ActivityLogEntry) {
 	event.Emit(ActivityLogEvent{Metrics: metric})
 }
 
-func (mp *metricsMonitor) overlayCaptureState(entries []ActivityLogEntry) {
-	if mp.captureCache == nil {
-		for i := range entries {
-			entries[i].HasCapture = false
-		}
-		return
+// overlayCaptureState fills the capture view-state fields on a page of
+// activity rows. HasCapture is true when the payload is reachable: in the
+// memory cache, or pinned in the sqlite store. Pinned marks rows whose
+// capture was explicitly persisted and survives eviction.
+func (mp *metricsMonitor) overlayCaptureState(ctx context.Context, entries []ActivityLogEntry) {
+	pinned, err := mp.store.PinnedCaptureIDs(ctx)
+	if err != nil {
+		mp.warnf("failed to list pinned captures: %v", err)
+		pinned = nil
 	}
 	for i := range entries {
-		entries[i].HasCapture = mp.captureCache.Has(entries[i].ID)
+		_, isPinned := pinned[entries[i].ID]
+		entries[i].Pinned = isPinned
+		if mp.captureCache != nil && mp.captureCache.Has(entries[i].ID) {
+			entries[i].HasCapture = true
+		} else {
+			entries[i].HasCapture = isPinned
+		}
 	}
 }
 

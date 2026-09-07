@@ -323,6 +323,16 @@ export async function getCapture(id) {
   }
 }
 
+export async function pinCapture(id) {
+  const response = await fetch(`/api/captures/${id}/pin`, { method: "POST" });
+  if (!response.ok) throw new Error(`Failed to pin capture: ${response.status}`);
+}
+
+export async function unpinCapture(id) {
+  const response = await fetch(`/api/captures/${id}/pin`, { method: "DELETE" });
+  if (!response.ok) throw new Error(`Failed to unpin capture: ${response.status}`);
+}
+
 export async function checkPerformanceEnabled() {
   try {
     const response = await fetch("/api/performance");

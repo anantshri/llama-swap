@@ -411,6 +411,8 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/version", apiChain.ThenFunc(s.handleAPIVersion))
 	mux.Handle("GET /api/hardware", apiChain.ThenFunc(s.handleAPIHardware))
 	mux.Handle("GET /api/captures/{id}", apiChain.ThenFunc(s.handleAPICapture))
+	mux.Handle("POST /api/captures/{id}/pin", apiChain.ThenFunc(s.handleAPICapturePin))
+	mux.Handle("DELETE /api/captures/{id}/pin", apiChain.ThenFunc(s.handleAPICaptureUnpin))
 
 	// Stateless MCP server exposing llama-swap's own documentation as tools,
 	// consumed by the Playground's agentic chat and by any external MCP client.

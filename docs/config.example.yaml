@@ -59,8 +59,13 @@ logToStdout: "proxy"
 metricsMaxInMemory: 1000
 
 # captureBuffer: how many MBs to allocate for storing request/response captures
-# - optional, default: 10
+# - optional, default: 5
 # - set to 0 to disable
+# - captures are zstd-compressed in memory (FIFO eviction); a 6K-token
+#   request/response sequence is ~24KB raw and ~3-6KB compressed, so 100MB
+#   comfortably retains ~1000 recent captures
+# - captures pinned from the Activity page are stored in the sqlite database
+#   and survive eviction regardless of this size
 captureBuffer: 15
 
 # ui.activity.session_id: ordered request headers used to identify sessions in

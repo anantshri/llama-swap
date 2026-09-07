@@ -23,7 +23,7 @@ To list the live markers at any time:
 grep -rn "#nosec" internal/
 ```
 
-Total: **89** suppressions across **12** rules (G115 ×29, G103 ×27, G304 ×10, G204 ×7, G404 ×4, G202 ×3, G117 ×2, G120 ×2, G710 ×2, G118 ×1, G703 ×1, G705 ×1).
+Total: **91** suppressions across **12** rules (G115 ×29, G103 ×27, G304 ×10, G204 ×7, G404 ×4, G202 ×5, G117 ×2, G120 ×2, G710 ×2, G118 ×1, G703 ×1, G705 ×1).
 
 ---
 
@@ -78,12 +78,14 @@ derive from request input.
 to spread load and jitter across ready processes. This is not a security or
 cryptographic context; a CSPRNG would add cost without benefit.
 
-## G202 — SQL string concatenation · 3 sites · MEDIUM
+## G202 — SQL string concatenation · 5 sites · MEDIUM
 
 **Verdict: false positive.** `internal/store/store.go` builds dynamic `WHERE`
 clauses whose user values are always bound via `?` placeholders, and the only
 concatenated identifiers (sort column, direction) come from an internal
-whitelist. No user input reaches the SQL text.
+whitelist. No user input reaches the SQL text. This also covers the aggregate
+queries (`ActivityStats` time range, per-model GROUP BY, histogram values)
+that append the same placeholder-built `where` clause.
 
 ## G117 — marshaling of a struct with a sensitive field · 2 sites · MEDIUM
 

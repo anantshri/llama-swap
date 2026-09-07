@@ -532,6 +532,40 @@ func TestServer_APIMetricsStats(t *testing.T) {
 	if stats.PromptHistogram == nil || stats.GenerationHistogram == nil {
 		t.Fatalf("expected histograms: %+v", stats)
 	}
+	if len(stats.Models) != 1 || stats.Models[0].Model != "m1" {
+		t.Fatalf("models = %+v, want only m1", stats.Models)
+	}
+	if stats.Models[0].Requests != 2 || stats.Models[0].InputTokens != 4 || stats.Models[0].OutputTokens != 6 || stats.Models[0].CachedTokens != 1 {
+		t.Fatalf("m1 stats = %+v", stats.Models[0])
+	}
+	if stats.Models[0].AvgPromptSpeed == nil || *stats.Models[0].AvgPromptSpeed != 20 {
+		t.Fatalf("m1 avg prompt speed = %v, want 20", stats.Models[0].AvgPromptSpeed)
+	}
+	if stats.Models[0].AvgGenSpeed == nil || *stats.Models[0].AvgGenSpeed != 30 {
+		t.Fatalf("m1 avg gen speed = %v, want 30", stats.Models[0].AvgGenSpeed)
+	}
+	if !stats.Models[0].LastUsed.Equal(time.Unix(2, 0).UTC()) {
+		t.Fatalf("m1 last used = %v, want %v", stats.Models[0].LastUsed, time.Unix(2, 0).UTC())
+	}
+
+	// Without a model filter the endpoint aggregates over every model.
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/metrics/stats", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%q", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &stats); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if stats.TotalRequests != 3 || len(stats.Models) != 2 {
+		t.Fatalf("unfiltered stats = %+v", stats)
+	}
+	if stats.FirstTimestamp == nil || !stats.FirstTimestamp.Equal(time.Unix(1, 0).UTC()) {
+		t.Fatalf("first timestamp = %v", stats.FirstTimestamp)
+	}
+	if stats.LastTimestamp == nil || !stats.LastTimestamp.Equal(time.Unix(3, 0).UTC()) {
+		t.Fatalf("last timestamp = %v", stats.LastTimestamp)
+	}
 }
 
 func TestServer_APICancelInflight(t *testing.T) {

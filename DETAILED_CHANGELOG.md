@@ -5,6 +5,188 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-06 — Pin Activity captures to the sqlite store
+
+### What
+
+The Activity page's Capture column now has a 📌 pin button next to View.
+Pinning copies the zstd-compressed CBOR payload from the in-memory capture
+cache into a new `pinned_captures` sqlite table, where it survives cache
+eviction until the user deletes it by clicking the pinned badge (confirm
+dialog). `GET /api/captures/{id}` falls back to the database, so pinned
+captures stay viewable indefinitely; activity rows gained a `pinned` field and
+`has_capture` now reports "in memory or pinned".
+
+Capture sizing guidance documented alongside: the capture cache budgets
+compressed bytes with FIFO eviction; a 6K-token sequence is ~24KB raw /
+~3–6KB compressed, so `captureBuffer: 100` retains ~1000 recent captures.
+
+### Why
+
+Captures previously existed only in the fixed-size memory cache — on a busy
+proxy a request/response could vanish within minutes, making the Activity
+page's View button unreliable for postmortems. Users need a way to keep
+specific sequences permanently without growing the memory budget.
+
+### How
+
+- `internal/store/migrations/00002_pinned_captures.sql`: `activity_id`
+  (PK, mirrors `activity.id`), `ts_pinned`, `model_id`, `req_path`,
+  `data BLOB` (same zstd+CBOR encoding as memory).
+- `internal/store/store.go`: `InsertPinnedCapture` (INSERT OR REPLACE, so
+  re-pinning refreshes), `GetPinnedCapture` (`sql.ErrNoRows` → not found),
+  `DeletePinnedCapture` (no-op on unknown ID), `PinnedCaptureIDs` (full-set
+  scan; the table only grows via explicit user action), `GetActivity`
+  (single row via the MinID/MaxID filter), and orphan cleanup in
+  `PruneActivity` (pins whose activity row was pruned are deleted — only
+  reachable in in-memory stores).
+- `internal/server/metrics.go`: `overlayCaptureState(ctx, entries)` now also
+  loads the pinned-ID set; `Pinned` is set from it and `HasCapture` is true
+  when the payload is reachable from either the memory cache or the DB.
+- `internal/server/apigroup.go`:
+  - `handleAPICapturePin` — compresses the in-memory capture, denormalizes
+    `model_id` best-effort via `GetActivity` (a missing row must not block
+    pinning), and inserts. 404 when the capture was evicted or captures are
+    disabled.
+  - `handleAPICaptureUnpin` — deletes the DB row; unpinning unknown IDs is a
+    no-op success.
+  - `handleAPICapture` — DB fallback (decompress) when the memory cache
+    misses, before returning 404.
+- `internal/server/server.go`: routes `POST/DELETE /api/captures/{id}/pin`
+  behind the same `apiChain` (auth) as the other management endpoints.
+- `internal/server/ui_dist/js/`: `api.js` gains `pinCapture`/`unpinCapture`;
+  `activityTable.js` renders `View | 📌` in the capture column (grayscale
+  until pinned, `window.confirm` before unpin), with a `pinningId` busy state
+  and a `refresh()` after the operation so `has_capture`/`pinned` come back
+  from the server.
+- `internal/server/ui_dist/css/newpages.css`: `.activity-pin-btn` styles
+  (actions wrapped in an inline-flex `span` — not the `<td>` — to avoid
+  breaking table layout).
+
+### Commands
+
+- `gofmt -w internal/store internal/server`
+- `go test -run 'TestStore_PinnedCaptures|TestStore_PruneActivity|TestServer_APICapturePinLifecycle|TestServer_HandleAPICapture' -v ./internal/store/ ./internal/server/` → all pass
+- `make test-dev`, `make gosec`, `aidc-scan`, `make test-all` → clean
+
+### Verification
+
+- `TestStore_PinnedCaptures`: empty set initially, not-found reads, insert +
+  replace-on-repin, delete + delete-unknown no-op, and file-backed
+  persistence across close/reopen (migration 00002 applies on new DBs).
+- `TestStore_PruneActivity` (extended): pins on pruned activity rows are
+  removed; pins on kept rows survive.
+- `TestServer_APICapturePinLifecycle`: pin from memory → clear the memory
+  cache (eviction) → GET still returns the payload from the DB (base64
+  `req_body` round-trips) → activity row shows `pinned`+`has_capture` →
+  unpin → GET 404 and row clears. Pin on evicted capture → 404; non-numeric
+  IDs → 400 on both verbs.
+
+### Notes
+
+- Pinning requires the capture to still be in memory (captures enabled,
+  non-zero `captureBuffer`); once pinned, captures remain viewable even if
+  `captureBuffer` is later reduced or set to 0.
+- `req_body`/`resp_body` marshal as base64 in the capture JSON — assertions
+  must match the encoded form.
+- The memory cache is FIFO, not LRU; eviction order is insertion order.
+
+---
+
+
+## 2026-09-06 — Stats page aggregates server-side, no more 999-request cap
+
+### What
+
+The Stats page (`#/stats`) previously fetched `/api/metrics/activity?limit=999`
+and reduced the rows client-side, so every total silently covered only the most
+recent 999 requests. It now renders from `/api/metrics/stats`, whose aggregate
+is computed in SQL over the **entire** activity log. The stats endpoint
+(`store.ActivityStats`) gained `first_timestamp` / `last_timestamp` and a
+per-model `models` breakdown; the UI markup is unchanged.
+
+Related (not changed): request/response captures on the Activity page remain
+bounded by the in-memory `captureBuffer` (MB) LRU — captures are never written
+to sqlite, so operators wanting more retained captures should raise
+`captureBuffer` in their config.yaml.
+
+### Why
+
+- `parseActivityLimit` (internal/server/apigroup.go) hard-caps the activity
+  list endpoint at 999 rows, so any client-side aggregation had a 999 ceiling
+  that was invisible to users and hit quickly on busy proxies.
+- With a file-backed sqlite `store`, activity history is unbounded (pruning
+  only runs for in-memory stores), so the full dataset is available for
+  aggregation — it just wasn't being used.
+- The 999-row fetch also shipped every row's full metadata to the browser only
+  to throw most of it away; a single GROUP BY is cheaper on both ends.
+
+### How
+
+- `internal/store/store.go`:
+  - New `ActivityModelStats` struct (`model`, `requests`, `input_tokens`,
+    `output_tokens`, `cached_tokens`, `avg_prompt_speed`, `avg_gen_speed`,
+    `total_duration_ms`, `last_used`). Average speeds are `*float64` — `null`
+    when a model never reported that speed — so "no data" stays distinct
+    from a real 0.
+  - `ActivityStats` extended with `first_timestamp` / `last_timestamp`
+    (`*time.Time`, `null` on an empty log) and `models`
+    (always a non-nil JSON array, ordered by request count descending then
+    model id for stable output).
+  - `activityTimeRange`: `SELECT MIN(ts_created), MAX(ts_created)` over the
+    same placeholder-built `where` clause.
+  - `activityModelStats`: one `GROUP BY model_id` query with
+    `AVG(CASE WHEN speed > 0 THEN speed END)` (zero values excluded, matching
+    the prior client-side behavior), `SUM(CASE WHEN cache_tokens > 0 ...)`
+    for cached tokens, and `MAX(ts_created)` per model.
+- `internal/server/apigroup.go`: no handler change — `handleAPIActivityStats`
+  already encodes the whole `store.ActivityStats`, so the new fields flow
+  through automatically. Additive JSON only; the Activity page's
+  `activityStats.js` (which reads `total_requests` + histograms) is unaffected.
+- `internal/server/ui_dist/js/pages/stats.js`: `fetchMetrics`/`aggregate`
+  replaced by `fetchStats`, which maps the endpoint's snake_case JSON onto the
+  existing render functions. Speed formatting treats `null` as "—"; average
+  duration still derives from `total_duration_ms / requests`. The 999-cap
+  comment and `limit=999` fetch are gone.
+
+### Commands
+
+- `gofmt -w internal/store/store.go internal/store/store_test.go`
+- `go test -v -run 'TestStore_ActivityStats|TestServer_APIMetricsStats' ./internal/store/ ./internal/server/` → all pass
+- `go test -cover ./internal/store/` → new funcs `activityTimeRange` 90.9%,
+  `activityModelStats` 88.9%; the uncovered branches in `ActivityStats` are the
+  propagated SQL error returns (need driver fault injection)
+- `make test-dev` → all packages ok (staticcheck binary not present in this
+  container; `go vet` runs via `go test`)
+- `make gosec` → 0 issues across GOOS linux/darwin/windows
+- `aidc-scan` → semgrep/gitleaks/gosec clean
+- `make test-all` → all packages ok (incl. long-running concurrency tests)
+
+### Verification
+
+- `TestStore_ActivityStatsPerModel` (new): multi-model fixtures assert totals,
+  first/last timestamps, per-model rows with cached-token exclusion (negative
+  `cache_tokens` ignored), zero-speed exclusion from averages (`m2` reports
+  `null` speeds), ordering by request count, the `?model=` filter narrowing
+  totals/time-range/models, and an empty store returning zero totals with
+  `null` timestamps and an empty non-nil `models` array.
+- `TestServer_APIMetricsStats` (extended): asserts the endpoint serializes the
+  per-model breakdown (speed averages 20/30 t/s for the fixture, RFC3339
+  `last_used` round-trip) and that the unfiltered request aggregates all
+  models with correct `first_timestamp`/`last_timestamp`.
+
+### Notes
+
+- The two new `#nosec G202` markers in `internal/store/store.go` (same
+  placeholder-built-`where` pattern as the existing ones) are recorded in
+  `docs/gosec-suppressions.md` (G202 count 3 → 5, total 89 → 91), verified by
+  `TestNosecLedgerInSync`.
+- `parseActivityLimit`'s 1–999 bound remains for the Activity table's
+  pagination; only the Stats page's dependence on it was removed.
+
+---
+
+
 ## 2026-09-02 — Intel GPU architecture/model from PCI device ID
 
 ### What

@@ -341,6 +341,158 @@ func TestStore_ActivityStats(t *testing.T) {
 	}
 }
 
+func TestStore_ActivityStatsPerModel(t *testing.T) {
+	ctx := context.Background()
+	store, err := New("")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer store.Close()
+
+	entries := []ActivityLogEntry{
+		{
+			Timestamp:  time.Unix(10, 0),
+			Model:      "m1",
+			DurationMs: 1000,
+			Tokens: TokenMetrics{
+				CachedTokens:    2,
+				InputTokens:     10,
+				OutputTokens:    20,
+				PromptPerSecond: 100,
+				TokensPerSecond: 50,
+			},
+		},
+		{
+			Timestamp:  time.Unix(20, 0),
+			Model:      "m1",
+			DurationMs: 3000,
+			Tokens: TokenMetrics{
+				CachedTokens:    -1,
+				InputTokens:     5,
+				OutputTokens:    8,
+				PromptPerSecond: 200,
+			},
+		},
+		{
+			Timestamp:  time.Unix(15, 0),
+			Model:      "m2",
+			DurationMs: 500,
+			Tokens: TokenMetrics{
+				InputTokens:  7,
+				OutputTokens: 9,
+			},
+		},
+	}
+	for _, entry := range entries {
+		if _, err := store.InsertActivity(ctx, entry); err != nil {
+			t.Fatalf("InsertActivity: %v", err)
+		}
+	}
+
+	assertModel := func(t *testing.T, got ActivityModelStats, want ActivityModelStats, wantPrompt, wantGen *float64) {
+		t.Helper()
+		if got.Model != want.Model || got.Requests != want.Requests ||
+			got.InputTokens != want.InputTokens || got.OutputTokens != want.OutputTokens ||
+			got.CachedTokens != want.CachedTokens || got.TotalDurationMs != want.TotalDurationMs ||
+			!got.LastUsed.Equal(want.LastUsed) {
+			t.Fatalf("model stats = %+v, want %+v", got, want)
+		}
+		if (wantPrompt == nil) != (got.AvgPromptSpeed == nil) || (wantPrompt != nil && *got.AvgPromptSpeed != *wantPrompt) {
+			t.Fatalf("avg prompt speed = %v, want %v", got.AvgPromptSpeed, wantPrompt)
+		}
+		if (wantGen == nil) != (got.AvgGenSpeed == nil) || (wantGen != nil && *got.AvgGenSpeed != *wantGen) {
+			t.Fatalf("avg gen speed = %v, want %v", got.AvgGenSpeed, wantGen)
+		}
+	}
+
+	unix := func(sec int64) time.Time { return time.Unix(sec, 0).UTC() }
+
+	stats, err := store.ActivityStats(ctx, ActivityStatsQuery{})
+	if err != nil {
+		t.Fatalf("ActivityStats: %v", err)
+	}
+	if stats.TotalRequests != 3 || stats.TotalInputTokens != 22 || stats.TotalOutputTokens != 37 || stats.TotalCacheTokens != 2 {
+		t.Fatalf("totals = %+v", stats)
+	}
+	if stats.FirstTimestamp == nil || !stats.FirstTimestamp.Equal(unix(10)) {
+		t.Fatalf("first timestamp = %v, want %v", stats.FirstTimestamp, unix(10))
+	}
+	if stats.LastTimestamp == nil || !stats.LastTimestamp.Equal(unix(20)) {
+		t.Fatalf("last timestamp = %v, want %v", stats.LastTimestamp, unix(20))
+	}
+	if len(stats.Models) != 2 {
+		t.Fatalf("models = %+v, want 2 rows", stats.Models)
+	}
+	prompt150 := 150.0
+	gen50 := 50.0
+	assertModel(t, stats.Models[0], ActivityModelStats{
+		Model: "m1", Requests: 2, InputTokens: 15, OutputTokens: 28,
+		CachedTokens: 2, TotalDurationMs: 4000, LastUsed: unix(20),
+	}, &prompt150, &gen50)
+	assertModel(t, stats.Models[1], ActivityModelStats{
+		Model: "m2", Requests: 1, InputTokens: 7, OutputTokens: 9,
+		TotalDurationMs: 500, LastUsed: unix(15),
+	}, nil, nil)
+
+	// A model filter narrows totals, time range, and per-model rows.
+	filtered, err := store.ActivityStats(ctx, ActivityStatsQuery{Model: "m1"})
+	if err != nil {
+		t.Fatalf("ActivityStats filtered: %v", err)
+	}
+	if filtered.TotalRequests != 2 || filtered.TotalInputTokens != 15 {
+		t.Fatalf("filtered totals = %+v", filtered)
+	}
+	if filtered.FirstTimestamp == nil || !filtered.FirstTimestamp.Equal(unix(10)) ||
+		filtered.LastTimestamp == nil || !filtered.LastTimestamp.Equal(unix(20)) {
+		t.Fatalf("filtered time range = %v..%v", filtered.FirstTimestamp, filtered.LastTimestamp)
+	}
+	if len(filtered.Models) != 1 || filtered.Models[0].Model != "m1" || filtered.Models[0].Requests != 2 {
+		t.Fatalf("filtered models = %+v", filtered.Models)
+	}
+
+	// An empty store reports zero totals with no timestamps or models.
+	empty, err := New("")
+	if err != nil {
+		t.Fatalf("New empty: %v", err)
+	}
+	defer empty.Close()
+	emptyStats, err := empty.ActivityStats(ctx, ActivityStatsQuery{})
+	if err != nil {
+		t.Fatalf("ActivityStats empty: %v", err)
+	}
+	if emptyStats.TotalRequests != 0 || emptyStats.FirstTimestamp != nil || emptyStats.LastTimestamp != nil {
+		t.Fatalf("empty stats = %+v", emptyStats)
+	}
+	if emptyStats.Models == nil || len(emptyStats.Models) != 0 {
+		t.Fatalf("empty models = %+v, want empty non-nil slice", emptyStats.Models)
+	}
+}
+
+func TestStore_GetActivity(t *testing.T) {
+	ctx := context.Background()
+	store, err := New("")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer store.Close()
+
+	if _, found, err := store.GetActivity(ctx, 1); err != nil || found {
+		t.Fatalf("GetActivity missing = (%v, %v), want not found", found, err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := store.InsertActivity(ctx, ActivityLogEntry{Timestamp: time.Unix(int64(i), 0), Model: "m"}); err != nil {
+			t.Fatalf("InsertActivity: %v", err)
+		}
+	}
+	entry, found, err := store.GetActivity(ctx, 2)
+	if err != nil || !found {
+		t.Fatalf("GetActivity = (%v, %v), want found", found, err)
+	}
+	if entry.ID != 2 || entry.Model != "m" {
+		t.Fatalf("entry = %+v", entry)
+	}
+}
+
 func TestStore_PruneActivity(t *testing.T) {
 	ctx := context.Background()
 	store, err := New("")
@@ -354,6 +506,13 @@ func TestStore_PruneActivity(t *testing.T) {
 			t.Fatalf("InsertActivity: %v", err)
 		}
 	}
+	// Pins on rows that survive pruning (id 5) and rows that do not (id 1).
+	if err := store.InsertPinnedCapture(ctx, 1, "m", "/v1/chat/completions", []byte("old")); err != nil {
+		t.Fatalf("InsertPinnedCapture: %v", err)
+	}
+	if err := store.InsertPinnedCapture(ctx, 5, "m", "/v1/chat/completions", []byte("kept")); err != nil {
+		t.Fatalf("InsertPinnedCapture: %v", err)
+	}
 	if err := store.PruneActivity(ctx, 2); err != nil {
 		t.Fatalf("PruneActivity: %v", err)
 	}
@@ -366,6 +525,91 @@ func TestStore_PruneActivity(t *testing.T) {
 	}
 	if page.Data[0].ID != 5 || page.Data[1].ID != 4 {
 		t.Fatalf("kept IDs = %+v", page.Data)
+	}
+	ids, err := store.PinnedCaptureIDs(ctx)
+	if err != nil {
+		t.Fatalf("PinnedCaptureIDs: %v", err)
+	}
+	if _, orphan := ids[1]; orphan {
+		t.Fatalf("pinned capture for pruned activity row survived: %v", ids)
+	}
+	if _, kept := ids[5]; !kept {
+		t.Fatalf("pinned capture for kept activity row missing: %v", ids)
+	}
+}
+
+func TestStore_PinnedCaptures(t *testing.T) {
+	ctx := context.Background()
+	store, err := New("")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer store.Close()
+
+	ids, err := store.PinnedCaptureIDs(ctx)
+	if err != nil {
+		t.Fatalf("PinnedCaptureIDs: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("ids = %v, want empty", ids)
+	}
+	if _, found, err := store.GetPinnedCapture(ctx, 1); err != nil || found {
+		t.Fatalf("GetPinnedCapture missing = (%v, %v), want not found", found, err)
+	}
+
+	payload := []byte("zstd-cbor-payload")
+	if err := store.InsertPinnedCapture(ctx, 7, "m1", "/v1/chat/completions", payload); err != nil {
+		t.Fatalf("InsertPinnedCapture: %v", err)
+	}
+	// Re-pinning the same ID replaces the stored payload instead of failing.
+	if err := store.InsertPinnedCapture(ctx, 7, "m1", "/v1/chat/completions", []byte("v2")); err != nil {
+		t.Fatalf("InsertPinnedCapture replace: %v", err)
+	}
+	got, found, err := store.GetPinnedCapture(ctx, 7)
+	if err != nil || !found {
+		t.Fatalf("GetPinnedCapture = (%v, %v), want found", found, err)
+	}
+	if string(got) != "v2" {
+		t.Fatalf("payload = %q, want v2", got)
+	}
+	ids, err = store.PinnedCaptureIDs(ctx)
+	if err != nil {
+		t.Fatalf("PinnedCaptureIDs: %v", err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("ids = %v, want only 7", ids)
+	}
+
+	if err := store.DeletePinnedCapture(ctx, 7); err != nil {
+		t.Fatalf("DeletePinnedCapture: %v", err)
+	}
+	if _, found, err := store.GetPinnedCapture(ctx, 7); err != nil || found {
+		t.Fatalf("GetPinnedCapture after delete = (%v, %v), want not found", found, err)
+	}
+	// Deleting an unknown pin is a no-op.
+	if err := store.DeletePinnedCapture(ctx, 999); err != nil {
+		t.Fatalf("DeletePinnedCapture unknown: %v", err)
+	}
+
+	// Pinned captures are part of the file-backed schema and survive reopen.
+	path := filepath.Join(t.TempDir(), "pinned.sqlite")
+	fileStore, err := New(path)
+	if err != nil {
+		t.Fatalf("New file store: %v", err)
+	}
+	if err := fileStore.InsertPinnedCapture(ctx, 3, "m2", "/v1/completions", payload); err != nil {
+		t.Fatalf("InsertPinnedCapture file: %v", err)
+	}
+	if err := fileStore.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	fileStore, err = New(path)
+	if err != nil {
+		t.Fatalf("reopen file store: %v", err)
+	}
+	defer fileStore.Close()
+	if got, found, err := fileStore.GetPinnedCapture(ctx, 3); err != nil || !found || string(got) != string(payload) {
+		t.Fatalf("GetPinnedCapture after reopen = (%q, %v, %v)", got, found, err)
 	}
 }
 
