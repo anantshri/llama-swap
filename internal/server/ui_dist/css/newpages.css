@@ -241,7 +241,7 @@
 .hw-issue-link { color: var(--color-primary); text-decoration: underline; }
 
 /* ---- settings page ---- */
-.page-settings { overflow-y: auto; max-width: 34rem; }
+.page-settings { overflow-y: auto; }
 .settings-card { padding: 1rem; margin-bottom: 0.75rem; }
 .settings-card-title {
   font-size: 0.8125rem; font-weight: 600; color: var(--color-txtsecondary);

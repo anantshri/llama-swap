@@ -23,7 +23,7 @@ To list the live markers at any time:
 grep -rn "#nosec" internal/
 ```
 
-Total: **91** suppressions across **12** rules (G115 ×29, G103 ×27, G304 ×10, G204 ×7, G404 ×4, G202 ×5, G117 ×2, G120 ×2, G710 ×2, G118 ×1, G703 ×1, G705 ×1).
+Total: **92** suppressions across **12** rules (G115 ×29, G103 ×27, G304 ×10, G204 ×8, G404 ×4, G202 ×5, G117 ×2, G120 ×2, G710 ×2, G118 ×1, G703 ×1, G705 ×1).
 
 ---
 
@@ -56,11 +56,11 @@ safe alternative for these OS ABIs.
 
 **Verdict: by design — this is the product.** llama-swap's core function is to
 launch operator-configured model server commands (`cmd`, `cmdStop`) and helper
-tools (`nvidia-smi`, `rocm-smi`, `powermetrics`). The command source is the
+tools (`nvidia-smi`, `rocm-smi`, `xpu-smi`, `powermetrics`). The command source is the
 operator's trusted config, not attacker input.
 Files: `internal/process/{process_command,runtime_windows}.go`,
 `internal/perf/{monitor_unix,monitor_darwin,monitor_windows}.go`,
-`internal/hw/detect_linux.go`.
+`internal/hw/{detect_linux,intel_linux}.go`.
 
 ## G304 — file inclusion via variable · 10 sites · MEDIUM
 

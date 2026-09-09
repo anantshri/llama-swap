@@ -1,7 +1,7 @@
 // App bootstrap. Replaces App.svelte + main.ts.
 import { Header } from "./components/header.js";
 import { startRouter } from "./router.js";
-import { enableAPIEvents } from "./api.js";
+import { enableAPIEvents, fetchVersionInfo } from "./api.js";
 import {
   initScreenWidth,
   initSystemThemeListener,
@@ -84,6 +84,7 @@ function boot() {
   initScreenWidth();
   initSystemThemeListener();
   enableAPIEvents(true);
+  fetchVersionInfo().catch((err) => console.error(err));
 }
 
 boot();

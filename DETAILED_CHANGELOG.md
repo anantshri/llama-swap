@@ -5,6 +5,213 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-09 — hw: Intel dGPU VRAM via xpu-smi (was "Shared System")
+
+### Symptom
+
+On the dumbo server (Intel graphics), the Hardware page showed the GPU's
+memory as `Shared System` with no capacity, while `xpu-smi` on that host
+correctly reports 32 GB of VRAM.
+
+### Diagnosis
+
+`internal/hw/detect_linux.go` `detectDRMSysfs` classifies every DRM device
+without a readable `mem_info_vram_total` sysfs file as `shared_system`. On
+this host the Intel driver stack does not expose that file for the card, so
+the discrete GPU fell into the integrated-GPU bucket. NVIDIA and AMD each
+have a CLI probe (`nvidia-smi`, `rocm-smi`) that merges over the sysfs
+record by PCI identity — Intel had none; only the PCI-ID architecture/model
+table in `intel.go`.
+
+### Change
+
+- `internal/hw/intel_linux.go` (new): `detectIntel` probe using
+  `xpu-smi discovery -j` to list devices, then `xpu-smi discovery -d <id> -j`
+  per device for full detail (the bare listing omits memory). Maps
+  `memory_physical_size_byte` to `dedicated` capacity; a `device_type`
+  containing "integrated" keeps `shared_system`. Merges with the sysfs
+  record via normalized PCI BDF (`normalizePCIIdentity`), so sysfs still
+  contributes architecture (e.g. Alchemist/Battlemage from the PCI-ID
+  table) and power limits where xpu-smi's record is thinner.
+- `internal/hw/detect_linux.go`: `detectPlatform` runs `detectIntel` after
+  AMD and before sysfs (merge order: existing non-null value wins, so the
+  authoritative CLI probe must come first — same pattern as NVIDIA/AMD).
+  `detectDRMSysfs` refactored to `detectDRMSysfsFrom(sysRoot)` and
+  `hasAccessibleRenderNode(devicePath, deviceRoot)` now takes roots, making
+  the sysfs path testable off the live `/sys`.
+- Driver name in the xpu-smi record is `xe` with xpu-smi's
+  `driver_version` string (that string is driver-branded, e.g.
+  `XE_1.0.4_...` / `I915_...`).
+
+gosec G204 on the `xpu-smi` invocation is suppressed inline (fixed binary +
+integer device id, same pattern as `nvidia-smi`/`rocm-smi` calls); ledger
+`docs/gosec-suppressions.md` updated (G204 ×8, total 92).
+
+### Tests
+
+`internal/hw/intel_linux_test.go` (new, captured-JSON parser tests, no
+local hardware needed):
+
+- Flex 170 detail JSON → dedicated + 14942253056 bytes + driver version.
+- `device_type: "Integrated GPU"` stays `shared_system`.
+- Missing memory fields → dedicated without invented capacity.
+- BDF normalization of xpu-smi's domain-qualified form.
+- `detectIntel` returns nil without xpu-smi on PATH.
+- Merge test: xpu-smi `dedicated`+capacity wins over a sysfs
+  `shared_system` record for the same PCI address, sysfs architecture
+  preserved.
+- Sysfs fixture test (`detectDRMSysfsFrom`): `mem_info_vram_total`
+  present → dedicated (regression guard for the pure-sysfs path), ATS-M
+  device ID resolves to Alchemist.
+
+### Commands
+
+- `go test -v -run "TestHardware_Intel" ./internal/hw/` — 7 passed.
+- `make test-dev` — ok (go test + staticcheck).
+- `make gosec` — 0 issues (linux, darwin, windows).
+- `go test -cover ./...` — 1501 passed in 31 packages.
+- `aidc-scan` — clean.
+
+### Verification notes
+
+- Live verification on dumbo requires the rebuilt binary on that host;
+  expected result: Flex/Arc card shows `Dedicated` with ~32 GB (xpu-smi's
+  `memory_physical_size_byte`).
+- xpu-smi JSON field names verified against intel/xpumanager source
+  (`ial/cmn/cmd_discovery.cpp`): listing uses `device_list[].device_id` /
+  `pci_bdf_address`; per-device detail uses `device_name`, `device_type`
+  ("Discrete GPU" / "Integrated GPU"), `driver_version`, and
+  `memory_physical_size_byte` (bytes, promoted to a JSON number).
+
+---
+
+## 2026-09-09 — UI: populate Build Information (was always "unknown")
+
+### Symptom
+
+The Settings page's "Build Information" card (and the header connection
+tooltip) showed `unknown` for Version, Commit Hash, and Build Date, even
+though `GET /api/version` returns correct values and the binary is built
+with `-ldflags -X main.version/main.commit/main.date` (Makefile).
+
+### Diagnosis
+
+The UI's `versionInfo` store (`ui_dist/js/api.js`) was initialized to
+`"unknown"` placeholders and never updated: no code fetched `/api/version`,
+and the SSE event stream (`handleAPIEventMessage`) has no version event.
+The Settings page and header subscribe to the store, so they rendered the
+initial placeholders forever. The store was ported from the old Svelte UI
+(`stores/api.ts`) but the code that populated it was lost in the port.
+
+### Change
+
+- `internal/server/ui_dist/js/api.js`: new `fetchVersionInfo()` — fetches
+  `GET /api/version` once and populates `versionInfo`, keeping "unknown"
+  defaults on HTTP error or network failure (non-fatal).
+- `internal/server/ui_dist/js/main.js`: calls `fetchVersionInfo()` at boot,
+  right after `enableAPIEvents(true)`.
+
+Also removed `max-width: 34rem` from `.page-settings`
+(`ui_dist/css/newpages.css`) so the Settings page uses the full content
+width (per user request in the same session).
+
+### Commands
+
+- `go test -short ./internal/server/` — 365 passed (covers UI
+  serving/embedding via `internal/server/ui_test.go`).
+- `aidc-scan` — clean.
+
+### Verification
+
+Rebuilding and loading the UI now fills the Build Information card from
+`/api/version`; on a server built with plain `go build` (no ldflags) it
+will show the compile-time defaults (`0` / `abcd1234` / `unknown`) rather
+than a fetch failure.
+
+### Notes
+
+- `node` is not available in this container, so the modified ES modules
+  were syntax-checked by review only; browser loading is exercised by the
+  existing UI serving tests only at the HTTP layer.
+
+---
+
+## 2026-09-09 — Port upstream #1075: set-if-undefined params via `?` key suffix
+
+### What / goal
+
+Surveyed the 12 upstream commits since this fork's baseline (`7a14664`) and
+the user picked the port of upstream PR #1075 (fixes upstream issue #1052):
+a `setParams`/`setParamsByID` key ending in `?` (e.g. `max_tokens?: 4096`)
+is **set-if-undefined** — applied only when the request does not already
+carry that parameter. Plain keys keep forcing their values; a config that
+never uses the suffix behaves exactly as before.
+
+### Porting notes (why not a cherry-pick)
+
+Upstream's `filters.go` lacks this fork's `SetParamsByMatch` (upstream PR
+#934 was never merged upstream; the fork carries its own implementation), so
+the patch was merged by hand:
+
+- `internal/config/filters.go` — refactored `SanitizedSetParams` /
+  `SanitizedSetParamsByID` to delegate to a shared `sanitizeParams()`
+  (upstream's refactor, which also de-duplicates the fork's copies) returning
+  `(params, keys, soft)` where `soft` marks `?`-spelled keys (suffix
+  stripped). Hard spelling wins when both `key` and `key?` exist; `model?`
+  stays protected; a bare `?` key is ignored; `soft` is nil when empty.
+- `internal/server/filters.go` — `applyFilters` skips a soft key when
+  `gjson.GetBytes(body, key).Exists()` at its pipeline stage. The fork's
+  pipeline is `stripParams | setParamsByMatch | setParams | setParamsByID`
+  (upstream has no byMatch stage), so a stripped key counts as undefined and
+  a key set by an earlier stage (byMatch rule or setParams) counts as
+  defined.
+- `MatchRule.SanitizedSet()` (fork-only feature) intentionally unchanged —
+  upstream scope covers `setParams`/`setParamsByID` only.
+
+### Docs
+
+- `config-schema.json`: `?` suffix documented in model `setParams`,
+  `setParamsByID`, and peer `setParams` descriptions.
+- `docs/config.example.yaml`: model + peer `setParams` comments and a
+  `max_tokens?: 4096` example (feeds the MCP doc agent automatically).
+- `docs/kb/guides/api-integration/set-if-undefined.md` (new, adapted to name
+  the fork's byMatch stage in the pipe order).
+- `docs/kb/guides/api-integration/filters-and-request-rewriting.md`:
+  set-if-undefined paragraph, pipe-order note, and the Order of operations
+  list gained the previously missing `setParamsByMatch` step.
+
+### Tests
+
+- `internal/config/filters_test.go`: soft-suffix stripped/reported,
+  hard-wins-over-soft, protected param cannot be soft, bare `?` ignored, and
+  per-alias `?` cases for both sanitize functions (ported from upstream's
+  table additions).
+- `internal/server/filters_test.go`: seven new `applyFilters` subtests
+  covering applied-when-missing, request-value-wins, `0`/`false`/`null`
+  counting as sent, stripped-then-refilled, dotted path keys, byID no-op
+  after setParams, and the issue #1052 pipeline example.
+
+### Commands
+
+- `go test ./internal/config/ ./internal/server/ -run "Filters|Filter"` → ok
+- `go test ./internal/config/ ./internal/server/ ./internal/docagent/` → ok
+- `make test-dev` → all packages ok; `make gosec` → 0 issues
+- E2E: ran the binary with `setParams: {temperature: 0.7, max_tokens?: 4096}`
+  against the fake responder — a request carrying `max_tokens: 100` kept 100;
+  one without gained `max_tokens: 4096`; both got `temperature: 0.7`.
+
+### Verification notes
+
+First `aidc-scan` run after the port flagged 2 gitleaks findings — both the
+literal placeholder `nodekey:0123456789abcdef…` from tailcat documentation in
+git history (one commit is this fork's since-removed tailcat experiment, one
+is upstream's tailcat commit on the fetched `upstream` ref). None exist in
+the working tree; `trufflehog filesystem` reports zero secrets. Fingerprints
+registered in `.gitleaksignore` following its documented convention, and
+`aidc-scan` is clean again.
+
+---
+
 ## 2026-09-09 — Stats page: approximate token costs + compact number display
 
 ### What / goal
