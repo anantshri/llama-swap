@@ -45,15 +45,15 @@ export function StatsPage() {
         <table class="stats-table">
           <thead>
             <tr>
-              <th class="stats-th stats-th-model">Model</th>
-              <th class="stats-th stats-th-num">Requests</th>
-              <th class="stats-th stats-th-num">Input Tokens</th>
-              <th class="stats-th stats-th-num">Output Tokens</th>
-              <th class="stats-th stats-th-num">Cached Tokens</th>
-              <th class="stats-th stats-th-num">Avg Prompt Speed</th>
-              <th class="stats-th stats-th-num">Avg Gen Speed</th>
-              <th class="stats-th stats-th-num">Avg Duration</th>
-              <th class="stats-th stats-th-num">Last Used</th>
+              <th class="stats-th stats-th-model stats-th-sortable" data-sort="model">Model<span class="stats-sort-ind"></span></th>
+              <th class="stats-th stats-th-num stats-th-sortable" data-sort="requests">Requests<span class="stats-sort-ind"></span></th>
+              <th class="stats-th stats-th-num stats-th-sortable" data-sort="inputTokens">Input Tokens<span class="stats-sort-ind"></span></th>
+              <th class="stats-th stats-th-num stats-th-sortable" data-sort="outputTokens">Output Tokens<span class="stats-sort-ind"></span></th>
+              <th class="stats-th stats-th-num stats-th-sortable" data-sort="cachedTokens">Cached Tokens<span class="stats-sort-ind"></span></th>
+              <th class="stats-th stats-th-num stats-th-sortable" data-sort="avgPromptSpeed">Avg Prompt Speed<span class="stats-sort-ind"></span></th>
+              <th class="stats-th stats-th-num stats-th-sortable" data-sort="avgGenSpeed">Avg Gen Speed<span class="stats-sort-ind"></span></th>
+              <th class="stats-th stats-th-num stats-th-sortable" data-sort="avgDuration">Avg Duration<span class="stats-sort-ind"></span></th>
+              <th class="stats-th stats-th-num stats-th-sortable" data-sort="lastTimestamp">Last Used<span class="stats-sort-ind"></span></th>
             </tr>
           </thead>
           <tbody data-body></tbody>
@@ -65,6 +65,9 @@ export function StatsPage() {
   const summaryEl = root.querySelector("[data-summary]");
   const timespanEl = root.querySelector("[data-timespan]");
   const body = root.querySelector("[data-body]");
+
+  let sortKey = "requests";
+  let sortOrder = "desc";
 
   async function fetchStats() {
     try {
@@ -134,14 +137,56 @@ export function StatsPage() {
     timespanEl.textContent = `Data range: ${fmt(first)} — ${fmt(last)} (${nf.format(totalReqs)} requests across ${modelCount} models)`;
   }
 
+  function sortValue(s) {
+    switch (sortKey) {
+      case "requests": return s.requests;
+      case "inputTokens": return s.input_tokens;
+      case "outputTokens": return s.output_tokens;
+      case "cachedTokens": return s.cached_tokens;
+      case "avgPromptSpeed": return s.avg_prompt_speed == null ? -1 : s.avg_prompt_speed;
+      case "avgGenSpeed": return s.avg_gen_speed == null ? -1 : s.avg_gen_speed;
+      case "avgDuration": return s.requests > 0 ? (s.total_duration_ms || 0) / s.requests : 0;
+      case "lastTimestamp": return s.last_used || 0;
+      default: return 0;
+    }
+  }
+
+  function compareRows(a, b) {
+    const dir = sortOrder === "asc" ? 1 : -1;
+    let cmp;
+    if (sortKey === "model") {
+      cmp = a.model.localeCompare(b.model);
+    } else {
+      cmp = sortValue(a) - sortValue(b);
+    }
+    if (cmp === 0) cmp = a.model.localeCompare(b.model);
+    return cmp * dir;
+  }
+
+  function renderSortIndicator() {
+    root.querySelectorAll("th[data-sort]").forEach((th) => {
+      const span = th.querySelector(".stats-sort-ind");
+      if (!span) return;
+      if (th.dataset.sort === sortKey) {
+        span.textContent = sortOrder === "asc" ? "▲" : "▼";
+        span.classList.add("active");
+      } else {
+        span.textContent = "";
+        span.classList.remove("active");
+      }
+    });
+  }
+
   function renderTable(stats) {
     if (stats.totalRequests === 0) {
       body.innerHTML = `<tr><td class="stats-empty" colspan="9">No activity recorded</td></tr>`;
+      renderSortIndicator();
       return;
     }
 
-    // The backend orders models by request count descending; keep that order.
-    body.innerHTML = stats.models
+    const sorted = [...stats.models].sort(compareRows);
+
+    body.innerHTML = sorted
       .map((s) => {
         const totalDuration = s.total_duration_ms;
 
@@ -158,6 +203,7 @@ export function StatsPage() {
         </tr>`;
       })
       .join("");
+    renderSortIndicator();
   }
 
   function escapeHtml(s) {
@@ -172,6 +218,19 @@ export function StatsPage() {
   // Initial load
   let stats = { totalRequests: 0, totalInput: 0, totalOutput: 0, totalCached: 0, firstTime: null, lastTime: null, models: [] };
   let loading = true;
+
+  root.querySelector("thead").addEventListener("click", (e) => {
+    const th = e.target.closest("th[data-sort]");
+    if (!th) return;
+    const key = th.dataset.sort;
+    if (key === sortKey) {
+      sortOrder = sortOrder === "asc" ? "desc" : "asc";
+    } else {
+      sortKey = key;
+      sortOrder = "desc";
+    }
+    renderTable(stats);
+  });
 
   // Placeholder during load
   summaryEl.innerHTML = `<div class="stats-summary-empty">Loading...</div>`;

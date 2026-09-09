@@ -46,6 +46,9 @@ Long-form entries with full context live in
 
 ### Added
 
+- Sortable Stats page table: every column header sorts client-side (click
+  toggles asc/desc, requests-descending default), mirroring the Activity
+  table's `data-sort` + indicator pattern (folded from fork PR #19, fixes #18).
 - Pin captures from the Activity page: each row's capture column gains a 📌
   button that persists the request/response into the sqlite store
   (`pinned_captures` table), where it survives memory-cache eviction until
