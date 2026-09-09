@@ -4,7 +4,7 @@ summary: Use logs, metrics, captures and the Activity view to diagnose requests 
 category: guides
 tags: [operations, logs, metrics, activity, captures]
 config_keys: [logLevel, logToStdout, metricsMaxInMemory, captureBuffer]
-updated: 2026-08-28
+updated: 2026-09-06
 ---
 
 # Observability, storage and Activity
@@ -12,7 +12,11 @@ updated: 2026-08-28
 Use the Activity view for recent request timing and model events, logs for
 process and proxy failures, and metrics for trends. `metricsMaxInMemory` and
 `captureBuffer` bound retained in-memory data; increase them only when the
-memory cost is acceptable.
+memory cost is acceptable. Request/response captures live only in the
+in-memory `captureBuffer` (MB of zstd-compressed data, FIFO eviction) — as a
+rule of thumb 100MB holds ~1000 recent 6K-token sequences. Captures pinned
+from the Activity page are stored in the sqlite store and survive eviction
+until explicitly deleted.
 
 ```yaml
 logLevel: debug

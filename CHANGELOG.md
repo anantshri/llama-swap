@@ -30,6 +30,12 @@ Long-form entries with full context live in
 
 ### Changed
 
+- The Stats page aggregates server-side from `/api/metrics/stats` instead of
+  fetching `/api/metrics/activity?limit=999`, so per-model totals now cover the
+  entire activity log rather than the most recent 999 requests. The stats
+  endpoint gained `first_timestamp`, `last_timestamp`, and a per-model `models`
+  breakdown (requests, tokens, cached tokens, average speeds, total duration,
+  last used) computed in SQL.
 - Re-established the fork on upstream `7a14664` (2026-08-31), inheriting the new
   scheduler, selectors, profiles, peer namespaces, `internal/matrix`,
   `internal/hw`, ComfyUI compatibility, `internal/store` (sqlite activity
@@ -40,6 +46,12 @@ Long-form entries with full context live in
 
 ### Added
 
+- Pin captures from the Activity page: each row's capture column gains a 📌
+  button that persists the request/response into the sqlite store
+  (`pinned_captures` table), where it survives memory-cache eviction until
+  deleted via the pinned badge (with confirmation). `GET /api/captures/{id}`
+  falls back to pinned captures, and activity rows expose `pinned` alongside
+  `has_capture`.
 - Anthropic Messages API translation (`internal/apiconv`): `/v1/messages` and
   `/v/messages` are translated to OpenAI chat-completions and back (buffered +
   streaming), with a `passthroughAnthropic` per-model opt-out.

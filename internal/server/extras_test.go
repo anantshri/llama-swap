@@ -5,14 +5,18 @@ import (
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
+	"github.com/mostlygeek/llama-swap/internal/store"
 )
 
 func TestServer_DecompressBody(t *testing.T) {
@@ -277,6 +281,114 @@ func TestServer_HandleAPICapture(t *testing.T) {
 		s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/captures/abc", nil))
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("status = %d, want 400", w.Code)
+		}
+	})
+}
+
+func TestServer_APICapturePinLifecycle(t *testing.T) {
+	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
+	// Replace the default capture-disabled monitor with one that captures,
+	// sharing the server's store so pinned overlays line up with activity rows.
+	s.metrics = newMetricsMonitor(logmon.NewWriter(io.Discard), 100, 5, s.store)
+
+	stored, ok := s.metrics.queueMetrics(ActivityLogEntry{
+		Timestamp: time.Unix(1, 0),
+		Model:     "m1",
+		ReqPath:   "/v1/chat/completions",
+	})
+	if !ok {
+		t.Fatal("queueMetrics failed")
+	}
+	if !s.metrics.addCapture(ReqRespCapture{
+		ID:      stored.ID,
+		ReqPath: stored.ReqPath,
+		ReqBody: []byte(`{"prompt":"hello"}`),
+		ReqHeaders: map[string]string{
+			"Content-Type":  "application/json",
+			"Authorization": "Bearer [REDACTED]",
+		},
+	}) {
+		t.Fatal("addCapture failed")
+	}
+
+	t.Run("pin from memory", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/captures/%d/pin", stored.ID), nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d body=%q", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("view survives eviction via db fallback", func(t *testing.T) {
+		s.metrics.captureCache.Clear()
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/captures/%d", stored.ID), nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d body=%q", w.Code, w.Body.String())
+		}
+		if !bytes.Contains(w.Body.Bytes(), []byte(`"req_body":"eyJwcm9tcHQiOiJoZWxsbyJ9"`)) {
+			t.Errorf("body = %q", w.Body.String())
+		}
+	})
+
+	t.Run("activity row shows pinned", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/metrics/activity", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d", w.Code)
+		}
+		var page store.ActivityPage
+		if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if len(page.Data) != 1 {
+			t.Fatalf("rows = %+v", page.Data)
+		}
+		row := page.Data[0]
+		if row.ID != stored.ID || !row.Pinned || !row.HasCapture {
+			t.Fatalf("row = %+v, want pinned with capture", row)
+		}
+	})
+
+	t.Run("unpin deletes the stored payload", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/api/captures/%d/pin", stored.ID), nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d body=%q", w.Code, w.Body.String())
+		}
+		// Evicted from memory and now unpinned: the capture is truly gone.
+		w = httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/captures/%d", stored.ID), nil))
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404", w.Code)
+		}
+		w = httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/metrics/activity", nil))
+		var page store.ActivityPage
+		if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if len(page.Data) != 1 || page.Data[0].Pinned || page.Data[0].HasCapture {
+			t.Fatalf("row = %+v, want unpinned without capture", page.Data)
+		}
+	})
+
+	t.Run("pin errors", func(t *testing.T) {
+		// Pinning requires the capture to still be in memory.
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/captures/%d/pin", stored.ID), nil))
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404", w.Code)
+		}
+		w = httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/captures/abc/pin", nil))
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", w.Code)
+		}
+		w = httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/api/captures/abc/pin", nil))
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", w.Code)
 		}
 	})
 }

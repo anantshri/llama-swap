@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"math"
@@ -41,6 +42,7 @@ type ActivityLogEntry struct {
 	Tokens          TokenMetrics      `json:"tokens"`
 	DurationMs      int               `json:"duration_ms"`
 	HasCapture      bool              `json:"has_capture"`
+	Pinned          bool              `json:"pinned"`
 	ErrorMsg        string            `json:"error_msg,omitempty"`
 	Metadata        map[string]string `json:"metadata,omitempty"`
 }
@@ -102,12 +104,30 @@ type ActivityStatsQuery struct {
 }
 
 type ActivityStats struct {
-	TotalRequests       int            `json:"total_requests"`
-	TotalInputTokens    int            `json:"total_input_tokens"`
-	TotalOutputTokens   int            `json:"total_output_tokens"`
-	TotalCacheTokens    int            `json:"total_cache_tokens"`
-	PromptHistogram     *HistogramData `json:"prompt_histogram"`
-	GenerationHistogram *HistogramData `json:"gen_histogram"`
+	TotalRequests       int                  `json:"total_requests"`
+	TotalInputTokens    int                  `json:"total_input_tokens"`
+	TotalOutputTokens   int                  `json:"total_output_tokens"`
+	TotalCacheTokens    int                  `json:"total_cache_tokens"`
+	FirstTimestamp      *time.Time           `json:"first_timestamp"`
+	LastTimestamp       *time.Time           `json:"last_timestamp"`
+	Models              []ActivityModelStats `json:"models"`
+	PromptHistogram     *HistogramData       `json:"prompt_histogram"`
+	GenerationHistogram *HistogramData       `json:"gen_histogram"`
+}
+
+// ActivityModelStats aggregates every activity row for a single model. The
+// average speed fields are nil when the model never reported that speed, so
+// consumers can distinguish "no data" from a real 0.
+type ActivityModelStats struct {
+	Model           string    `json:"model"`
+	Requests        int       `json:"requests"`
+	InputTokens     int       `json:"input_tokens"`
+	OutputTokens    int       `json:"output_tokens"`
+	CachedTokens    int       `json:"cached_tokens"`
+	AvgPromptSpeed  *float64  `json:"avg_prompt_speed"`
+	AvgGenSpeed     *float64  `json:"avg_gen_speed"`
+	TotalDurationMs int64     `json:"total_duration_ms"`
+	LastUsed        time.Time `json:"last_used"`
 }
 
 type HistogramData struct {
@@ -306,7 +326,88 @@ func (s *Store) ActivityStats(ctx context.Context, query ActivityStatsQuery) (Ac
 	}
 	stats.PromptHistogram = calculateHistogramData(promptValues)
 	stats.GenerationHistogram = calculateHistogramData(genValues)
+
+	first, last, err := s.activityTimeRange(ctx, where, args)
+	if err != nil {
+		return ActivityStats{}, err
+	}
+	stats.FirstTimestamp = first
+	stats.LastTimestamp = last
+
+	stats.Models, err = s.activityModelStats(ctx, where, args)
+	if err != nil {
+		return ActivityStats{}, err
+	}
 	return stats, nil
+}
+
+// activityTimeRange reads the earliest and latest ts_created matching the
+// filter. Both are nil when no rows match.
+func (s *Store) activityTimeRange(ctx context.Context, where string, args []any) (first, last *time.Time, err error) {
+	var minTs, maxTs sql.NullInt64
+	// #nosec G202 -- `where` uses ? placeholders bound via args; no user input
+	// is concatenated into the SQL text.
+	err = s.db.QueryRowContext(ctx,
+		`SELECT MIN(ts_created), MAX(ts_created) FROM activity`+where, args...,
+	).Scan(&minTs, &maxTs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("activity time range: %w", err)
+	}
+	if minTs.Valid {
+		t := time.Unix(minTs.Int64, 0).UTC()
+		first = &t
+	}
+	if maxTs.Valid {
+		t := time.Unix(maxTs.Int64, 0).UTC()
+		last = &t
+	}
+	return first, last, nil
+}
+
+// activityModelStats groups activity rows by model with per-model token,
+// duration, and speed aggregates. Rows are ordered by request count
+// descending, then model id for stable output. Zero speeds are excluded from
+// the averages, matching speedValues.
+func (s *Store) activityModelStats(ctx context.Context, where string, args []any) ([]ActivityModelStats, error) {
+	stats := []ActivityModelStats{}
+	// #nosec G202 -- `where` uses ? placeholders bound via args; no user input
+	// is concatenated into the SQL text.
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			model_id,
+			COUNT(*),
+			COALESCE(SUM(input_tokens), 0),
+			COALESCE(SUM(output_tokens), 0),
+			COALESCE(SUM(CASE WHEN cache_tokens > 0 THEN cache_tokens ELSE 0 END), 0),
+			AVG(CASE WHEN prompt_per_second > 0 THEN prompt_per_second END),
+			AVG(CASE WHEN tokens_per_second > 0 THEN tokens_per_second END),
+			COALESCE(SUM(duration_ms), 0),
+			MAX(ts_created)
+		FROM activity`+where+`
+		GROUP BY model_id
+		ORDER BY COUNT(*) DESC, model_id ASC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("activity model stats: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var ms ActivityModelStats
+		var avgPrompt, avgGen sql.NullFloat64
+		var lastUsed int64
+		if err := rows.Scan(&ms.Model, &ms.Requests, &ms.InputTokens, &ms.OutputTokens, &ms.CachedTokens, &avgPrompt, &avgGen, &ms.TotalDurationMs, &lastUsed); err != nil {
+			return nil, fmt.Errorf("activity model stats row: %w", err)
+		}
+		if avgPrompt.Valid {
+			ms.AvgPromptSpeed = &avgPrompt.Float64
+		}
+		if avgGen.Valid {
+			ms.AvgGenSpeed = &avgGen.Float64
+		}
+		ms.LastUsed = time.Unix(lastUsed, 0).UTC()
+		stats = append(stats, ms)
+	}
+	return stats, rows.Err()
 }
 
 // speedValues reads both histogram source columns in a single scan. Zero
@@ -357,7 +458,90 @@ func (s *Store) PruneActivity(ctx context.Context, maxRows int) error {
 	); err != nil {
 		return fmt.Errorf("prune activity: %w", err)
 	}
+	// Pins whose activity row was pruned have nothing left to attach to.
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM pinned_captures WHERE activity_id NOT IN (SELECT id FROM activity)`,
+	); err != nil {
+		return fmt.Errorf("prune pinned captures: %w", err)
+	}
 	return nil
+}
+
+// GetActivity returns a single activity row by ID.
+func (s *Store) GetActivity(ctx context.Context, id int) (ActivityLogEntry, bool, error) {
+	page, err := s.ListActivity(ctx, ActivityQuery{
+		ActivityFilter: ActivityFilter{MinID: id, MaxID: id},
+		Limit:          1,
+		Page:           1,
+	})
+	if err != nil {
+		return ActivityLogEntry{}, false, err
+	}
+	if len(page.Data) == 0 {
+		return ActivityLogEntry{}, false, nil
+	}
+	return page.Data[0], true, nil
+}
+
+// InsertPinnedCapture persists a capture payload (zstd-compressed CBOR) for an
+// activity row. Pinned captures survive memory-cache eviction until explicitly
+// deleted with DeletePinnedCapture. Re-pinning an already pinned ID replaces
+// the stored payload.
+func (s *Store) InsertPinnedCapture(ctx context.Context, activityID int, modelID, reqPath string, data []byte) error {
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT OR REPLACE INTO pinned_captures (activity_id, ts_pinned, model_id, req_path, data)
+		VALUES (?, ?, ?, ?, ?)`,
+		activityID, time.Now().Unix(), modelID, reqPath, data,
+	); err != nil {
+		return fmt.Errorf("insert pinned capture: %w", err)
+	}
+	return nil
+}
+
+// GetPinnedCapture reads a pinned capture payload. The second return is false
+// when no pin exists for the activity ID.
+func (s *Store) GetPinnedCapture(ctx context.Context, activityID int) ([]byte, bool, error) {
+	var data []byte
+	err := s.db.QueryRowContext(ctx,
+		`SELECT data FROM pinned_captures WHERE activity_id = ?`, activityID,
+	).Scan(&data)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("get pinned capture: %w", err)
+	}
+	return data, true, nil
+}
+
+// DeletePinnedCapture removes a pin. Deleting a non-existent pin is a no-op.
+func (s *Store) DeletePinnedCapture(ctx context.Context, activityID int) error {
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM pinned_captures WHERE activity_id = ?`, activityID,
+	); err != nil {
+		return fmt.Errorf("delete pinned capture: %w", err)
+	}
+	return nil
+}
+
+// PinnedCaptureIDs returns the set of activity IDs with a pinned capture. The
+// pinned table only grows through explicit user action, so a full scan is
+// cheap and the result can drive per-page overlays.
+func (s *Store) PinnedCaptureIDs(ctx context.Context) (map[int]struct{}, error) {
+	ids := make(map[int]struct{})
+	rows, err := s.db.QueryContext(ctx, `SELECT activity_id FROM pinned_captures`)
+	if err != nil {
+		return nil, fmt.Errorf("list pinned captures: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan pinned capture id: %w", err)
+		}
+		ids[id] = struct{}{}
+	}
+	return ids, rows.Err()
 }
 
 func normalizeActivityQuery(query ActivityQuery) ActivityQuery {

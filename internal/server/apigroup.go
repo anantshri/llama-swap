@@ -208,7 +208,7 @@ func (s *Server) handleAPIActivity(w http.ResponseWriter, r *http.Request) {
 		swaputil.SendResponse(w, r, http.StatusInternalServerError, "failed to get activity")
 		return
 	}
-	s.metrics.overlayCaptureState(page.Data)
+	s.metrics.overlayCaptureState(r.Context(), page.Data)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(page)
 }
@@ -409,6 +409,8 @@ func (s *Server) handleAPIHardware(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAPICapture returns the stored request/response capture for a metric ID.
+// The memory cache is consulted first; pinned captures remain retrievable from
+// the sqlite store after eviction.
 func (s *Server) handleAPICapture(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
@@ -417,6 +419,19 @@ func (s *Server) handleAPICapture(w http.ResponseWriter, r *http.Request) {
 	}
 
 	capture := s.metrics.getCaptureByID(id)
+	if capture == nil {
+		data, pinned, err := s.store.GetPinnedCapture(r.Context(), id)
+		if err != nil {
+			swaputil.SendResponse(w, r, http.StatusInternalServerError, "failed to read pinned capture")
+			return
+		}
+		if pinned {
+			capture, err = decompressCapture(data)
+			if err != nil {
+				s.proxylog.Warnf("failed to decompress pinned capture %d: %v", id, err)
+			}
+		}
+	}
 	if capture == nil {
 		swaputil.SendResponse(w, r, http.StatusNotFound, "capture not found")
 		return
@@ -429,6 +444,64 @@ func (s *Server) handleAPICapture(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(jsonBytes) // nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter
+}
+
+// handleAPICapturePin persists the in-memory capture for a metric ID into the
+// sqlite store so it survives memory-cache eviction.
+func (s *Server) handleAPICapturePin(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		swaputil.SendResponse(w, r, http.StatusBadRequest, "invalid capture ID")
+		return
+	}
+
+	capture := s.metrics.getCaptureByID(id)
+	if capture == nil {
+		swaputil.SendResponse(w, r, http.StatusNotFound, "capture not found or evicted")
+		return
+	}
+
+	compressed, _, err := compressCapture(capture)
+	if err != nil {
+		s.proxylog.Warnf("failed to compress capture %d for pinning: %v", id, err)
+		swaputil.SendResponse(w, r, http.StatusInternalServerError, "failed to compress capture")
+		return
+	}
+
+	// Model is denormalized for easy DB inspection; a missing activity row
+	// (possible only in in-memory stores after pruning) must not block pinning.
+	model := ""
+	if entry, found, err := s.store.GetActivity(r.Context(), id); err != nil {
+		s.proxylog.Warnf("failed to read activity %d while pinning: %v", id, err)
+	} else if found {
+		model = entry.Model
+	}
+
+	if err := s.store.InsertPinnedCapture(r.Context(), id, model, capture.ReqPath, compressed); err != nil {
+		s.proxylog.Warnf("failed to pin capture %d: %v", id, err)
+		swaputil.SendResponse(w, r, http.StatusInternalServerError, "failed to pin capture")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"msg": "ok"})
+}
+
+// handleAPICaptureUnpin removes a pinned capture, deleting its payload from
+// the sqlite store. Unpinning an unknown ID is a no-op.
+func (s *Server) handleAPICaptureUnpin(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		swaputil.SendResponse(w, r, http.StatusBadRequest, "invalid capture ID")
+		return
+	}
+	if err := s.store.DeletePinnedCapture(r.Context(), id); err != nil {
+		s.proxylog.Warnf("failed to unpin capture %d: %v", id, err)
+		swaputil.SendResponse(w, r, http.StatusInternalServerError, "failed to unpin capture")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"msg": "ok"})
 }
 
 // handleAPICancelInflight cancels an active model-dispatched request by its

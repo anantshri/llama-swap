@@ -1,11 +1,12 @@
-// Stats page: per-model aggregated metrics computed client-side from the
-// activity log (/api/metrics/activity). Reduces the entries by model.
+// Stats page: per-model aggregated metrics served by the backend from
+// /api/metrics/stats. Aggregation happens in SQL over the entire activity
+// log, so no request-count limit applies.
 import { el, cleanupAll } from "../dom.js";
 
 const nf = new Intl.NumberFormat();
 
 function formatSpeed(s) {
-  return s < 0 ? "—" : s.toFixed(2) + " t/s";
+  return s == null || s < 0 ? "—" : s.toFixed(2) + " t/s";
 }
 
 function formatDuration(ms, count) {
@@ -65,69 +66,26 @@ export function StatsPage() {
   const timespanEl = root.querySelector("[data-timespan]");
   const body = root.querySelector("[data-body]");
 
-  async function fetchMetrics() {
+  async function fetchStats() {
     try {
-      // Upstream serves the activity log at /api/metrics/activity as a paginated
-      // page ({data:[...]}); the entry shape (tokens.*, timestamp, model,
-      // duration_ms) matches what aggregate() expects. limit is capped server
-      // side (<1000), so this aggregates over the most recent requests.
-      const resp = await fetch("/api/metrics/activity?limit=999");
+      // The backend aggregates over the whole activity log (SQL GROUP BY);
+      // the response shape is store.ActivityStats from /api/metrics/stats.
+      const resp = await fetch("/api/metrics/stats");
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const page = await resp.json();
-      return Array.isArray(page) ? page : (page.data || []);
+      const stats = await resp.json();
+      return {
+        totalRequests: stats.total_requests || 0,
+        totalInput: stats.total_input_tokens || 0,
+        totalOutput: stats.total_output_tokens || 0,
+        totalCached: stats.total_cache_tokens || 0,
+        firstTime: stats.first_timestamp || null,
+        lastTime: stats.last_timestamp || null,
+        models: Array.isArray(stats.models) ? stats.models : [],
+      };
     } catch (err) {
-      console.error("Failed to fetch metrics:", err);
-      return [];
+      console.error("Failed to fetch stats:", err);
+      return { totalRequests: 0, totalInput: 0, totalOutput: 0, totalCached: 0, firstTime: null, lastTime: null, models: [] };
     }
-  }
-
-  function aggregate(metrics) {
-    if (!metrics || metrics.length === 0) {
-      return { models: new Map(), totalRequests: 0, totalInput: 0, totalOutput: 0, totalCached: 0, firstTime: null, lastTime: null };
-    }
-
-    const models = new Map();
-    let totalRequests = 0;
-    let totalInput = 0;
-    let totalOutput = 0;
-    let totalCached = 0;
-    let firstTime = null;
-    let lastTime = null;
-
-    for (const m of metrics) {
-      totalRequests++;
-      totalInput += m.tokens.input_tokens || 0;
-      totalOutput += m.tokens.output_tokens || 0;
-      totalCached += Math.max(0, m.tokens.cache_tokens || 0);
-
-      if (!firstTime || m.timestamp < firstTime) firstTime = m.timestamp;
-      if (!lastTime || m.timestamp > lastTime) lastTime = m.timestamp;
-
-      const model = m.model || "(unknown)";
-      if (!models.has(model)) {
-        models.set(model, {
-          requests: 0,
-          inputTokens: 0,
-          outputTokens: 0,
-          cachedTokens: 0,
-          promptSpeeds: [],
-          genSpeeds: [],
-          durations: [],
-          lastTimestamp: null,
-        });
-      }
-      const s = models.get(model);
-      s.requests++;
-      s.inputTokens += m.tokens.input_tokens || 0;
-      s.outputTokens += m.tokens.output_tokens || 0;
-      s.cachedTokens += Math.max(0, m.tokens.cache_tokens || 0);
-      if (m.tokens.prompt_per_second > 0) s.promptSpeeds.push(m.tokens.prompt_per_second);
-      if (m.tokens.tokens_per_second > 0) s.genSpeeds.push(m.tokens.tokens_per_second);
-      s.durations.push(m.duration_ms);
-      if (!s.lastTimestamp || m.timestamp > s.lastTimestamp) s.lastTimestamp = m.timestamp;
-    }
-
-    return { models, totalRequests, totalInput, totalOutput, totalCached, firstTime, lastTime };
   }
 
   function renderSummary(stats) {
@@ -155,7 +113,7 @@ export function StatsPage() {
           <span class="stats-stat-label">Cached Tokens</span>
         </div>
         <div class="stats-stat">
-          <span class="stats-stat-value">${stats.models.size}</span>
+          <span class="stats-stat-value">${nf.format(stats.models.length)}</span>
           <span class="stats-stat-label">Models Used</span>
         </div>
       </div>
@@ -182,29 +140,21 @@ export function StatsPage() {
       return;
     }
 
-    // Sort models by most requests descending
-    const sorted = [...stats.models.entries()].sort((a, b) => b[1].requests - a[1].requests);
-
-    body.innerHTML = sorted
-      .map(([model, s]) => {
-        const avgPromptSpeed = s.promptSpeeds.length > 0
-          ? s.promptSpeeds.reduce((a, b) => a + b, 0) / s.promptSpeeds.length
-          : -1;
-        const avgGenSpeed = s.genSpeeds.length > 0
-          ? s.genSpeeds.reduce((a, b) => a + b, 0) / s.genSpeeds.length
-          : -1;
-        const totalDuration = s.durations.reduce((a, b) => a + b, 0);
+    // The backend orders models by request count descending; keep that order.
+    body.innerHTML = stats.models
+      .map((s) => {
+        const totalDuration = s.total_duration_ms;
 
         return `<tr class="stats-tr">
-          <td class="stats-td stats-td-model">${escapeHtml(model)}</td>
+          <td class="stats-td stats-td-model">${escapeHtml(s.model)}</td>
           <td class="stats-td stats-td-num">${nf.format(s.requests)}</td>
-          <td class="stats-td stats-td-num">${nf.format(s.inputTokens)}</td>
-          <td class="stats-td stats-td-num">${nf.format(s.outputTokens)}</td>
-          <td class="stats-td stats-td-num">${s.cachedTokens > 0 ? nf.format(s.cachedTokens) : "—"}</td>
-          <td class="stats-td stats-td-num">${formatSpeed(avgPromptSpeed)}</td>
-          <td class="stats-td stats-td-num">${formatSpeed(avgGenSpeed)}</td>
+          <td class="stats-td stats-td-num">${nf.format(s.input_tokens)}</td>
+          <td class="stats-td stats-td-num">${nf.format(s.output_tokens)}</td>
+          <td class="stats-td stats-td-num">${s.cached_tokens > 0 ? nf.format(s.cached_tokens) : "—"}</td>
+          <td class="stats-td stats-td-num">${formatSpeed(s.avg_prompt_speed)}</td>
+          <td class="stats-td stats-td-num">${formatSpeed(s.avg_gen_speed)}</td>
           <td class="stats-td stats-td-num">${formatDuration(totalDuration, s.requests)}</td>
-          <td class="stats-td stats-td-num">${s.lastTimestamp ? formatRelativeTime(s.lastTimestamp) : "—"}</td>
+          <td class="stats-td stats-td-num">${s.last_used ? formatRelativeTime(s.last_used) : "—"}</td>
         </tr>`;
       })
       .join("");
@@ -220,16 +170,16 @@ export function StatsPage() {
   }
 
   // Initial load
-  let stats = { models: new Map(), totalRequests: 0, totalInput: 0, totalOutput: 0, totalCached: 0, firstTime: null, lastTime: null };
+  let stats = { totalRequests: 0, totalInput: 0, totalOutput: 0, totalCached: 0, firstTime: null, lastTime: null, models: [] };
   let loading = true;
 
   // Placeholder during load
   summaryEl.innerHTML = `<div class="stats-summary-empty">Loading...</div>`;
 
-  fetchMetrics().then((metrics) => {
-    stats = aggregate(metrics);
+  fetchStats().then((fetched) => {
+    stats = fetched;
     renderSummary(stats);
-    renderTimespan(stats.firstTime, stats.lastTime, stats.totalRequests, stats.models.size);
+    renderTimespan(stats.firstTime, stats.lastTime, stats.totalRequests, stats.models.length);
     renderTable(stats);
     loading = false;
   });

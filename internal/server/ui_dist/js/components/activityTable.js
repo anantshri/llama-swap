@@ -8,6 +8,8 @@ import {
   getActivity,
   getActivityStats,
   getCapture,
+  pinCapture,
+  unpinCapture,
   cancelInflightRequest,
   inflightRequestEntries,
   uiConfig,
@@ -108,12 +110,23 @@ function cellHtml(m, key, loadingCaptureId) {
       return `<td class="activity-td">${formatSpeed(m.tokens.tokens_per_second)}</td>`;
     case "duration":
       return `<td class="activity-td">${formatDuration(m.duration_ms)}</td>`;
-    case "capture":
-      return m.has_capture
-        ? `<td class="activity-td"><button class="btn btn--sm" data-view="${m.id}" ${
-            loadingCaptureId === m.id ? "disabled" : ""
-          }>${loadingCaptureId === m.id ? "..." : "View"}</button></td>`
-        : `<td class="activity-td muted">-</td>`;
+    case "capture": {
+      if (!m.has_capture && !m.pinned) return `<td class="activity-td muted">-</td>`;
+      const viewBtn = `<button class="btn btn--sm" data-view="${m.id}" ${
+        loadingCaptureId === m.id ? "disabled" : ""
+      }>${loadingCaptureId === m.id ? "..." : "View"}</button>`;
+      const busy = pinningId === m.id;
+      // Pinned captures live in the database and survive eviction; clicking
+      // the badge asks for confirmation before the stored copy is deleted.
+      const pinBtn = m.pinned
+        ? `<button class="activity-pin-btn activity-pin-btn--pinned" data-unpin="${m.id}" title="Pinned to database — click to delete" ${
+            busy ? "disabled" : ""
+          }>${busy ? "…" : "📌"}</button>`
+        : `<button class="activity-pin-btn" data-pin="${m.id}" title="Pin request/response to database" ${
+            busy ? "disabled" : ""
+          }>${busy ? "…" : "📌"}</button>`;
+      return `<td class="activity-td"><span class="activity-capture-actions">${viewBtn}${pinBtn}</span></td>`;
+    }
     case "meta": {
       const entries = Object.entries(m.metadata || {});
       if (entries.length === 0) return `<td class="activity-td muted">-</td>`;
@@ -188,6 +201,7 @@ export function ActivityTable(options = {}) {
   let total = 0;
   let totalPages = 0;
   let loadingCaptureId = null;
+  let pinningId = null;
   let cancelingIds = [];
   let menuOpen = false;
   let raf = 0;
@@ -462,6 +476,27 @@ export function ActivityTable(options = {}) {
   });
 
   bodyEl.addEventListener("click", async (e) => {
+    const pinBtn = e.target.closest("[data-pin]");
+    const unpinBtn = e.target.closest("[data-unpin]");
+    if (pinBtn || unpinBtn) {
+      const btn = pinBtn || unpinBtn;
+      const id = Number(btn.getAttribute(pinBtn ? "data-pin" : "data-unpin"));
+      if (pinningId === id) return;
+      if (unpinBtn && !window.confirm(`Delete the persisted capture for request #${id} from the database?`)) return;
+      pinningId = id;
+      renderBody();
+      try {
+        if (pinBtn) await pinCapture(id);
+        else await unpinCapture(id);
+        await refresh();
+      } catch (err) {
+        console.error(err);
+      } finally {
+        pinningId = null;
+        renderBody();
+      }
+      return;
+    }
     const btn = e.target.closest("[data-view]");
     if (!btn) return;
     const id = Number(btn.getAttribute("data-view"));
