@@ -200,6 +200,34 @@ upstream:
     # when the UI is open
     - ^\/ws$|^\/api\/jobs$
 
+# pricing: approximate token pricing used by the UI's stats page to
+#   estimate request costs
+# - optional, default: empty (costs show as unknown until rates are set)
+# - rates are denominated in US dollars per million tokens
+# - models can override these defaults with their own pricing block
+# - the UI's Settings page can override currency, rate, and defaults per browser
+pricing:
+  # currency: display currency for estimated costs
+  # - optional, default: USD
+  # - valid values: USD, INR
+  # - when INR, dollar-denominated rates are converted with usdToINR
+  currency: USD
+
+  # usdToINR: USD to INR conversion rate applied when currency is INR
+  # - optional, default: 95
+  usdToINR: 95
+
+  # defaults: token prices applied to models without their own pricing block
+  # - optional, default: all zeros
+  # - input: USD per million input (prompt) tokens
+  # - output: USD per million output (generated) tokens
+  # - cached: USD per million cached tokens; when omitted, cached tokens
+  #   are billed at the input rate
+  defaults:
+    input: 0.05
+    output: 0.20
+    cached: 0.0125
+
 # profiles: named model ID replacements switched at runtime through the UI or API
 # - optional, default: empty dictionary
 # - one profile or none is active; hooks.on_startup.profile selects the profile
@@ -456,6 +484,16 @@ models:
         # objects can contain complex types with macro substitution
         # becomes: c: [0.7, false, "model: llama"]
         c: ["${temp}", false, "model: ${MODEL_ID}"]
+
+    # pricing: approximate token prices for this model, shown on the UI's
+    #   stats page as estimated costs
+    # - optional, default: the top-level pricing.defaults
+    # - rates are USD per million tokens; cached bills at the input rate
+    #   when omitted
+    pricing:
+      input: 2.50
+      output: 10.00
+      cached: 1.25
 
     # concurrencyLimit: overrides the allowed number of active parallel requests to a model
     # - optional, default: 0

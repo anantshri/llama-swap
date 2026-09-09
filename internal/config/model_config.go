@@ -174,6 +174,11 @@ type ModelConfig struct {
 	// Arbitrary metadata that can be exposed through the API
 	Metadata map[string]any `yaml:"metadata"`
 
+	// Pricing holds approximate token prices in USD per million tokens,
+	// used by the UI's stats page to estimate request costs. A nil value
+	// falls back to the top-level pricing.defaults.
+	Pricing *PricingRates `yaml:"pricing"`
+
 	// override global setting
 	SendLoadingState *bool `yaml:"sendLoadingState"`
 

@@ -204,6 +204,10 @@ type Config struct {
 
 	// upstream controls behaviour of the /upstream passthrough endpoint
 	Upstream UpstreamConfig `yaml:"upstream"`
+
+	// Pricing configures approximate token costs shown in the UI's stats
+	// page: display currency, USD -> INR rate, and default per-model prices.
+	Pricing PricingConfig `yaml:"pricing"`
 }
 
 // RoutingConfig is the canonical, normalized routing/scheduling configuration.

@@ -10,6 +10,20 @@ Long-form entries with full context live in
 
 ## [Unreleased]
 
+### Added
+
+- Approximate token-cost estimates on the Stats page. A new top-level
+  `pricing:` config section sets the display currency (USD, or INR with a
+  configurable `usdToINR` rate, default 95) and default per-million-token
+  rates; a per-model `pricing:` block overrides them. The server publishes the
+  snapshot through `GET /api/metrics/pricing` and embeds it in
+  `/api/metrics/stats`; the Stats page shows an "Est. Cost" summary tile and a
+  sortable per-model column. Cached tokens are deducted from billable input
+  and charged at their own rate (the input rate when unset). The UI's Settings
+  page adds per-browser overrides (cost on/off, currency, INR rate, default
+  rates) plus a "Compact large numbers" toggle that compresses Stats-page
+  token/request counts to M/B/T suffixes with exact values on hover.
+
 ### Added (selective upstream-PR ports)
 
 - Surface the upstream's own log output in the error when a model process exits

@@ -96,6 +96,30 @@
             "additionalProperties": false,
             "description": "Timeout settings for proxy connections."
         },
+        "pricingRates": {
+            "type": "object",
+            "properties": {
+                "input": {
+                    "type": "number",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Price in USD per million input (prompt) tokens."
+                },
+                "output": {
+                    "type": "number",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Price in USD per million output (generated) tokens."
+                },
+                "cached": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Price in USD per million cached tokens. When omitted, cached tokens are billed at the input rate."
+                }
+            },
+            "additionalProperties": false,
+            "description": "Approximate token prices in USD per million tokens, used by the UI's stats page to estimate costs."
+        },
         "groupsConfig": {
             "type": "object",
             "additionalProperties": {
@@ -590,6 +614,10 @@
                         "default": {},
                         "description": "Dictionary of arbitrary values included in /v1/models. Can contain complex types. Only passed through in /v1/models responses."
                     },
+                    "pricing": {
+                        "$ref": "#/definitions/pricingRates",
+                        "description": "Approximate token prices for this model, used by the UI's stats page to estimate costs. When omitted, the top-level pricing.defaults apply."
+                    },
                     "concurrencyLimit": {
                         "type": "integer",
                         "minimum": 0,
@@ -948,6 +976,33 @@
             },
             "additionalProperties": false,
             "default": {}
+        },
+        "pricing": {
+            "type": "object",
+            "properties": {
+                "currency": {
+                    "type": "string",
+                    "enum": [
+                        "USD",
+                        "INR"
+                    ],
+                    "default": "USD",
+                    "description": "Display currency for estimated token costs in the UI. Rates are configured in USD; selecting INR converts them using usdToINR. The UI can override this per browser."
+                },
+                "usdToINR": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "default": 95,
+                    "description": "USD to INR conversion rate applied when currency is INR."
+                },
+                "defaults": {
+                    "$ref": "#/definitions/pricingRates",
+                    "description": "Default token prices applied to models that do not define their own pricing block."
+                }
+            },
+            "additionalProperties": false,
+            "default": {},
+            "description": "Approximate token pricing used by the UI's stats page to estimate request costs. Per-model pricing overrides defaults."
         },
         "routing": {
             "type": "object",

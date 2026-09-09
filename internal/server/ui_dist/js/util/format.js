@@ -62,3 +62,39 @@ export function formatRelativeTime(timestamp) {
   if (diffInHours < 24) return `${diffInHours}h ago`;
   return formatAbsoluteTime(timestamp);
 }
+
+const fullNumberFormat = new Intl.NumberFormat();
+
+/** Render a scaled value with up to three significant digits (1.23M, 12.3M, 123M). */
+function scaledNumber(value) {
+  const digits = Math.abs(value) >= 100 ? 0 : Math.abs(value) >= 10 ? 1 : 2;
+  return value.toFixed(digits);
+}
+
+/**
+ * Format a large number compactly using M/B/T suffixes; smaller values fall
+ * back to the full locale-formatted number.
+ */
+export function formatCompactNumber(n) {
+  if (!Number.isFinite(n)) return "—";
+  const abs = Math.abs(n);
+  if (abs >= 1e12) return scaledNumber(n / 1e12) + "T";
+  if (abs >= 1e9) return scaledNumber(n / 1e9) + "B";
+  if (abs >= 1e6) return scaledNumber(n / 1e6) + "M";
+  return fullNumberFormat.format(n);
+}
+
+/**
+ * Format an approximate currency amount with adaptive precision:
+ * two decimals at $0.01 and above, up to four decimals below that, and a
+ * "<0.0001" floor for negligible amounts. Zero or missing values are unknown.
+ * The "~" prefix signals that the value is an estimate.
+ */
+export function formatMoney(amount, symbol = "$") {
+  if (amount == null || !Number.isFinite(amount) || amount <= 0) return "—";
+  let body;
+  if (amount >= 0.01) body = amount.toFixed(2);
+  else if (amount >= 0.0001) body = amount.toFixed(4);
+  else body = `<0.0001`;
+  return `~${symbol}${body}`;
+}

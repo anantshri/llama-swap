@@ -5,6 +5,129 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-09 — Stats page: approximate token costs + compact number display
+
+### What / goal
+
+Two Stats-page (`/ui/#/stats`) requests:
+
+1. An "approximate cost of tokens" column alongside the existing totals.
+2. Optionally compress large counts to M/B/T suffixes, controlled by a
+   setting.
+
+Design brainstormed with the user. Decisions:
+
+- Pricing source: a real `pricing:` config block (validated by the Go config
+  loader), **plus** per-browser overrides in the UI Settings page. Models
+  without their own pricing fall back to defaults; the cost display can be
+  turned off in Settings.
+- Currency: USD default, INR alternate, with an INR-per-USD ratio
+  configurable both in config (top-level `pricing.usdToINR`, default 95) and
+  in the UI.
+- Cost formula: cached tokens are a *subset* of prompt tokens in llama.cpp,
+  so they are deducted from billable input:
+  `(input − cached)×input_rate + cached×cached_rate + output×output_rate`,
+  all divided by 1M (rates are $/1M tokens). When a model has no `cached`
+  rate, cached tokens bill at the input rate (the OpenAI-style default).
+- Cost display: adaptive precision (`~$12.34` ≥ $0.01, four decimals down to
+  $0.0001, `<0.0001` below that, `—` for zero/unconfigured).
+- Compact numbers scope: Stats page only.
+
+### Change — backend
+
+- `internal/config/pricing.go` (new): `PricingRates` (`input`, `output`,
+  optional `cached`, all USD per 1M tokens, `>= 0` validation) and
+  `PricingConfig` (top-level `pricing:` section: `currency` USD|INR,
+  `usdToINR` default `DefaultUSDToINR = 95`, `defaults PricingRates`).
+  `Validate()` normalizes (empty currency → USD, zero ratio → 95).
+- `internal/config/model_config.go`: `ModelConfig.Pricing *PricingRates`
+  (`yaml:"pricing"`); pointer so "not set" (inherit defaults) is distinct.
+- `internal/config/load.go`: validates top-level pricing and every model's
+  pricing during load (errors name the model, e.g. `model m1 pricing.output`).
+- `internal/server/apipricing.go` (new): `APIPricing` snapshot
+  (`currency`, `usd_to_inr`, `defaults`, `models: {modelId: rates}` — only
+  models with a pricing block listed) served at `GET /api/metrics/pricing`
+  and embedded in the `/api/metrics/stats` response as a `pricing` key (the
+  handler now encodes `struct { store.ActivityStats; Pricing APIPricing }`,
+  so the existing JSON shape is unchanged apart from the new key). Normalizes
+  blank currency/zero ratio so consumers never see a degenerate snapshot.
+  No locking needed: `s.cfg` is immutable per Server instance (hot reload
+  creates a new Server).
+- `internal/config/config-schema.json`: shared `pricingRates` definition,
+  root `pricing` property, model-level `pricing` property.
+- `docs/config.example.yaml`: documents the top-level `pricing:` section and
+  a per-model example (the MCP doc agent indexes this file, so its golden
+  section list in `internal/docagent/golden_test.go` gained `pricing`).
+
+### Change — frontend (vanilla ES modules, no build step)
+
+- `js/util/format.js`: `formatCompactNumber()` (3 significant digits with
+  M/B/T suffixes from 1e6 up; full locale format below) and `formatMoney()`
+  (adaptive precision, `~` prefix, `—` for zero/missing).
+- `js/util/pricing.js` (new): `resolveRates()` (model config block is
+  authoritative; otherwise UI default rates per field, falling through to
+  server defaults), `estimateCostUSD()` (cached-deducted formula),
+  `toDisplayCurrency()`/`currencySymbol()`/`formatCost()`.
+- `js/preferences.js` (new): `persistent()` stores —
+  `stats-compactNumbers` (off), `stats-showCost` (on), `stats-currency`
+  ("" = follow server), `stats-inrPerUsd` (0 = follow server),
+  `stats-defaultRates` (null fields = follow server).
+- `js/pages/stats.js`: sortable `Est. Cost` column (cost header/cells appear
+  only when `showCost` is on; `renderHeader()` adds/removes the `th`, the
+  colspan tracks 9/10), "Est. Cost" summary tile (sum of per-model costs),
+  compact formatting with exact-value `title` tooltips on the four count
+  columns, and live re-render on preference changes (subscriptions cleaned
+  up in `destroy()`).
+- `js/pages/settings.js`: new "Stats page" card — compact-numbers toggle,
+  show-cost toggle, currency segmented control (Auto/USD/INR; the INR-rate
+  input is disabled only for USD since Auto may resolve to INR), INR-per-USD
+  input, and per-field default-rate inputs whose placeholders show the
+  server's configured defaults (fetched from `/api/metrics/pricing`).
+- `css/newpages.css`: `.settings-number-input`, `.settings-rates-row`,
+  `.settings-rates-field`.
+
+### Commands
+
+- `go test ./internal/config/ -run TestConfig_Pricing` → ok
+- `go test ./internal/server/ -run "TestServer_APIMetricsPricing|TestServer_APIMetricsStats"` → ok
+- `bun build --no-bundle` on every touched JS module → parses/resolves
+- `bun /tmp/opencode/pricing-selftest.js` → formatter/cost unit checks ALL PASS
+- `make test-dev` → all packages ok (staticcheck binary absent in env)
+- `make gosec` → 0 issues across linux/darwin/windows
+- `aidc-scan` → semgrep + gitleaks + gosec clean
+- End-to-end: built the binary, ran it with a priced config
+  (`/tmp/opencode/e2e-config.yaml`), sent one chat completion, confirmed
+  `/api/metrics/pricing`, `/api/metrics/stats` (now including `pricing`), and
+  the served UI modules (`/ui/js/...` → 200).
+
+### Verification
+
+Backend unit tests cover defaults, valid/invalid YAML (bad currency,
+negative ratio/rates), API snapshot shape, stats-embedding, and the
+unconfigured fallback. The JS pricing selftest exercises rate precedence
+(model config > UI defaults > server defaults), the cached-deduction math
+(600k×2.5 + 400k×1.25 + 500k×10 = $7.00/1M), INR conversion (~₹665.00), and
+compact/money formatting edge cases. `make test-dev`, `make gosec`, and
+`aidc-scan` all clean.
+
+### Notes
+
+- Caught in review: `renderHeader()` initially queried `[data-cost-th]`
+  which was never set — the cost column would have been appended on every
+  re-render. Fixed to query `th[data-sort="cost"]`.
+- Caught by the selftest: an earlier `resolveRates()` let a model's omitted
+  `cached` inherit the *server default* cached rate; per the documented
+  semantics a model pricing block is authoritative (omitted cached bills at
+  the model's input rate), so the fallback chain only applies to models
+  without a pricing block.
+- JSON cannot distinguish "model pricing omitted `cached`" from
+  "`cached: null`" (Go `*float64(nil)` marshals to `null`), which is exactly
+  the same meaning here — convenient, not a limitation.
+- Pre-existing dead `loading` flag in `stats.js` removed while touching the
+  file.
+
+---
+
 ## 2026-09-09 — Fix Activity page failing to render rows (`pinningId` scope)
 
 ### What / symptom
