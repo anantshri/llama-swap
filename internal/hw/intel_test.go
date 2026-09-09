@@ -6,8 +6,10 @@ func TestIntelGPU_DiscreteWithModel(t *testing.T) {
 	tests := map[uint16]intelGPUInfo{
 		0xE20B: {Architecture: "Battlemage", Model: "Arc B580"},
 		0xE20C: {Architecture: "Battlemage", Model: "Arc B570"},
-		0xE211: {Architecture: "Battlemage", Model: "Arc Pro B50"},
-		0xE212: {Architecture: "Battlemage", Model: "Arc Pro B60"},
+		0xE211: {Architecture: "Battlemage", Model: "Arc Pro B60"},
+		0xE212: {Architecture: "Battlemage", Model: "Arc Pro B50"},
+		0xE222: {Architecture: "Battlemage", Model: "Arc Pro B65"},
+		0xE223: {Architecture: "Battlemage", Model: "Arc Pro B70"},
 	}
 	for id, want := range tests {
 		got, ok := intelGPU(id)
@@ -19,7 +21,7 @@ func TestIntelGPU_DiscreteWithModel(t *testing.T) {
 
 func TestIntelGPU_BattlemageArchOnly(t *testing.T) {
 	// Known Battlemage die IDs without a resolved marketing model.
-	for _, id := range []uint16{0xE202, 0xE209, 0xE20D, 0xE210, 0xE216, 0xE220, 0xE223} {
+	for _, id := range []uint16{0xE202, 0xE209, 0xE20D, 0xE210, 0xE216, 0xE220, 0xE221} {
 		got, ok := intelGPU(id)
 		if !ok {
 			t.Fatalf("intelGPU(%#x) not found", id)

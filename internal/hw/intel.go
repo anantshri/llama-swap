@@ -41,10 +41,13 @@ var intelArchByID = func() map[uint16]string {
 		0x56C0, 0x56C1, 0x56C2,
 	)
 
-	// Discrete — Battlemage (Xe2-HPG), BMG G21.
+	// Discrete — Battlemage (Xe2-HPG), BMG G21 and G31 dies.
 	add("Battlemage",
+		// G21
 		0xE202, 0xE209, 0xE20B, 0xE20C, 0xE20D, 0xE210, 0xE211, 0xE212,
-		0xE216, 0xE220, 0xE221, 0xE222, 0xE223,
+		0xE216,
+		// G31 (Arc Pro B65/B70)
+		0xE220, 0xE221, 0xE222, 0xE223,
 	)
 
 	// Integrated — Tiger Lake (Xe / Iris Xe).
@@ -81,13 +84,16 @@ var intelArchByID = func() map[uint16]string {
 }()
 
 // intelModelByID maps device IDs to a marketing model only where a single die
-// maps to a single well-documented product name. Alchemist dies and integrated
-// parts are intentionally absent (one die ships under many SKU names).
+// maps to a single well-documented product name (per the pci.ids database).
+// Alchemist dies and integrated parts are intentionally absent (one die ships
+// under many SKU names).
 var intelModelByID = map[uint16]string{
 	0xE20B: "Arc B580",
 	0xE20C: "Arc B570",
-	0xE211: "Arc Pro B50",
-	0xE212: "Arc Pro B60",
+	0xE211: "Arc Pro B60",
+	0xE212: "Arc Pro B50",
+	0xE222: "Arc Pro B65",
+	0xE223: "Arc Pro B70",
 }
 
 // intelGPU returns the architecture and (optional) model for a known Intel PCI

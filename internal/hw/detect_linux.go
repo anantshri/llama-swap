@@ -160,11 +160,13 @@ func limitedMemoryCapacity(total uint64, paths []string) uint64 {
 }
 
 func detectDRMSysfs() ([]detectedAccelerator, error) {
-	return detectDRMSysfsFrom("/sys")
+	// sysfs lives under /sys, but render nodes are real device files under
+	// /dev/dri — the two roots are distinct hierarchies.
+	return detectDRMSysfsFrom("/sys", "/dev/dri")
 }
 
-func detectDRMSysfsFrom(sysRoot string) ([]detectedAccelerator, error) {
-	paths, err := filepath.Glob(filepath.Join(sysRoot, "class", "drm", "card*"))
+func detectDRMSysfsFrom(sysfsRoot, driRoot string) ([]detectedAccelerator, error) {
+	paths, err := filepath.Glob(filepath.Join(sysfsRoot, "class", "drm", "card*"))
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +177,7 @@ func detectDRMSysfsFrom(sysRoot string) ([]detectedAccelerator, error) {
 		}
 		devicePath := filepath.Join(cardPath, "device")
 		resolved, err := filepath.EvalSymlinks(devicePath)
-		if err != nil || !hasAccessibleRenderNode(devicePath, filepath.Join(sysRoot, "dev", "dri")) {
+		if err != nil || !hasAccessibleRenderNode(devicePath, driRoot) {
 			continue
 		}
 		vendorID := readTrimmed(filepath.Join(devicePath, "vendor"))
@@ -195,7 +197,7 @@ func detectDRMSysfsFrom(sysRoot string) ([]detectedAccelerator, error) {
 		}
 		driverVersion := ""
 		if driverName != "" {
-			driverVersion = readTrimmed(filepath.Join(sysRoot, "module", driverName, "version"))
+			driverVersion = readTrimmed(filepath.Join(sysfsRoot, "module", driverName, "version"))
 		}
 		var driver *Driver
 		if driverName != "" || driverVersion != "" {

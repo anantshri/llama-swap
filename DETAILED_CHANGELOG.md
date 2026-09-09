@@ -5,6 +5,83 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-09 — hw: follow-up — sysfs probe regression + B70 classification
+
+### Symptom
+
+After deploying the xpu-smi probe to dumbo, the Hardware page showed the
+Arc Pro B70 with `31.9 GiB (Dedicated)` but **Architecture: Not detected**
+and **Power Limit: Not detected** — both had worked before the change.
+
+### Diagnosis
+
+Two independent defects:
+
+1. **Regression (the important one):** the xpu-smi refactor introduced
+   `detectDRMSysfsFrom(sysRoot)` and rewired the render-node check to
+   `filepath.Join(sysRoot, "dev", "dri")` → `/sys/dev/dri`, which does not
+   exist — render nodes live at `/dev/dri`, a different hierarchy from
+   sysfs. `hasAccessibleRenderNode` therefore failed for every card on a
+   real host and `detectDRMSysfs` returned nothing, losing the sysfs
+   record that supplied architecture (PCI-ID table), power limit, and
+   driver-module name. The unit test missed it because its fixture
+   created `renderD128` under the temp sysfs root's own `dev/dri`,
+   mirroring the wrong path.
+2. **Classification gaps (pre-existing):** `intelModelByID` had B50/B60
+   swapped (`0xE211` is B60, `0xE212` is B50 per pci.ids) and no entries
+   for the Battlemage G31 dies (`0xE222` Arc Pro B65, `0xE223` Arc Pro
+   B70) — although both G31 IDs were already in the architecture table,
+   so sysfs-side architecture for the B70 worked before the regression.
+
+### Change
+
+- `internal/hw/detect_linux.go`: `detectDRMSysfsFrom(sysfsRoot, driRoot)`
+  takes **two** roots; production wiring passes `/sys` and `/dev/dri`.
+  A comment records that the hierarchies are distinct.
+- `internal/hw/intel_linux_test.go`: the sysfs fixture uses disjoint temp
+  directories for the sysfs tree and the DRI tree, so joining them under
+  one root fails the test (this is the guard that was missing).
+- `internal/hw/intel_linux.go`: the xpu-smi record now maps
+  `pci_device_id` through `intelGPU()` to fill Architecture (and a model
+  fallback), so it is populated even where sysfs is unavailable; the
+  driver name is inferred from the branded version prefix (`I915_` →
+  i915, `XE_` → xe) instead of being hardcoded `xe` (wrong for i915
+  Flex cards) — bare versions like dumbo's `17012946` leave the name for
+  sysfs to fill.
+- `internal/hw/intel.go`: Battlemage comment split G21/G31; model table
+  fixed — `0xE211` Arc Pro B60, `0xE212` Arc Pro B50, `0xE222` Arc Pro
+  B65, `0xE223` Arc Pro B70 (verified against the pci.ids database and
+  torvalds/linux `include/drm/intel/pciids.h`).
+
+### Tests
+
+- Fixture test now proves a card is detected with render nodes in a root
+  disjoint from sysfs (fails under the `/sys/dev/dri` bug).
+- `TestHardware_IntelXPUSMIB70`: dumbo's exact record — Battlemage from
+  `0xE223`, nil driver name for a bare numeric version, 32 GiB dedicated.
+- `TestHardware_IntelXPUSMII915DriverName`: I915_ prefix infers i915.
+- `TestIntelGPU_DiscreteWithModel` / `BattlemageArchOnly` updated for the
+  corrected B50/B60 and new B65/B70 entries.
+- Merge test rebuilt to use a no-`pci_device_id` fixture so it still
+  proves the sysfs record contributes architecture and driver name.
+
+### Commands
+
+- `go test -run "TestHardware_Intel|TestIntelGPU" ./internal/hw/` — 14 passed.
+- `make test-dev` — all packages ok (go test + staticcheck).
+- `make gosec` — 0 issues (linux, darwin, windows).
+- `aidc-scan` — clean.
+
+### Notes
+
+Lesson recorded: a fixture that mirrors the code's (wrong) path
+convention instead of the real filesystem layout passes while production
+breaks — fixture layouts for path-based code should be modeled on the
+real host hierarchy, and refactors that parameterize hardcoded paths
+need extra suspicion when the paths span different filesystem roots.
+
+---
+
 ## 2026-09-09 — hw: Intel dGPU VRAM via xpu-smi (was "Shared System")
 
 ### Symptom

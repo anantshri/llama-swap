@@ -122,7 +122,15 @@ Long-form entries with full context live in
   "Shared System" memory with no capacity: a new `xpu-smi` (Intel XPU Manager)
   probe supplies the dedicated VRAM size and merges over the sysfs record by
   PCI address, matching the existing `nvidia-smi`/`rocm-smi` probes. Applies
-  when the driver does not expose `mem_info_vram_total` in sysfs.
+  when the driver does not expose `mem_info_vram_total` in sysfs. Follow-up
+  fix for a regression in the first cut: the sysfs probe looked for render
+  nodes under `/sys/dev/dri` (which does not exist), silently dropping every
+  sysfs accelerator record — Architecture and Power Limit showed "Not
+  detected" on hosts where they had worked before. Render-node lookup is back
+  to `/dev/dri`, guarded by a fixture test with disjoint sysfs/dev roots. The
+  xpu-smi probe now also derives Architecture from the reported PCI device
+  ID, the Arc Pro B65/B70 model names were added, and the swapped B50/B60
+  entries were corrected (per the pci.ids database).
 - Activity page rows render again. The pin-button change referenced
   `pinningId` from `cellHtml`, a module-scope function where that variable does
   not exist, so any row with a capture threw a `ReferenceError` and the

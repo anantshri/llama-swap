@@ -81,3 +81,28 @@ per-device dump shape, byte-unit memory field, and the "Discrete GPU" /
   documents `sudo xpu-smi discovery`); if it fails without root the probe
   silently contributes nothing — same graceful degradation as the other
   CLI probes.
+
+## Follow-up (same day): regression found on dumbo
+
+Deployed output showed `31.9 GiB (Dedicated)` (xpu-smi working) but
+**Architecture / Power Limit "Not detected"** — both regressions.
+
+- **Root cause:** the refactor above rewired the render-node check to
+  `/sys/dev/dri` (joining `dev/dri` under the sysfs root). That path does
+  not exist — render nodes live at `/dev/dri`, a hierarchy separate from
+  sysfs — so `hasAccessibleRenderNode` failed for every card and the
+  sysfs probe returned zero accelerators on real hosts. The unit-test
+  fixture mirrored the wrong convention (render node under the temp sysfs
+  root's `dev/dri`) and so passed.
+- **Fix:** `detectDRMSysfsFrom(sysfsRoot, driRoot)` with production roots
+  `/sys` and `/dev/dri`; fixture test now uses disjoint temp directories
+  so the bug class fails the test.
+- **Also fixed while here:** `0xE211`/`0xE212` model names were swapped
+  (B60/B50 per pci.ids); added `0xE222` Arc Pro B65 and `0xE223` Arc Pro
+  B70 (Battlemage G31); xpu-smi record now derives Architecture from its
+  `pci_device_id` and infers the driver name from the branded version
+  prefix (`I915_`/`XE_`) instead of hardcoding `xe`.
+- Verification: 14 Intel tests pass; `make test-dev` ok; `make gosec` 0;
+  `aidc-scan` clean. Expected dumbo output after redeploy: Architecture
+  `Battlemage`, Memory `31.9 GiB (Dedicated)`, Driver `xe 17012946`,
+  Power Limit from hwmon sysfs where exposed.

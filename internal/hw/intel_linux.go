@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -30,6 +31,7 @@ type xpusmiDevice struct {
 	DeviceType             string      `json:"device_type"`
 	DriverVersion          string      `json:"driver_version"`
 	BDF                    string      `json:"pci_bdf_address"`
+	PCIDeviceID            string      `json:"pci_device_id"`
 	MemoryPhysicalSizeByte json.Number `json:"memory_physical_size_byte"`
 }
 
@@ -97,18 +99,42 @@ func xpusmiRecordToAccelerator(device xpusmiDevice, identity string) detectedAcc
 	if capacity, err := device.MemoryPhysicalSizeByte.Int64(); err == nil && capacity > 0 {
 		memory.CapacityBytes = uint64Ptr(uint64(capacity))
 	}
+	// The kernel module name is not reported as a field; infer it from the
+	// version prefix Intel brands its driver strings with (I915_..., XE_...)
+	// and otherwise leave it for the sysfs probe to fill from the driver
+	// symlink.
 	var driver *Driver
 	if version := nonEmptyStringPtr(device.DriverVersion); version != nil {
-		driver = &Driver{Name: stringPtr("xe"), Version: version}
+		var name *string
+		switch {
+		case strings.HasPrefix(*version, "I915_"):
+			name = stringPtr("i915")
+		case strings.HasPrefix(*version, "XE_"):
+			name = stringPtr("xe")
+		}
+		driver = &Driver{Name: name, Version: version}
+	}
+	// Architecture (and a shorter model) from the PCI device-ID table, so
+	// it is populated even when the sysfs probe is unavailable.
+	var architecture *string
+	model := device.DeviceName
+	if id, err := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(device.PCIDeviceID)), "0x"), 16, 16); err == nil {
+		if info, ok := intelGPU(uint16(id)); ok {
+			architecture = nonEmptyStringPtr(info.Architecture)
+			if model == "" {
+				model = info.Model
+			}
+		}
 	}
 	return detectedAccelerator{
 		identity: identity,
 		value: Accelerator{
-			Kind:   "gpu",
-			Vendor: stringPtr("Intel"),
-			Model:  nonEmptyStringPtr(device.DeviceName),
-			Memory: memory,
-			Driver: driver,
+			Kind:         "gpu",
+			Vendor:       stringPtr("Intel"),
+			Model:        nonEmptyStringPtr(model),
+			Architecture: architecture,
+			Memory:       memory,
+			Driver:       driver,
 		},
 	}
 }
