@@ -5,6 +5,72 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-09 — Sortable Stats page table (folded fork PR #19)
+
+### What
+
+Every column header on the Stats page (Model, Requests, Input/Output/Cached
+Tokens, Avg Prompt/Gen Speed, Avg Duration, Last Used) is now clickable to
+sort; clicking again toggles ascending/descending. Default remains
+requests-descending, matching the previous server-side ordering. Sorting is
+client-side over the rows already returned by `/api/metrics/stats`; ties break
+by model name.
+
+### Why
+
+anantshri/llama-swap#18 ("the stats page table should be sortable") was
+addressed by ai-anant's PR #19. That PR could not be applied as a patch: it was
+written against the pre-rebase `stats.js` that fetched
+`/api/metrics/activity?limit=999` and aggregated client-side (Maps of
+`promptSpeeds` arrays, `toRow`/`compareRows` over aggregated buckets). This
+fork's `stats.js` now consumes the server-aggregated `/api/metrics/stats`
+payload (snake_case per-model rows), so the PR's *feature* was folded in and
+its aggregation helpers dropped.
+
+### How
+
+- `internal/server/ui_dist/js/pages/stats.js`:
+  - `<th>` headers gained `stats-th-sortable` + `data-sort` keys
+    (`model`, `requests`, `inputTokens`, `outputTokens`, `cachedTokens`,
+    `avgPromptSpeed`, `avgGenSpeed`, `avgDuration`, `lastTimestamp`) and a
+    `.stats-sort-ind` indicator span — same pattern as `activityTable.js`.
+  - `sortKey`/`sortOrder` state (default `requests`/`desc`);
+    `sortValue()` maps the camelCase sort keys onto the snake_case server
+    fields, with `null` speeds → `-1`, missing `last_used` → `0`, and
+    `avgDuration` computed as `total_duration_ms / requests`;
+    `compareRows()` applies direction and model-name tie-break;
+    `renderSortIndicator()` shows ▲/▼ on the active column.
+  - `renderTable` sorts a copy of `stats.models` before rendering (the
+    server's array is left untouched) and an `thead` click handler toggles
+    key/direction and re-renders.
+- `internal/server/ui_dist/css/app.css`: `.stats-th-sortable`
+  (pointer cursor + hover color) and `.stats-sort-ind(.active)`
+  (dimmed 0.35 → active 1) matching `newpages.css`'s activity equivalents.
+
+### Commands
+
+- `curl -fsSL https://bun.sh/install | bash` (env had no JS engine; pmg shim
+  needs the real bun on PATH)
+- `bun build --no-bundle internal/server/ui_dist/js/pages/stats.js` → syntax OK
+- `go test ./internal/server/` → ok
+- `make test-dev` → all packages ok (staticcheck not installed here; no Go
+  code changed)
+- `aidc-scan` → semgrep + gitleaks clean
+
+### Verification
+
+`bun build --no-bundle` parses the module (equivalent of the PR's
+`node --check`). `go test ./internal/server/` covers UI embedding/serving
+(`ui_test.go`). Manual check: header click cycles desc → asc, indicator moves
+with the active column, empty state still renders.
+
+### Notes
+
+Original PR: https://github.com/anantshri/llama-swap/pull/19 (cc7a865),
+issue: https://github.com/anantshri/llama-swap/issues/18.
+
+---
+
 ## 2026-09-06 — Pin Activity captures to the sqlite store
 
 ### What
