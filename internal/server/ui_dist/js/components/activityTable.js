@@ -77,7 +77,7 @@ function pageWindow(page, pageCount, span = 2) {
   return out;
 }
 
-function cellHtml(m, key, loadingCaptureId) {
+function cellHtml(m, key, loadingCaptureId, pinningId) {
   switch (key) {
     case "id":
       return `<td class="activity-td">${m.id}</td>`;
@@ -326,7 +326,7 @@ export function ActivityTable(options = {}) {
       bodyEl.innerHTML = `<tr><td class="activity-empty" colspan="${cols.length}">${escapeHtml(emptyMessage)}</td></tr>`;
       return;
     }
-    bodyEl.innerHTML = rows.map((m) => `<tr class="activity-tr">${cols.map((c) => cellHtml(m, c.key, loadingCaptureId)).join("")}</tr>`).join("");
+    bodyEl.innerHTML = rows.map((m) => `<tr class="activity-tr">${cols.map((c) => cellHtml(m, c.key, loadingCaptureId, pinningId)).join("")}</tr>`).join("");
   }
 
   function renderInflightHead() {

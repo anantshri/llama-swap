@@ -5,6 +5,63 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-09 — Fix Activity page failing to render rows (`pinningId` scope)
+
+### What / symptom
+
+The `#/activity` table stopped populating after the pin-button change
+(2026-09-06): no request rows rendered and captures could not be viewed.
+Console showed, once per refresh:
+
+```
+activityTable.js:447 Failed to refresh activity: ReferenceError: pinningId is not defined
+    at cellHtml (activityTable.js:118:20)
+    at renderBody (activityTable.js:329:29)
+    at refresh (activityTable.js:443:7)
+```
+
+### Why
+
+`8b143d3` added the capture pin/unpin buttons and made `cellHtml` read
+`const busy = pinningId === m.id;` when rendering the Capture column.
+`cellHtml` is a module-scope helper; `pinningId` is a local of the
+`ActivityTable()` closure (used by the click handler), so every row with
+`has_capture || pinned` threw a `ReferenceError` mid-`renderBody`. The throw
+was swallowed by `refresh()`'s `catch` (logged as "Failed to refresh
+activity"), leaving `rows` assigned but the table body empty. Only rows with a
+capture triggered it, which is why an empty log looked fine and the breakage
+appeared as soon as any capture existed.
+
+### How
+
+- `cellHtml(m, key, loadingCaptureId)` gained a fourth parameter
+  `pinningId` (same pattern as `loadingCaptureId`, which the original
+  pin change should have followed).
+- The single call site in `renderBody` passes it:
+  `cellHtml(m, c.key, loadingCaptureId, pinningId)`.
+- The click handler keeps using the closure variable — unchanged.
+
+### Commands
+
+- `go test ./internal/server/ -run 'TestUI|TestServe' -count=1` → ok
+- `~/.bun/bin/bun build --no-bundle
+  internal/server/ui_dist/js/components/activityTable.js` → parses (PATH bun
+  shim is broken; use `~/.bun/bin/bun` directly)
+- `aidc-scan` → semgrep + gitleaks clean
+
+### Verification
+
+`bun build --no-bundle` parses the module. `rg 'pinningId'` confirms the only
+remaining uses are the new parameter, the closure declaration, and the click
+handler. Manual check: load `#/activity` with ≥1 capture — rows render, View
+opens the capture dialog, pin/unpin still disable their buttons while in
+flight (busy state flows through the new parameter).
+
+### Notes
+Regression introduced by 8b143d3 (2026-09-06, pin Activity captures).
+
+---
+
 ## 2026-09-09 — Sortable Stats page table (folded fork PR #19)
 
 ### What

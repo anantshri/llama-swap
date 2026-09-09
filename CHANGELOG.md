@@ -95,6 +95,11 @@ Long-form entries with full context live in
 
 ### Fixed
 
+- Activity page rows render again. The pin-button change referenced
+  `pinningId` from `cellHtml`, a module-scope function where that variable does
+  not exist, so any row with a capture threw a `ReferenceError` and the
+  refresh's `catch` left the table empty. `pinningId` is now passed to
+  `cellHtml` like `loadingCaptureId`.
 - Intel GPU hardware detection now reports an architecture (and, for Battlemage
   discrete cards, a model) on Linux by mapping the PCI device ID to a generation
   codename — DG1, Alchemist, Battlemage, and recent integrated Xe (Tiger/Rocket/
