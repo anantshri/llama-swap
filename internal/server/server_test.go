@@ -265,6 +265,59 @@ func TestServer_RouteToLocalModel_PrefersLocalCollision(t *testing.T) {
 	}
 }
 
+func TestServer_GlobalConcurrencyLimit(t *testing.T) {
+	t.Run("zero disables the limiter, unbounded requests pass", func(t *testing.T) {
+		s := newTestServerWithConfig(
+			config.Config{GlobalConcurrencyLimit: 0},
+			newStubRouter([]string{"local-model"}, "ok"),
+			newStubRouter(nil, ""),
+		)
+
+		for i := 0; i < 5; i++ {
+			w := httptest.NewRecorder()
+			s.ServeHTTP(w, chatRequest("local-model"))
+			if w.Code != http.StatusOK {
+				t.Fatalf("request %d: status=%d body=%q", i, w.Code, w.Body.String())
+			}
+		}
+	})
+
+	t.Run("rejects requests beyond the configured limit with 429", func(t *testing.T) {
+		release := make(chan struct{})
+		started := make(chan struct{})
+		blocking := newStubRouter([]string{"local-model"}, "")
+		blocking.serveHTTP = func(w http.ResponseWriter, r *http.Request) {
+			close(started)
+			<-release
+			w.WriteHeader(http.StatusOK)
+		}
+
+		s := newTestServerWithConfig(
+			config.Config{GlobalConcurrencyLimit: 1},
+			blocking,
+			newStubRouter(nil, ""),
+		)
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			w := httptest.NewRecorder()
+			s.ServeHTTP(w, chatRequest("local-model"))
+		}()
+
+		<-started
+
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, chatRequest("local-model"))
+		if w.Code != http.StatusTooManyRequests {
+			t.Fatalf("status=%d body=%q want 429", w.Code, w.Body.String())
+		}
+
+		close(release)
+		<-done
+	})
+}
+
 func TestServer_UnknownModelReturns404(t *testing.T) {
 	s := newTestServer(
 		newStubRouter([]string{"local-model"}, ""),

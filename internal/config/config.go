@@ -168,6 +168,10 @@ type Config struct {
 	Profiles           map[string]ProfileConfig  `yaml:"profiles"`
 	Selectors          map[string]SelectorConfig `yaml:"selectors"`
 
+	// GlobalConcurrencyLimit caps the number of inference requests served at
+	// once across all models. 0 (default) means no limit. See issue #1086.
+	GlobalConcurrencyLimit int `yaml:"globalConcurrencyLimit"`
+
 	// routing is the canonical source for swap/scheduling configuration.
 	// New code must read Routing, never the backwards-compat fields below.
 	Routing RoutingConfig `yaml:"routing"`
