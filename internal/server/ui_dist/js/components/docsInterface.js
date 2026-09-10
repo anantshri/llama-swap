@@ -6,14 +6,15 @@
 // tool set are the thing being shipped — they are tuned together against
 // evals/docs-agent, and a user who turns one of them down just gets worse
 // answers with no way to tell why. The only choice left is the model.
-import { el, cleanupAll, escapeHtml } from "../dom.js";
-import { playgroundModels, hasListedModels } from "../api.js";
-import { persistent } from "../store.js";
+import { el, cleanupAll, escapeHtml, stickToBottom } from "../dom.js";
+import { playgroundModels } from "../api.js";
+import { persistent, loadStoredMessages, throttledSaver } from "../store.js";
 import { streamChatCompletion } from "../api/chat.js";
 import { runAgent, sanitizeMessages, DEFAULT_MAX_ITERATIONS } from "../agent/agentLoop.js";
 import { fetchToolDefinitions, callTool, friendlyToolName } from "../agent/agentTools.js";
 import { DOCS_AGENT_SYSTEM_PROMPT } from "../agent/docsAgentPrompt.js";
 import { playgroundStores } from "../playgroundActivity.js";
+import { getTextContent } from "../util/content.js";
 import { AgentWork } from "./agentWork.js";
 import { renderMarkdown } from "../markdown.js";
 
@@ -27,45 +28,27 @@ const SUGGESTIONS = [
   "My model won't load. How do I debug it?",
 ];
 
-function getTextContent(content) {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter((p) => p?.type === "text")
-      .map((p) => p.text)
-      .join("");
-  }
-  return "";
-}
-
-function loadMessages() {
-  try {
-    const saved = localStorage.getItem("playground-docs-messages");
-    // sanitizeMessages prunes tool calls a reload or cancel left unanswered.
-    // Sending one of those upstream is a hard 400, which reads to the user
-    // as a chat that is broken and will not recover.
-    return saved ? sanitizeMessages(JSON.parse(saved)) : [];
-  } catch {
-    return [];
-  }
-}
+// Docs joins multi-part text with "" (no separator) rather than content.js's
+// default "\n", matching the original Svelte rendering.
+const textOf = (content) => getTextContent(content, "");
 
 export function DocsInterface() {
   const selectedModelStore = persistent("playground-docs-model", "");
 
-  let messages = loadMessages();
+  // sanitizeMessages prunes tool calls a reload or cancel left unanswered.
+  // Sending one of those upstream is a hard 400, which reads to the user
+  // as a chat that is broken and will not recover.
+  let messages = loadStoredMessages("playground-docs-messages", sanitizeMessages);
   let userInput = "";
   let isStreaming = false;
   let isReasoning = false;
   let reasoningStartTime = 0;
   let abortController = null;
-  let userScrolledUp = false;
   let toolDefs = [];
   let toolsLoaded = false;
   let agentIteration = 0;
   let agentNotice = null;
   let showJinjaHint = false;
-  let lastSaveTime = 0;
 
   const root = el(`
     <div class="docs">
@@ -103,6 +86,9 @@ export function DocsInterface() {
   const cancelBtn = root.querySelector("[data-cancel]");
   const roundEl = root.querySelector("[data-round]");
   const jinjaHint = root.querySelector("[data-jinja-hint]");
+
+  const scroller = stickToBottom(messagesEl);
+  const saver = throttledSaver("playground-docs-messages");
 
   function toolLabels() {
     return new Map(toolDefs.map((t) => [t.function.name, friendlyToolName(t.function.name, t.function.title)]));
@@ -187,7 +173,7 @@ export function DocsInterface() {
       display.push({
         kind: "agent",
         content: assistantTurns
-          .map(({ message: m }) => getTextContent(m.content))
+          .map(({ message: m }) => textOf(m.content))
           .filter((content) => content.trim())
           .join("\n\n"),
         workItems: group.flatMap(({ message: m, idx: messageIdx }) => {
@@ -210,7 +196,7 @@ export function DocsInterface() {
               name: m.name ?? "",
               label: labels.get(m.name ?? "") ?? friendlyToolName(m.name ?? ""),
               args: calls.get(m.tool_call_id ?? "") ?? "",
-              content: getTextContent(m.content),
+              content: textOf(m.content),
               ok: m.toolOk,
               durationMs: m.toolDurationMs ?? 0,
               running: m.toolOk === undefined,
@@ -251,9 +237,9 @@ export function DocsInterface() {
       .map((item) => {
         if (item.kind === "message") {
           if (item.message.role === "user") {
-            return `<div class="docs-msg docs-msg-user"><div class="docs-bubble docs-bubble-user">${renderMarkdown(getTextContent(item.message.content))}</div></div>`;
+            return `<div class="docs-msg docs-msg-user"><div class="docs-bubble docs-bubble-user">${renderMarkdown(textOf(item.message.content))}</div></div>`;
           }
-          return `<div class="docs-msg docs-msg-system"><div class="docs-bubble">${renderMarkdown(getTextContent(item.message.content))}</div></div>`;
+          return `<div class="docs-msg docs-msg-system"><div class="docs-bubble">${renderMarkdown(textOf(item.message.content))}</div></div>`;
         }
         const streaming = isStreaming && item.isCurrent;
         const reasoning = isReasoning && item.isCurrent;
@@ -279,9 +265,7 @@ export function DocsInterface() {
       md.innerHTML = renderMarkdown(item.content) || (isStreaming && item.isCurrent ? "" : "<em class='muted'>(no content)</em>");
     });
 
-    if (!userScrolledUp) {
-      messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: isStreaming ? "instant" : "smooth" });
-    }
+    scroller.maybe(isStreaming);
   }
 
   messagesEl.addEventListener("click", (e) => {
@@ -297,26 +281,7 @@ export function DocsInterface() {
     }
   });
 
-  messagesEl.addEventListener("scroll", () => {
-    const { scrollTop, scrollHeight, clientHeight } = messagesEl;
-    userScrolledUp = scrollHeight - scrollTop - clientHeight > 40;
-  });
-
-  function persistMessages() {
-    const json = JSON.stringify(messages);
-    const elapsed = Date.now() - lastSaveTime;
-    const save = () => {
-      try {
-        localStorage.setItem("playground-docs-messages", json);
-      } catch {}
-      lastSaveTime = Date.now();
-    };
-    if (elapsed >= 2000) {
-      save();
-    } else {
-      setTimeout(save, 2000 - elapsed);
-    }
-  }
+  const persistMessages = () => saver.save(messages);
 
   /** Merges a patch into the last message. */
   function patchLast(patch) {
@@ -408,7 +373,7 @@ export function DocsInterface() {
 
     userInput = "";
     inputEl.value = "";
-    userScrolledUp = false;
+    scroller.reset();
     messages = [...messages, { role: "user", content: trimmedInput }];
 
     await regenerateFromIndex(messages.length - 1);
@@ -463,8 +428,8 @@ export function DocsInterface() {
             // prose, with no error anywhere. Catch the shape of that.
             showJinjaHint = toolDefs.some(
               (tool) =>
-                getTextContent(event.message.content).includes(`"${tool.function.name}"`) ||
-                getTextContent(event.message.content).includes(`${tool.function.name}(`)
+                textOf(event.message.content).includes(`"${tool.function.name}"`) ||
+                textOf(event.message.content).includes(`${tool.function.name}(`)
             );
           }
           break;

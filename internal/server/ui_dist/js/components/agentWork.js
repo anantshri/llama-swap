@@ -2,11 +2,9 @@
 // inside an assistant response. Ported from components/playground/AgentWork.svelte.
 import { el, escapeHtml } from "../dom.js";
 import { friendlyToolName } from "../agent/agentTools.js";
+import { formatDuration } from "../util/format.js";
 
-function formatDuration(ms) {
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
+const formatDurationMs = (ms) => formatDuration(ms, { subSecondMs: true, precision: 1 });
 
 // One work item: { kind: "reasoning", content, durationMs, running }
 //          or   { kind: "tool", name, label, args, content, ok, durationMs, running }
@@ -23,7 +21,7 @@ export function AgentWork({ workItems = [], onCollapse } = {}) {
         if (item.kind === "reasoning") {
           const meta = item.running
             ? "thinking…"
-            : `${item.content.length} chars${item.durationMs > 0 ? `, ${formatDuration(item.durationMs)}` : ""}`;
+            : `${item.content.length} chars${item.durationMs > 0 ? `, ${formatDurationMs(item.durationMs)}` : ""}`;
           return `
             <details class="agent-work-item agent-reasoning" ${item.running ? "open" : ""}>
               <summary class="agent-work-summary">
@@ -35,7 +33,7 @@ export function AgentWork({ workItems = [], onCollapse } = {}) {
             </details>`;
         }
         const statusCls = item.ok === false ? "agent-tool--err" : item.ok === true ? "agent-tool--ok" : "agent-tool--running";
-        const statusText = item.running ? "running…" : item.ok === false ? "failed" : item.ok === true ? formatDuration(item.durationMs) : "";
+        const statusText = item.running ? "running…" : item.ok === false ? "failed" : item.ok === true ? formatDurationMs(item.durationMs) : "";
         return `
           <details class="agent-work-item agent-tool ${statusCls}" ${item.running ? "open" : ""}>
             <summary class="agent-work-summary">

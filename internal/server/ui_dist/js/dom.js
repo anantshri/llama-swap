@@ -15,22 +15,6 @@ export function el(htmlStr) {
   return node ? document.adoptNode(node) : node;
 }
 
-// Build a document fragment from an HTML string (multiple roots).
-export function frag(htmlStr) {
-  const t = document.createElement("template");
-  t.innerHTML = htmlStr.trim();
-  return t.content;
-}
-
-export function clear(node) {
-  while (node.firstChild) node.removeChild(node.firstChild);
-}
-
-export function on(node, event, handler, opts) {
-  node.addEventListener(event, handler, opts);
-  return () => node.removeEventListener(event, handler, opts);
-}
-
 export function escapeHtml(s) {
   return String(s)
     .replace(/&/g, "&amp;")
@@ -38,6 +22,69 @@ export function escapeHtml(s) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+// Copy text to the clipboard, falling back to a hidden textarea + execCommand
+// outside secure contexts. Returns whether the copy succeeded.
+export async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.cssText = "position:fixed;left:-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    return true;
+  } catch (e) {
+    console.error("copy failed", e);
+    return false;
+  }
+}
+
+// Trigger a browser download for a blob/data URL and filename.
+export function triggerDownload(href, filename) {
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+// Playground stage blocks: working spinner and error panel. The per-interface
+// message class (e.g. "pg-audio-msg") carries the CSS specifics.
+export const pgSpinner = (msgClass, msg) => `
+  <div class="${msgClass}">
+    <div class="spinner"></div>
+    <p>${escapeHtml(msg)}</p>
+  </div>`;
+
+export const pgError = (msgClass, msg) => `
+  <div class="${msgClass} pg-error">
+    <p class="pg-error-title">Error</p>
+    <p class="pg-error-body">${escapeHtml(msg)}</p>
+  </div>`;
+
+// Auto-scroll a message list to its bottom unless the user has scrolled up
+// (following resumes when reset() is called, e.g. on send).
+export function stickToBottom(el) {
+  let userScrolledUp = false;
+  el.addEventListener("scroll", () => {
+    const { scrollTop, scrollHeight, clientHeight } = el;
+    userScrolledUp = scrollHeight - scrollTop - clientHeight > 40;
+  });
+  return {
+    reset: () => (userScrolledUp = false),
+    maybe(instant) {
+      if (userScrolledUp) return;
+      el.scrollTo({ top: el.scrollHeight, behavior: instant ? "instant" : "smooth" });
+    },
+  };
 }
 
 // Run a list of unsubscribe/cleanup functions, ignoring nullish entries.

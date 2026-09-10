@@ -2,8 +2,8 @@
 // Owns the message list, streaming lifecycle (abort + reasoning timing), image
 // attachments, persisted settings and messages. During streaming only the last
 // assistant ChatMessage is update()d so prior messages are not re-parsed.
-import { el, cleanupAll } from "../dom.js";
-import { observable, persistent } from "../store.js";
+import { el, cleanupAll, stickToBottom } from "../dom.js";
+import { observable, persistent, loadStoredMessages, throttledSaver } from "../store.js";
 import { models } from "../api.js";
 import { playgroundStores } from "../playgroundActivity.js";
 import { streamChatCompletion } from "../api/chat.js";
@@ -18,15 +18,6 @@ const ACCEPTED_IMAGE_FORMATS = ["image/jpeg", "image/png", "image/gif", "image/w
 const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20MB
 const MAX_IMAGES_PER_MESSAGE = 5;
 
-function loadMessages() {
-  try {
-    const saved = localStorage.getItem("playground-messages");
-    return saved ? JSON.parse(saved) : [];
-  } catch {
-    return [];
-  }
-}
-
 export function ChatInterface() {
   const selectedModel = persistent("playground-selected-model", "");
   const systemPrompt = persistent("playground-system-prompt", "");
@@ -35,7 +26,7 @@ export function ChatInterface() {
   const maxTokens = persistent("playground-max-tokens", 4096);
   const userInput = observable("");
 
-  let messages = loadMessages();
+  let messages = loadStoredMessages("playground-messages");
   let components = [];
   let isStreaming = false;
   let isReasoning = false;
@@ -44,7 +35,6 @@ export function ChatInterface() {
   let showSettings = false;
   let attachedImages = [];
   let imageError = null;
-  let userScrolledUp = false;
 
   const root = el(`
     <div class="chat">
@@ -87,6 +77,9 @@ export function ChatInterface() {
 
   const modelSel = ModelSelector({ value: selectedModel, placeholder: "Select a model...", disabled: false });
   modelHost.appendChild(modelSel.el);
+
+  const scroller = stickToBottom(messagesEl);
+  const saver = throttledSaver("playground-messages");
 
   const textarea = ExpandableTextarea({
     value: userInput,
@@ -134,57 +127,25 @@ export function ChatInterface() {
       components.push(c);
       messagesEl.appendChild(c.el);
     }
-    maybeScroll();
+    scroller.maybe(isStreaming);
   }
 
   function updateLast() {
     const i = messages.length - 1;
     if (i >= 0 && components[i]) {
       components[i].update(propsFor(i));
-      maybeScroll();
+      scroller.maybe(isStreaming);
     }
   }
-
-  function maybeScroll() {
-    if (userScrolledUp) return;
-    messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: isStreaming ? "instant" : "smooth" });
-  }
-
-  messagesEl.addEventListener("scroll", () => {
-    const { scrollTop, scrollHeight, clientHeight } = messagesEl;
-    userScrolledUp = scrollHeight - scrollTop - clientHeight > 40;
-  });
 
   // ---- persistence (throttled to once per 2s) ----
-  let lastSaveTime = 0;
-  let saveTimer = null;
-  function saveMessages() {
-    const json = JSON.stringify(messages);
-    const elapsed = Date.now() - lastSaveTime;
-    const doSave = () => {
-      try {
-        localStorage.setItem("playground-messages", json);
-      } catch {
-        /* ignore quota errors */
-      }
-      lastSaveTime = Date.now();
-    };
-    if (saveTimer) {
-      clearTimeout(saveTimer);
-      saveTimer = null;
-    }
-    if (elapsed >= 2000) {
-      doSave();
-    } else {
-      saveTimer = setTimeout(doSave, 2000 - elapsed);
-    }
-  }
+  const saveMessages = () => saver.save(messages);
 
   // ---- streaming ----
   function sendMessage() {
     const trimmed = userInput.get().trim();
     if ((!trimmed && attachedImages.length === 0) || !selectedModel.get() || isStreaming) return;
-    userScrolledUp = false;
+    scroller.reset();
 
     let content;
     if (attachedImages.length > 0) {
@@ -492,7 +453,7 @@ export function ChatInterface() {
     el: root,
     destroy() {
       if (isStreaming) cancelStreaming();
-      if (saveTimer) clearTimeout(saveTimer);
+      saver.cancelPending();
       components.forEach((c) => c.destroy());
       cleanupAll([modelSel.destroy, textarea.destroy, ...subs]);
     },

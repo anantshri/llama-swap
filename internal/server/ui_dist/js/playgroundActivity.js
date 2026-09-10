@@ -24,3 +24,25 @@ export const playgroundStores = {
   concurrencyRunning,
   docsStreaming,
 };
+
+// Shared playground task lifecycle: flips the activity store, supplies an
+// AbortSignal for the cancel buttons, swallows AbortError, and settles the
+// store when the work ends. Returns a thenable exposing abort() and, once
+// settled, .error (the caught error's message, or null on success/abort).
+export function runTask(store, fn) {
+  const abortController = new AbortController();
+  const run = (async () => {
+    let error = null;
+    store.set(true);
+    try {
+      await fn(abortController.signal);
+    } catch (err) {
+      if (err.name !== "AbortError") error = err.message || "An error occurred";
+    } finally {
+      store.set(false);
+    }
+    return { error };
+  })();
+  run.abort = () => abortController.abort();
+  return run;
+}

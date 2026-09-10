@@ -170,7 +170,12 @@ export function parseChatCompletionsLine(line) {
   }
 }
 
-async function* parseChatCompletionsStream(reader) {
+// Shared streaming-reader loop: decodes bytes, splits complete chunks on
+// `sep`, and yields whatever `handle(chunk)` returns. A yielded done-chunk
+// stops the stream. `flushLast` (the line-based chat-completions format)
+// also runs the leftover buffer through `handle` at stream end, dropping a
+// trailing done marker the same way the mid-stream path would yield it.
+async function* readChunks(reader, sep, handle, flushLast = false) {
   const decoder = new TextDecoder();
   let buffer = "";
 
@@ -179,26 +184,31 @@ async function* parseChatCompletionsStream(reader) {
     if (done) break;
 
     buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
+    const parts = buffer.split(sep);
+    buffer = parts.pop() || "";
 
-    for (const line of lines) {
-      const result = parseChatCompletionsLine(line);
-      if (result?.done) {
-        yield result;
-        return;
-      }
-      if (result) {
-        yield result;
+    for (const part of parts) {
+      for (const item of handle(part)) {
+        yield item;
+        if (item.done) return;
       }
     }
   }
 
-  const result = parseChatCompletionsLine(buffer);
-  if (result && !result.done) {
-    yield result;
+  if (flushLast) {
+    for (const item of handle(buffer)) {
+      if (item.done) break;
+      yield item;
+    }
   }
 }
+
+function chatCompletionsChunk(line) {
+  const result = parseChatCompletionsLine(line);
+  return result ? [result] : [];
+}
+
+const parseChatCompletionsStream = (reader) => readChunks(reader, "\n", chatCompletionsChunk, true);
 
 export function parseSSEEventBlock(block) {
   let event = "";
@@ -216,75 +226,39 @@ export function parseSSEEventBlock(block) {
   return { event, data: dataLines.join("\n") };
 }
 
-async function* parseMessagesStream(reader) {
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const blocks = buffer.split("\n\n");
-    buffer = blocks.pop() || "";
-
-    for (const block of blocks) {
-      const parsed = parseSSEEventBlock(block);
-      if (!parsed) continue;
-      if (parsed.event === "message_stop") {
-        yield { content: "", done: true };
-        return;
-      }
-      if (parsed.event !== "content_block_delta" || !parsed.data) continue;
-      try {
-        const json = JSON.parse(parsed.data);
-        const delta = json.delta;
-        if (!delta) continue;
-        if (delta.type === "text_delta" && delta.text) {
-          yield { content: delta.text, done: false };
-        } else if (delta.type === "thinking_delta" && delta.thinking) {
-          yield { content: "", reasoning_content: delta.thinking, done: false };
-        }
-      } catch {
-        // ignore malformed event
-      }
-    }
+function messagesChunk(block) {
+  const parsed = parseSSEEventBlock(block);
+  if (!parsed) return [];
+  if (parsed.event === "message_stop") return [{ content: "", done: true }];
+  if (parsed.event !== "content_block_delta" || !parsed.data) return [];
+  try {
+    const delta = JSON.parse(parsed.data).delta;
+    if (!delta) return [];
+    if (delta.type === "text_delta" && delta.text) return [{ content: delta.text, done: false }];
+    if (delta.type === "thinking_delta" && delta.thinking) return [{ content: "", reasoning_content: delta.thinking, done: false }];
+  } catch {
+    // ignore malformed event
   }
+  return [];
 }
 
-async function* parseResponsesStream(reader) {
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const blocks = buffer.split("\n\n");
-    buffer = blocks.pop() || "";
-
-    for (const block of blocks) {
-      const parsed = parseSSEEventBlock(block);
-      if (!parsed) continue;
-      if (parsed.event === "response.completed") {
-        yield { content: "", done: true };
-        return;
-      }
-      if (!parsed.data) continue;
-      try {
-        const json = JSON.parse(parsed.data);
-        if (parsed.event === "response.output_text.delta" && json.delta) {
-          yield { content: json.delta, done: false };
-        } else if (parsed.event === "response.reasoning_summary_text.delta" && json.delta) {
-          yield { content: "", reasoning_content: json.delta, done: false };
-        }
-      } catch {
-        // ignore malformed event
-      }
-    }
+function responsesChunk(block) {
+  const parsed = parseSSEEventBlock(block);
+  if (!parsed) return [];
+  if (parsed.event === "response.completed") return [{ content: "", done: true }];
+  if (!parsed.data) return [];
+  try {
+    const json = JSON.parse(parsed.data);
+    if (parsed.event === "response.output_text.delta" && json.delta) return [{ content: json.delta, done: false }];
+    if (parsed.event === "response.reasoning_summary_text.delta" && json.delta) return [{ content: "", reasoning_content: json.delta, done: false }];
+  } catch {
+    // ignore malformed event
   }
+  return [];
 }
+
+const parseMessagesStream = (reader) => readChunks(reader, "\n\n", messagesChunk);
+const parseResponsesStream = (reader) => readChunks(reader, "\n\n", responsesChunk);
 
 export function parseStream(endpoint, reader) {
   switch (endpoint) {

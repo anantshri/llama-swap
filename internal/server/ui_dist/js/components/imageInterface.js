@@ -1,8 +1,8 @@
 // Image generation tab: OpenAI / SDAPI modes, persistent settings, LoRA support.
 // Ported from components/playground/ImageInterface.svelte.
-import { el, cleanupAll } from "../dom.js";
-import { models } from "../api.js";
-import { playgroundStores } from "../playgroundActivity.js";
+import { el, cleanupAll, escapeHtml, pgSpinner, pgError, triggerDownload } from "../dom.js";
+import { subscribeHasModels } from "../api.js";
+import { playgroundStores, runTask } from "../playgroundActivity.js";
 import { persistent } from "../store.js";
 import { ModelSelector } from "./modelSelector.js";
 import { ExpandableTextarea } from "./expandableTextarea.js";
@@ -132,18 +132,18 @@ export function ImageInterface() {
               <option value="">Add a LoRA...</option>
               ${availableLoras
                 .filter((l) => !selectedLoras.some((s) => s.path === l.path))
-                .map((l) => `<option value="${escapeAttr(l.path)}">${escapeText(l.name)}</option>`)
+                .map((l) => `<option value="${escapeHtml(l.path)}">${escapeHtml(l.name)}</option>`)
                 .join("")}
             </select>` : ""}
         </div>
-        ${loraError ? `<p class="pg-sd-lora-err">${escapeText(loraError)}</p>` : ""}
+        ${loraError ? `<p class="pg-sd-lora-err">${escapeHtml(loraError)}</p>` : ""}
         ${lorasLoaded && availableLoras.length === 0 ? `<p class="muted pg-sd-lora-empty">No LoRAs available</p>` : ""}
         <div class="pg-sd-lora-list">
           ${selectedLoras
             .map(
               (l, i) => `
                 <div class="pg-sd-lora-item">
-                  <span class="pg-sd-lora-name">${escapeText(getLoraName(l.path))}</span>
+                  <span class="pg-sd-lora-name">${escapeHtml(getLoraName(l.path))}</span>
                   <input type="number" class="pg-input pg-sd-lora-mult" data-mult-i="${i}" value="${l.multiplier}" min="0" max="2" step="0.1">
                   <button class="pg-sd-lora-rm" data-rm-i="${i}" aria-label="Remove LoRA">x</button>
                 </div>`
@@ -154,22 +154,19 @@ export function ImageInterface() {
     `;
   }
 
-  function escapeAttr(s) { return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;"); }
-  function escapeText(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
   function getLoraName(path) { return availableLoras.find((l) => l.path === path)?.name ?? path; }
 
+  const settingStores = { steps: sdSteps, cfg: sdCfgScale, seed: sdSeed, batch: sdBatchSize, sampler: sdSampler, scheduler: sdScheduler, neg: sdNegativePrompt };
   settingsEl.addEventListener("input", (e) => {
-    const t = e.target;
-    const k = t.getAttribute("data-k");
-    if (!k) return;
-    const v = t.type === "number" ? Number(t.value) : t.value;
-    if (k === "steps") sdSteps.set(v);
-    else if (k === "cfg") sdCfgScale.set(v);
-    else if (k === "seed") sdSeed.set(v);
-    else if (k === "batch") sdBatchSize.set(v);
-    else if (k === "sampler") sdSampler.set(v);
-    else if (k === "scheduler") sdScheduler.set(v);
-    else if (k === "neg") sdNegativePrompt.set(v);
+    const mult = e.target.closest("[data-mult-i]");
+    if (mult) {
+      const i = Number(mult.getAttribute("data-mult-i"));
+      const v = parseFloat(mult.value) || 1;
+      selectedLoras = selectedLoras.map((l, idx) => (idx === i ? { ...l, multiplier: v } : l));
+      return;
+    }
+    const store = settingStores[e.target.getAttribute("data-k")];
+    if (store) store.set(e.target.type === "number" ? Number(e.target.value) : e.target.value);
   });
   settingsEl.addEventListener("change", (e) => {
     const addSel = e.target.closest("[data-add-lora]");
@@ -192,14 +189,6 @@ export function ImageInterface() {
       selectedLoras = selectedLoras.filter((_, idx) => idx !== i);
       renderSettings();
       return;
-    }
-  });
-  settingsEl.addEventListener("input", (e) => {
-    const mult = e.target.closest("[data-mult-i]");
-    if (mult) {
-      const i = Number(mult.getAttribute("data-mult-i"));
-      const v = parseFloat(mult.value) || 1;
-      selectedLoras = selectedLoras.map((l, idx) => (idx === i ? { ...l, multiplier: v } : l));
     }
   });
 
@@ -227,23 +216,14 @@ export function ImageInterface() {
   }
 
   // ---- Stage (image / spinner / error) ----
+  const dlBtn = (i, big) => `
+    <button class="pg-image-dl${big ? " pg-image-dl-big" : ""}" data-dl="${i}" aria-label="Download image">
+      <svg class="${big ? "icon-5" : "icon-4"}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+    </button>`;
+
   function renderStage() {
-    if (isGenerating) {
-      stageEl.innerHTML = `
-        <div class="pg-image-msg">
-          <div class="spinner"></div>
-          <p>Generating image...</p>
-        </div>`;
-      return;
-    }
-    if (error) {
-      stageEl.innerHTML = `
-        <div class="pg-image-msg pg-error">
-          <p class="pg-error-title">Error</p>
-          <p class="pg-error-body">${escapeText(error)}</p>
-        </div>`;
-      return;
-    }
+    if (isGenerating) { stageEl.innerHTML = pgSpinner("pg-image-msg", "Generating image..."); return; }
+    if (error) { stageEl.innerHTML = pgError("pg-image-msg", error); return; }
     if (generatedImages.length > 1) {
       stageEl.innerHTML = `
         <div class="pg-image-grid">
@@ -252,9 +232,7 @@ export function ImageInterface() {
               (img, i) => `
                 <div class="pg-image-cell">
                   <button class="pg-image-btn" data-fs="${i}"><img src="${img}" alt="AI generated content ${i + 1}"></button>
-                  <button class="pg-image-dl" data-dl="${i}" aria-label="Download image">
-                    <svg class="icon-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
-                  </button>
+                  ${dlBtn(i)}
                 </div>`
             )
             .join("")}
@@ -265,9 +243,7 @@ export function ImageInterface() {
       stageEl.innerHTML = `
         <div class="pg-image-single">
           <button class="pg-image-btn" data-fs="0"><img src="${generatedImages[0]}" alt="AI generated content"></button>
-          <button class="pg-image-dl pg-image-dl-big" data-dl="0" aria-label="Download image">
-            <svg class="icon-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
-          </button>
+          ${dlBtn(0, true)}
         </div>`;
       return;
     }
@@ -337,16 +313,10 @@ export function ImageInterface() {
     if (!trimmed || !selectedModel.get() || isGenerating) return;
     isGenerating = true;
     error = null;
-    abortController = new AbortController();
-    playgroundStores.imageGenerating.set(true);
-
-    renderStage();
-    renderActionBtns();
-
-    try {
+    const task = runTask(playgroundStores.imageGenerating, async (signal) => {
       if (apiMode.get() === "sdapi") {
         const [w, h] = selectedSize.get().split("x").map(Number);
-        const req = {
+        const resp = await generateSdImage({
           model: selectedModel.get(),
           prompt: trimmed,
           negative_prompt: sdNegativePrompt.get() || undefined,
@@ -358,29 +328,27 @@ export function ImageInterface() {
           sampler_name: sdSampler.get() || undefined,
           scheduler: sdScheduler.get() || undefined,
           lora: selectedLoras.length > 0 ? selectedLoras : undefined,
-        };
-        const resp = await generateSdImage(req, abortController.signal);
-        if (resp.images && resp.images.length > 0) {
+        }, signal);
+        if (resp.images?.length > 0) {
           generatedImages = resp.images.map((img) => `data:image/png;base64,${img}`);
         }
       } else {
-        const resp = await generateImage(selectedModel.get(), trimmed, selectedSize.get(), abortController.signal);
-        if (resp.data && resp.data.length > 0) {
-          const d = resp.data[0];
-          if (d.b64_json) generatedImages = [`data:image/png;base64,${d.b64_json}`];
-          else if (d.url) generatedImages = [d.url];
-        }
+        const resp = await generateImage(selectedModel.get(), trimmed, selectedSize.get(), signal);
+        const d = resp.data?.[0];
+        if (d?.b64_json) generatedImages = [`data:image/png;base64,${d.b64_json}`];
+        else if (d?.url) generatedImages = [d.url];
       }
-    } catch (err) {
-      if (err.name !== "AbortError") error = err.message || "An error occurred";
-    } finally {
-      isGenerating = false;
-      abortController = null;
-      playgroundStores.imageGenerating.set(false);
-      renderStage();
-      renderActionBtns();
-      updateGenerateBtn();
-    }
+    });
+    abortController = task;
+    renderStage();
+    renderActionBtns();
+    const { error: err } = await task;
+    isGenerating = false;
+    abortController = null;
+    error = err;
+    renderStage();
+    renderActionBtns();
+    updateGenerateBtn();
   }
 
   function cancelGeneration() { abortController?.abort(); }
@@ -395,14 +363,7 @@ export function ImageInterface() {
   }
 
   function downloadImage(i = 0) {
-    const img = generatedImages[i];
-    if (!img) return;
-    const a = document.createElement("a");
-    a.href = img;
-    a.download = `generated-image-${Date.now()}-${i}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    if (generatedImages[i]) triggerDownload(generatedImages[i], `generated-image-${Date.now()}-${i}.png`);
   }
 
   function openFullscreen(i = 0) {
@@ -429,10 +390,8 @@ export function ImageInterface() {
       renderSettingsVisibility();
       renderSettings();
     }),
-    models.subscribe(() => {
-      const hasModels = models.get().some((m) => !m.unlisted);
-      root.classList.toggle("pg-no-models", !hasModels);
-      if (!hasModels) stageEl.innerHTML = `<div class="pg-image-msg muted"><p>No models configured. Add models to your configuration to generate images.</p></div>`;
+    subscribeHasModels(root, () => {
+      stageEl.innerHTML = `<div class="pg-image-msg muted"><p>No models configured. Add models to your configuration to generate images.</p></div>`;
     }),
     selectedModel.subscribe(() => {
       modelSel.setDisabled(isGenerating);

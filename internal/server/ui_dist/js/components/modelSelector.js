@@ -1,6 +1,6 @@
 // Model picker dropdown, ported from components/playground/ModelSelector.svelte.
 // Renders Local models + aliases + peer groups. Hidden when no models are available.
-import { el, cleanupAll } from "../dom.js";
+import { el, cleanupAll, escapeHtml } from "../dom.js";
 import { models } from "../api.js";
 import { groupModels } from "../util/modelUtils.js";
 
@@ -21,10 +21,10 @@ export function ModelSelector({ value, placeholder = "Select a model...", disabl
     if (grouped.local.length > 0) {
       parts.push(`<optgroup label="Local">`);
       for (const m of grouped.local) {
-        parts.push(`<option value="${escapeAttr(m.id)}">${escapeText(m.id)}</option>`);
+        parts.push(`<option value="${escapeHtml(m.id)}">${escapeHtml(m.id)}</option>`);
         if (m.aliases) {
           for (const a of m.aliases) {
-            parts.push(`<option value="${escapeAttr(a)}">  ↳ ${escapeText(a)}</option>`);
+            parts.push(`<option value="${escapeHtml(a)}">  ↳ ${escapeHtml(a)}</option>`);
           }
         }
       }
@@ -33,9 +33,9 @@ export function ModelSelector({ value, placeholder = "Select a model...", disabl
     for (const [peerId, peerModels] of Object.entries(grouped.peersByProvider).sort(([a], [b]) =>
       a.localeCompare(b)
     )) {
-      parts.push(`<optgroup label="Peer: ${escapeText(peerId)}">`);
+      parts.push(`<optgroup label="Peer: ${escapeHtml(peerId)}">`);
       for (const m of peerModels) {
-        parts.push(`<option value="${escapeAttr(m.id)}">${escapeText(m.id)}</option>`);
+        parts.push(`<option value="${escapeHtml(m.id)}">${escapeHtml(m.id)}</option>`);
       }
       parts.push(`</optgroup>`);
     }
@@ -44,13 +44,6 @@ export function ModelSelector({ value, placeholder = "Select a model...", disabl
     root.value = value.get();
     root.disabled = !!disabled;
     isUpdatingFromState = false;
-  }
-
-  function escapeAttr(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
-  }
-  function escapeText(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
   root.addEventListener("change", () => {

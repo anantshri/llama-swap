@@ -1,7 +1,7 @@
 // API data stores, the SSE event stream, and REST helpers. Ported from stores/api.ts.
 // The live model list arrives via the SSE "modelStatus" event; the playground
 // list is fetched from /v1/models (fetchPlaygroundModels).
-import { observable, derived } from "./store.js";
+import { observable } from "./store.js";
 import { connectionState } from "./theme.js";
 import { playgroundStores } from "./playgroundActivity.js";
 
@@ -9,14 +9,9 @@ const LOG_LENGTH_LIMIT = 1024 * 100; // 100KB of log data
 
 export const models = observable([]);
 export const playgroundModels = observable([]);
-export const hasListedModels = derived([playgroundModels], (list) => list.length > 0);
 export const proxyLogs = observable("");
 export const upstreamLogs = observable("");
-// metrics is kept for backwards compatibility with the stats page: it is no
-// longer pushed over SSE; the Activity page fetches /api/metrics/activity.
-export const metrics = observable([]);
 export const activityRevision = observable(0);
-export const inFlightRequests = observable(0);
 export const inflightRequestEntries = observable([]);
 export const profiles = observable([]);
 export const activeProfile = observable(null);
@@ -54,12 +49,44 @@ function appendLog(newData, store) {
   });
 }
 
+// ── REST helpers ─────────────────────────────────────────────────────────────
+
+// fetch with an ok-check; throws `${label}: ${status}` (the default label keeps
+// the historical "HTTP error! status: N" message text).
+export async function fetchOk(url, options, label = "HTTP error! status") {
+  const response = await fetch(url, options);
+  if (!response.ok) throw new Error(`${label}: ${response.status}`);
+  return response;
+}
+
+// fetch for the playground api/* wrappers; throws `${label}: ${status} - ${body}`
+// including the server's error text.
+export async function apiFetch(url, options, label) {
+  const response = await fetch(url, options);
+  if (!response.ok) throw new Error(`${label}: ${response.status} - ${await response.text()}`);
+  return response;
+}
+
+// POST (or other-method) options carrying a JSON body.
+export function postJSON(body, signal, method = "POST") {
+  return { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal };
+}
+
+// Toggle the playground "no models available" state class when the model list
+// changes; onEmpty, when given, renders the caller's empty-state message.
+export function subscribeHasModels(root, onEmpty) {
+  return models.subscribe(() => {
+    const hasModels = models.get().some((m) => !m.unlisted);
+    root.classList.toggle("pg-no-models", !hasModels);
+    if (!hasModels) onEmpty?.();
+  });
+}
+
 export function enableAPIEvents(enabled) {
   if (!enabled) {
     apiEventSource?.close();
     apiEventSource = null;
     activityRevision.set(0);
-    inFlightRequests.set(0);
     inflightRequestEntries.set([]);
     playgroundModels.set([]);
     profiles.set([]);
@@ -82,7 +109,6 @@ export function enableAPIEvents(enabled) {
       models.set([]);
       playgroundModels.set([]);
       activityRevision.update((n) => n + 1);
-      inFlightRequests.set(0);
       inflightRequestEntries.set([]);
       profiles.set([]);
       activeProfile.set(null);
@@ -160,7 +186,6 @@ export function handleAPIEventMessage(data) {
           const byTime = Date.parse(a.timestamp) - Date.parse(b.timestamp);
           return byTime || a.id.localeCompare(b.id, undefined, { numeric: true });
         });
-        inFlightRequests.set(requests.length);
         return requests;
       });
       break;
@@ -181,21 +206,14 @@ export function handleAPIEventMessage(data) {
 // ── Profiles ─────────────────────────────────────────────────────────────────
 
 export async function fetchProfiles() {
-  const response = await fetch("/api/profiles");
-  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-  const state = await response.json();
+  const state = await (await fetchOk("/api/profiles")).json();
   profiles.set(state.profiles ?? []);
   activeProfile.set(state.active ?? null);
   return state;
 }
 
 export async function setActiveProfile(name) {
-  const response = await fetch("/api/profiles/active", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ profile: name ?? "" }),
-  });
-  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+  await fetchOk("/api/profiles/active", { ...postJSON({ profile: name ?? "" }), method: "PUT" });
   // The profileChanged SSE event refreshes the stores server-side; also set
   // locally so the UI reacts instantly.
   activeProfile.set(name);
@@ -210,9 +228,7 @@ let playgroundModelsRefreshQueued = false;
 
 async function loadPlaygroundModels(request) {
   try {
-    const response = await fetch("/v1/models");
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    const responseData = await response.json();
+    const responseData = await (await fetchOk("/v1/models")).json();
     const records = responseData.data ?? [];
     const aliasesByModel = new Map();
     for (const record of records) {
@@ -290,43 +306,28 @@ export async function getActivity(params = {}) {
   if (params.minID) query.set("min_id", String(params.minID));
   if (params.maxID) query.set("max_id", String(params.maxID));
   const url = query.size > 0 ? `/api/metrics/activity?${query}` : "/api/metrics/activity";
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-  return await response.json();
+  return (await fetchOk(url)).json();
 }
 
 export async function getActivityStats(model) {
   const query = new URLSearchParams();
   if (model) query.set("model", model);
   const url = query.size > 0 ? `/api/metrics/stats?${query}` : "/api/metrics/stats";
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-  return await response.json();
+  return (await fetchOk(url)).json();
 }
 
 // ── Ops ──────────────────────────────────────────────────────────────────────
 
-export async function unloadAllModels() {
-  const response = await fetch(`/api/models/unload`, { method: "POST" });
-  if (!response.ok) throw new Error(`Failed to unload models: ${response.status}`);
-}
+export const unloadAllModels = () => fetchOk("/api/models/unload", { method: "POST" }, "Failed to unload models");
 
-export async function unloadSingleModel(model) {
-  const response = await fetch(`/api/models/unload/${model}`, { method: "POST" });
-  if (!response.ok) throw new Error(`Failed to unload model: ${response.status}`);
-}
+export const unloadSingleModel = (model) =>
+  fetchOk(`/api/models/unload/${model}`, { method: "POST" }, "Failed to unload model");
 
-export async function cancelInflightRequest(id) {
-  const response = await fetch(`/api/inflight/${encodeURIComponent(id)}/cancel`, {
-    method: "POST",
-  });
-  if (!response.ok) throw new Error(`Failed to cancel request: ${response.status}`);
-}
+export const cancelInflightRequest = (id) =>
+  fetchOk(`/api/inflight/${encodeURIComponent(id)}/cancel`, { method: "POST" }, "Failed to cancel request");
 
-export async function loadModel(model, signal) {
-  const response = await fetch(`/upstream/${model}/?_=${Date.now()}`, { method: "GET", signal });
-  if (!response.ok) throw new Error(`Failed to load model: ${response.status}`);
-}
+export const loadModel = (model, signal) =>
+  fetchOk(`/upstream/${model}/?_=${Date.now()}`, { method: "GET", signal }, "Failed to load model");
 
 export async function getCapture(id) {
   try {
@@ -340,15 +341,9 @@ export async function getCapture(id) {
   }
 }
 
-export async function pinCapture(id) {
-  const response = await fetch(`/api/captures/${id}/pin`, { method: "POST" });
-  if (!response.ok) throw new Error(`Failed to pin capture: ${response.status}`);
-}
+export const pinCapture = (id) => fetchOk(`/api/captures/${id}/pin`, { method: "POST" }, "Failed to pin capture");
 
-export async function unpinCapture(id) {
-  const response = await fetch(`/api/captures/${id}/pin`, { method: "DELETE" });
-  if (!response.ok) throw new Error(`Failed to unpin capture: ${response.status}`);
-}
+export const unpinCapture = (id) => fetchOk(`/api/captures/${id}/pin`, { method: "DELETE" }, "Failed to unpin capture");
 
 export async function checkPerformanceEnabled() {
   try {
@@ -363,9 +358,7 @@ export async function checkPerformanceEnabled() {
 export async function fetchPerformance(after) {
   try {
     const url = after ? `/api/performance?after=${encodeURIComponent(after)}` : "/api/performance";
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    return await response.json();
+    return await (await fetchOk(url)).json();
   } catch (error) {
     console.error("Failed to fetch performance data:", error);
     return null;
@@ -373,9 +366,7 @@ export async function fetchPerformance(after) {
 }
 
 export async function getHardware() {
-  const response = await fetch("/api/hardware");
-  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-  return await response.json();
+  return await (await fetchOk("/api/hardware")).json();
 }
 
 // re-export so callers can import activity flags from one place

@@ -100,6 +100,12 @@ export function CaptureDialogController() {
     if (dlg.open) dlg.close();
   }
 
+  // Shared copy button + tab row; groupHTML is "" when the body has no
+  // pretty/chat view, leaving just the copy button.
+  const copyBtn = (which) =>
+    `<button class="capture-tab" data-copy="${which}">${state[which === "req" ? "copiedReq" : "copiedResp"] ? "Copied!" : "Copy"}</button>`;
+  const tabRow = (groupHTML, which) => `<div class="capture-tab-row">${groupHTML || "<span></span>"}${copyBtn(which)}</div>`;
+
   function render() {
     const c = state.capture;
     if (!c) {
@@ -135,12 +141,7 @@ export function CaptureDialogController() {
       if (!reqBodyRaw) {
         return `<pre class="capture-pre capture-pre-empty">(empty)</pre>`;
       }
-      const tabsHTML = isReqJson
-        ? `<div class="capture-tab-row">
-             <div class="capture-tab-group">${bodyTabsHTML(state.reqBodyTab, ["pretty", "raw"])}</div>
-             <button class="capture-tab" data-copy="req">${state.copiedReq ? "Copied!" : "Copy"}</button>
-           </div>`
-        : `<div class="capture-tab-row"><span></span><button class="capture-tab" data-copy="req">${state.copiedReq ? "Copied!" : "Copy"}</button></div>`;
+      const tabsHTML = tabRow(isReqJson ? bodyTabsHTML(state.reqBodyTab, ["pretty", "raw"]) : "", "req");
       return `${tabsHTML}<pre class="capture-pre">${escapeHtml(reqDisplay)}</pre>`;
     }
 
@@ -153,13 +154,7 @@ export function CaptureDialogController() {
         if (isSSE) tabOptions.push("chat");
         if (isRespJson) tabOptions.push("pretty");
         if (isSSE || isRespJson) tabOptions.push("raw");
-        const tabsHTML =
-          tabOptions.length > 0
-            ? `<div class="capture-tab-row">
-                 <div class="capture-tab-group">${bodyTabsHTML(state.respBodyTab, tabOptions)}</div>
-                 <button class="capture-tab" data-copy="resp">${state.copiedResp ? "Copied!" : "Copy"}</button>
-               </div>`
-            : `<div class="capture-tab-row"><span></span><button class="capture-tab" data-copy="resp">${state.copiedResp ? "Copied!" : "Copy"}</button></div>`;
+        const tabsHTML = tabRow(tabOptions.length > 0 ? bodyTabsHTML(state.respBodyTab, tabOptions) : "", "resp");
 
         let body;
         if (state.respBodyTab === "chat" && sseChat) {
@@ -239,19 +234,12 @@ export function CaptureDialogController() {
         }
         try {
           await navigator.clipboard.writeText(text);
-          if (which === "req") {
-            state.copiedReq = true;
-            setTimeout(() => {
-              state.copiedReq = false;
-              render();
-            }, 1500);
-          } else {
-            state.copiedResp = true;
-            setTimeout(() => {
-              state.copiedResp = false;
-              render();
-            }, 1500);
-          }
+          const key = which === "req" ? "copiedReq" : "copiedResp";
+          state[key] = true;
+          setTimeout(() => {
+            state[key] = false;
+            render();
+          }, 1500);
           render();
         } catch {
           /* ignore */

@@ -1,8 +1,8 @@
 // Rerank interface: table editor + JSON editor with sort + per-row scores.
 // Ported from components/playground/RerankInterface.svelte.
 import { el, cleanupAll, escapeHtml } from "../dom.js";
-import { models } from "../api.js";
-import { playgroundStores } from "../playgroundActivity.js";
+import { subscribeHasModels } from "../api.js";
+import { playgroundStores, runTask } from "../playgroundActivity.js";
 import { persistent } from "../store.js";
 import { ModelSelector } from "./modelSelector.js";
 import { rerank } from "../api/rerank.js";
@@ -271,18 +271,12 @@ export function RerankInterface() {
 
   async function submit() {
     if (!canSubmit()) return;
-    let submitQuery;
-    let nonEmptyEntries;
     if (editorMode === "json") {
       try {
         const parsed = JSON.parse(jsonText);
-        submitQuery = parsed.query;
-        const docs = parsed.documents.filter((d) => d.trim() !== "");
-        const newRows = docs.map((d) => ({ doc: d, score: null }));
-        newRows.push({ doc: "", score: null });
-        rows = newRows;
-        query = submitQuery;
+        query = parsed.query;
         queryInput.value = query;
+        rows = [...parsed.documents.filter((d) => d.trim() !== "").map((d) => ({ doc: d, score: null })), { doc: "", score: null }];
         editorMode = "table";
         updateModeToggle();
       } catch {
@@ -290,24 +284,19 @@ export function RerankInterface() {
         renderBottom();
         return;
       }
-      nonEmptyEntries = rows.map((r, i) => ({ originalIndex: i, doc: r.doc })).filter((e) => e.doc.trim() !== "");
-    } else {
-      submitQuery = query;
-      nonEmptyEntries = rows.map((r, i) => ({ originalIndex: i, doc: r.doc })).filter((e) => e.doc.trim() !== "");
     }
+    const submitQuery = query;
+    const nonEmptyEntries = rows.map((r, i) => ({ originalIndex: i, doc: r.doc })).filter((e) => e.doc.trim() !== "");
 
     isLoading = true;
     error = null;
     usage = null;
     rows = rows.map((r) => ({ ...r, score: null }));
-    abortController = new AbortController();
-    playgroundStores.rerankLoading.set(true);
-
     renderContent();
     renderBottom();
 
-    try {
-      const resp = await rerank(selectedModel.get(), submitQuery, nonEmptyEntries.map((e) => e.doc), abortController.signal);
+    const task = runTask(playgroundStores.rerankLoading, async (signal) => {
+      const resp = await rerank(selectedModel.get(), submitQuery, nonEmptyEntries.map((e) => e.doc), signal);
       usage = resp.usage;
       const updated = rows.map((r) => ({ ...r }));
       for (const result of resp.results) {
@@ -315,15 +304,14 @@ export function RerankInterface() {
         if (entry !== undefined) updated[entry.originalIndex].score = result.relevance_score;
       }
       rows = updated;
-    } catch (err) {
-      if (err.name !== "AbortError") error = err.message || "An error occurred";
-    } finally {
-      isLoading = false;
-      abortController = null;
-      playgroundStores.rerankLoading.set(false);
-      renderContent();
-      renderBottom();
-    }
+    });
+    abortController = task;
+    const { error: err } = await task;
+    isLoading = false;
+    abortController = null;
+    error = err;
+    renderContent();
+    renderBottom();
   }
 
   function doClear() {
@@ -340,10 +328,7 @@ export function RerankInterface() {
   }
 
   const subs = [
-    models.subscribe(() => {
-      const has = models.get().some((m) => !m.unlisted);
-      root.classList.toggle("pg-no-models", !has);
-    }),
+    subscribeHasModels(root),
     selectedModel.subscribe(updateSubmitState),
   ];
 

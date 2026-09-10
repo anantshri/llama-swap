@@ -15,17 +15,7 @@ import {
 import { isNarrow } from "../theme.js";
 import { persistent } from "../store.js";
 import { listCapabilityBadges, capabilityBadgeClass } from "../util/capabilities.js";
-
-function statusDotClass(m) {
-  if (m.state === "ready") return "status-dot status-dot--ready";
-  if (m.state === "starting" || m.state === "stopping") return "status-dot status-dot--transition";
-  return "status-dot status-dot--idle";
-}
-
-function modelServerPath(modelId) {
-  if (modelId === "comfyui_auto") return "/comfyui/";
-  return `/upstream/${encodeURIComponent(modelId)}/`;
-}
+import { statusDotClass, modelServerPath } from "../util/modelUtils.js";
 
 export function ModelsPanel() {
   const showUnlisted = persistent("showUnlisted", true);

@@ -2,6 +2,7 @@
 // same time to see how it handles parallel loading and concurrent inference.
 // Ported from components/playground/ConcurrencyInterface.svelte.
 import { el, cleanupAll, escapeHtml } from "../dom.js";
+import { formatDuration } from "../util/format.js";
 import { playgroundModels } from "../api.js";
 import { persistent } from "../store.js";
 import { streamChatCompletion } from "../api/chat.js";
@@ -101,10 +102,7 @@ function formatTickMs(ms) {
   return `${(ms / 1000).toFixed(ms % 1000 === 0 ? 0 : 1)}s`;
 }
 
-function formatElapsed(ms) {
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  return `${(ms / 1000).toFixed(2)}s`;
-}
+const formatElapsed = (ms) => formatDuration(ms, { subSecondMs: true, precision: 2 });
 
 export function ConcurrencyInterface() {
   const promptStore = persistent("concurrency-prompt", DEFAULT_PROMPT);

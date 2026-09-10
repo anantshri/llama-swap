@@ -330,7 +330,7 @@ export function PerformancePage() {
     sysGrid.appendChild(sysLoad.el);
   }
 
-  function ensureGpuCharts(hasVramTemp) {
+  function ensureGpuCharts() {
     if (gpuUtil) return;
     gpuUtil = PerformanceChart({ title: "GPU Utilization (%)", labels: [], datasets: [], yMin: 0, yMax: 100, yLabel: "%" });
     gpuMem = PerformanceChart({ title: "GPU Memory Utilization (%)", labels: [], datasets: [], yMin: 0, yMax: 100, yLabel: "%" });
@@ -340,10 +340,14 @@ export function PerformancePage() {
     gpuGrid.appendChild(gpuMem.el);
     gpuGrid.appendChild(gpuTemp.el);
     gpuGrid.appendChild(gpuPower.el);
-    if (hasVramTemp) {
-      gpuVramTemp = PerformanceChart({ title: "GPU VRAM Temperature (°C)", labels: [], datasets: [], yMin: 0, yLabel: "°C" });
-      gpuGrid.appendChild(gpuVramTemp.el);
-    }
+  }
+
+  // VRAM temp appears only on some GPUs; created/destroyed as data dictates.
+  // Always appended after the four base charts to keep the grid order stable.
+  function ensureVramChart() {
+    if (gpuVramTemp) return;
+    gpuVramTemp = PerformanceChart({ title: "GPU VRAM Temperature (°C)", labels: [], datasets: [], yMin: 0, yLabel: "°C" });
+    gpuGrid.appendChild(gpuVramTemp.el);
   }
 
   function ensureNetChart() {
@@ -355,17 +359,20 @@ export function PerformancePage() {
     sysGrid.appendChild(sysNet.el);
   }
 
+  function removeChart(chart) {
+    chart.destroy();
+    if (chart.el.parentNode) chart.el.parentNode.removeChild(chart.el);
+  }
+
   function maybeRemoveNetChart() {
     if (!sysNet) return;
-    sysNet.destroy();
-    if (sysNet.el.parentNode) sysNet.el.parentNode.removeChild(sysNet.el);
+    removeChart(sysNet);
     sysNet = null;
   }
 
   function maybeRemoveGpuVram() {
     if (!gpuVramTemp) return;
-    gpuVramTemp.destroy();
-    if (gpuVramTemp.el.parentNode) gpuVramTemp.el.parentNode.removeChild(gpuVramTemp.el);
+    removeChart(gpuVramTemp);
     gpuVramTemp = null;
   }
 
@@ -380,17 +387,14 @@ export function PerformancePage() {
     gpuGrid.style.display = hasGpu ? "" : "none";
     if (hasGpu) {
       const hasVramTemp = filteredGpu.some((g) => g.vram_temp_c > 0);
-      ensureGpuCharts(hasVramTemp);
+      ensureGpuCharts();
       const gLabels = gpuLabelsFor(filteredGpu);
       gpuUtil.update({ labels: gLabels, datasets: buildGpuDatasets(filteredGpu, "gpu_util_pct") });
       gpuMem.update({ labels: gLabels, datasets: buildGpuDatasets(filteredGpu, "mem_util_pct") });
       gpuTemp.update({ labels: gLabels, datasets: buildGpuDatasets(filteredGpu, "temp_c") });
       gpuPower.update({ labels: gLabels, datasets: buildGpuDatasets(filteredGpu, "power_draw_w") });
       if (hasVramTemp) {
-        if (!gpuVramTemp) {
-          gpuVramTemp = PerformanceChart({ title: "GPU VRAM Temperature (°C)", labels: [], datasets: [], yMin: 0, yLabel: "°C" });
-          gpuGrid.appendChild(gpuVramTemp.el);
-        }
+        ensureVramChart();
         gpuVramTemp.update({ labels: gLabels, datasets: buildGpuDatasets(filteredGpu, "vram_temp_c") });
       } else {
         maybeRemoveGpuVram();

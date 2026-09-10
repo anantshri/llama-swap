@@ -5,6 +5,83 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-10 — ui: reduce/simplify the vanilla JS/CSS base (zero functional change)
+
+### What / why
+
+The hand-authored UI under `internal/server/ui_dist/` had accreted local
+re-implementations of the same patterns across the playground interfaces:
+task lifecycle (activity flag + AbortController + AbortError swallowing),
+stage spinner/error markup, escaping helpers, download/copy/scroll logic,
+fetch wrappers, conversation persistence, and three near-identical SSE
+reader loops. Goal: fewer lines, no functionality changed or removed.
+
+### How (30 files, +539 / −766, net −227)
+
+- `dom.js`: added shared `copyText`, `triggerDownload`, `pgSpinner`,
+  `pgError`, `stickToBottom`; removed unused `frag`/`clear`/`on`.
+- `store.js`: added `loadStoredMessages(key, transform)` and
+  `throttledSaver(key)` (unified on chat's clearTimeout variant — docs
+  previously stacked timers; final persisted state identical, last write
+  always the latest snapshot).
+- `playgroundActivity.js`: added `runTask(store, fn)` — the shared
+  generate/transcribe/speak/rerank lifecycle. audioInterface (214→205),
+  speechInterface (287→256), imageInterface (454→413), rerankInterface
+  (360→345) rewritten on it plus the helpers above.
+- `api.js`: `fetchOk`/`apiFetch`/`postJSON` consolidate the REST wrappers
+  (error labels byte-identical); `subscribeHasModels(root, onEmpty?)`
+  replaces per-interface pg-no-models subscriptions; dead stores removed.
+  `api/{image,speech,audio,sd}.js` rewritten on the wrappers (74→40).
+- `api/chat.js` (334→307): one `readChunks(reader, sep, handle, flushLast)`
+  loop behind all three stream parsers; preserves the chat-completions
+  trailing-buffer asymmetry (leftover `[DONE]` tail swallowed) and
+  stop-on-done mid-stream.
+- Chat/docs interfaces share the new persistence/scroll helpers
+  (chatInterface 501→461, docsInterface 561→531); docs' `getTextContent`
+  joined with `""` via `textOf` over util/content.js's parameterized
+  `getTextContent(content, sep="\n")`.
+- `util/modelUtils.js`: `statusDotClass`/`modelServerPath` (exact twins in
+  modelsPanel + modelDetail) moved in; `groupModels` untouched.
+- chatMessage/agentWork/concurrencyInterface/modelSelector/stats/markdown:
+  escape/format dedupe onto dom.js/util/format.js.
+- performance.js: `removeChart` merge, `ensureVramChart` extracted (chart
+  grid order util/mem/temp/power/vram preserved).
+- header.js subs array collapsed; resizablePanels identical-branch onMove
+  collapsed + applySize parameterized by dimension; captureDialog
+  copy/tab-row markup and copied-flag timeout dedupe.
+- app.css: removed unused `.activity-columns-wrap/-btn-wrap/-btn`,
+  `.page-playground`, duplicate `.icon-5`, no-op `.pg-image-prompt-row`
+  media query. Kept (and documented) the load-bearing repeat of
+  `@media(min-width:768px){.pg-tab-mobile{display:none}}` — it overrides
+  the base `display:block` between the two media blocks.
+
+Drive-by fix: imageInterface's SDAPI settings panel called `escapeHtml`
+without importing it (pre-existing at HEAD) — opening Settings in SDAPI
+mode threw ReferenceError and left the panel blank. The refactor's import
+fixes it.
+
+### Skipped (would change behavior or cost more than it saves)
+
+- Unified segmented button group (settings/performance/logs/rerank):
+  variants differ in class names, index-vs-value attrs, follow-up actions;
+  abstraction tax exceeds the lines saved.
+- captureDialog listener delegation: would require re-deriving render-time
+  display values per click.
+- stats.js local formatters, docsInterface polling → event-driven,
+  full ActionBar unification, rerank switchToTable tail merge.
+
+### Verification
+
+- `bun build --no:bundle` parse: all 58 JS files OK.
+- Golden-output harnesses (bun): DOM-free modules, markdown.js, and a new
+  chat-parser harness (16 stream scenarios incl. mid-line splits, done
+  mid-stream vs tail, malformed events) — all byte-identical to pre-refactor
+  baselines.
+- `go test ./internal/server/` (UI embed) ok; `make test-all` ok (all
+  packages); `make gosec` 0 findings; `aidc-scan` clean.
+
+---
+
 ## 2026-09-10 — config: fix TestConfig_LoadWindows after pricing defaults
 
 ### Symptom

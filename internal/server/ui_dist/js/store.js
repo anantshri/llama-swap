@@ -60,3 +60,43 @@ export function persistent(key, initial) {
   });
   return store;
 }
+
+// loadStoredMessages(key, transform) — read a JSON conversation array from
+// localStorage, passing the parsed value through transform (e.g.
+// sanitizeMessages). Missing or corrupt data yields [].
+export function loadStoredMessages(key, transform = (v) => v) {
+  try {
+    const saved = localStorage.getItem(key);
+    return saved ? transform(JSON.parse(saved)) : [];
+  } catch {
+    return [];
+  }
+}
+
+// throttledSaver(key) — localStorage writer for the streaming conversation
+// lists, saving at most once every 2s. A queued save is replaced by the next
+// call, so the latest snapshot always lands last.
+export function throttledSaver(key) {
+  let lastSaveTime = 0;
+  let saveTimer = null;
+  return {
+    save(value) {
+      const json = JSON.stringify(value);
+      const elapsed = Date.now() - lastSaveTime;
+      const doSave = () => {
+        try {
+          localStorage.setItem(key, json);
+        } catch {
+          /* ignore quota errors */
+        }
+        lastSaveTime = Date.now();
+      };
+      if (saveTimer) clearTimeout(saveTimer);
+      if (elapsed >= 2000) doSave();
+      else saveTimer = setTimeout(doSave, 2000 - elapsed);
+    },
+    cancelPending() {
+      if (saveTimer) clearTimeout(saveTimer);
+    },
+  };
+}

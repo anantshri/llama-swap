@@ -1,8 +1,8 @@
 // TTS interface: model + voice selector, persistent autoplay, audio player.
 // Ported from components/playground/SpeechInterface.svelte.
-import { el, cleanupAll, escapeHtml } from "../dom.js";
-import { models } from "../api.js";
-import { playgroundStores } from "../playgroundActivity.js";
+import { el, cleanupAll, escapeHtml, pgSpinner, pgError, triggerDownload } from "../dom.js";
+import { fetchOk, subscribeHasModels } from "../api.js";
+import { playgroundStores, runTask } from "../playgroundActivity.js";
 import { persistent } from "../store.js";
 import { ModelSelector } from "./modelSelector.js";
 import { ExpandableTextarea } from "./expandableTextarea.js";
@@ -41,7 +41,6 @@ export function SpeechInterface() {
   let abortController = null;
   let availableVoices = [...DEFAULT_VOICES];
   let isLoadingVoices = false;
-  let isInitialLoad = true;
 
   const root = el(`
     <div class="pg-speech">
@@ -88,8 +87,7 @@ export function SpeechInterface() {
   });
 
   // Initial load: restore cached voices for selected model
-  if (isInitialLoad) {
-    isInitialLoad = false;
+  {
     const cache = getVoicesCache();
     const m = selectedModel.get();
     if (m && cache[m]) availableVoices = cache[m];
@@ -100,43 +98,31 @@ export function SpeechInterface() {
     if (!model || isLoadingVoices) return;
     isLoadingVoices = true;
     renderVoices();
+    let voices = DEFAULT_VOICES;
     try {
-      const resp = await fetch(`/v1/audio/voices?model=${encodeURIComponent(model)}`);
-      if (!resp.ok) throw new Error("fallback");
-      const data = await resp.json();
-      const voices = Array.isArray(data) ? data : (data.voices || DEFAULT_VOICES);
-      availableVoices = voices.length > 0 ? voices : DEFAULT_VOICES;
-      const cache = getVoicesCache();
-      cache[model] = availableVoices;
-      saveVoicesCache(cache);
-      selectedVoice.set(availableVoices[0]);
+      const data = await (await fetchOk(`/v1/audio/voices?model=${encodeURIComponent(model)}`)).json();
+      const list = Array.isArray(data) ? data : data.voices || DEFAULT_VOICES;
+      if (list.length > 0) voices = list;
     } catch {
-      availableVoices = DEFAULT_VOICES;
-      const cache = getVoicesCache();
-      cache[model] = DEFAULT_VOICES;
-      saveVoicesCache(cache);
-      selectedVoice.set(DEFAULT_VOICES[0]);
-    } finally {
-      isLoadingVoices = false;
-      renderVoices();
+      // fetch/parse failure falls back to the default voice list
     }
+    availableVoices = voices;
+    // cache before the voice change so the subscriber's re-render sees it
+    const cache = getVoicesCache();
+    cache[model] = voices;
+    saveVoicesCache(cache);
+    selectedVoice.set(voices[0]);
+    isLoadingVoices = false;
+    renderVoices();
   }
 
   function renderStage() {
     if (isGenerating) {
-      stageEl.innerHTML = `
-        <div class="pg-speech-msg">
-          <div class="spinner"></div>
-          <p>Generating speech...</p>
-        </div>`;
+      stageEl.innerHTML = pgSpinner("pg-speech-msg", "Generating speech...");
       return;
     }
     if (error) {
-      stageEl.innerHTML = `
-        <div class="pg-speech-msg pg-error">
-          <p class="pg-error-title">Error</p>
-          <p class="pg-error-body">${escapeHtml(error)}</p>
-        </div>`;
+      stageEl.innerHTML = pgError("pg-speech-msg", error);
       return;
     }
     if (generatedAudioUrl) {
@@ -221,55 +207,38 @@ export function SpeechInterface() {
     if (!trimmed || !selectedModel.get() || isGenerating) return;
     isGenerating = true;
     error = null;
-    abortController = new AbortController();
-    playgroundStores.speechGenerating.set(true);
-
-    renderStage();
-    renderActions();
-
-    try {
-      const blob = await generateSpeech(selectedModel.get(), trimmed, selectedVoice.get(), abortController.signal);
+    const task = runTask(playgroundStores.speechGenerating, async (signal) => {
+      const blob = await generateSpeech(selectedModel.get(), trimmed, selectedVoice.get(), signal);
       if (generatedAudioUrl) URL.revokeObjectURL(generatedAudioUrl);
       generatedAudioUrl = URL.createObjectURL(blob);
       generatedVoice = selectedVoice.get();
       generatedTimestamp = new Date();
-    } catch (err) {
-      if (err.name !== "AbortError") error = err.message || "An error occurred";
-    } finally {
-      isGenerating = false;
-      abortController = null;
-      playgroundStores.speechGenerating.set(false);
-      renderStage();
-      renderActions();
-      updateGenState();
-    }
+    });
+    abortController = task;
+    renderStage();
+    renderActions();
+    const { error: err } = await task;
+    isGenerating = false;
+    abortController = null;
+    error = err;
+    renderStage();
+    renderActions();
+    updateGenState();
   }
 
   function downloadAudio() {
     if (!generatedAudioUrl) return;
     const ts = (generatedTimestamp || new Date()).toISOString().replace(/[:.]/g, "-").slice(0, -5);
-    const voice = generatedVoice || "speech";
-    const a = document.createElement("a");
-    a.href = generatedAudioUrl;
-    a.download = `${voice}-${ts}.mp3`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    triggerDownload(generatedAudioUrl, `${generatedVoice || "speech"}-${ts}.mp3`);
   }
 
   const subs = [
-    models.subscribe(() => {
-      const has = models.get().some((m) => !m.unlisted);
-      root.classList.toggle("pg-no-models", !has);
-    }),
+    subscribeHasModels(root),
     selectedModel.subscribe(() => {
       renderVoices();
       updateGenState();
     }),
     selectedVoice.subscribe(renderVoices),
-    autoPlay.subscribe(() => {
-      // re-render actions only if currently in idle state — no need otherwise
-    }),
   ];
 
   renderVoices();

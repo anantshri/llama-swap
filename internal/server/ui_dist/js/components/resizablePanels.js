@@ -37,13 +37,9 @@ export function ResizablePanels({ direction, storageKey, left, right, defaultSiz
   rightEl.appendChild(rightInst.el);
 
   function applySize() {
-    if (horizontal) {
-      leftEl.style.cssText = `width: ${leftSize}%; min-width: ${minSize}%`;
-      rightEl.style.cssText = `width: ${100 - leftSize}%; min-width: ${minSize}%`;
-    } else {
-      leftEl.style.cssText = `height: ${leftSize}%; min-height: ${minSize}%`;
-      rightEl.style.cssText = `height: ${100 - leftSize}%; min-height: ${minSize}%`;
-    }
+    const dim = horizontal ? "width" : "height";
+    leftEl.style.cssText = `${dim}: ${leftSize}%; min-${dim}: ${minSize}%`;
+    rightEl.style.cssText = `${dim}: ${100 - leftSize}%; min-${dim}: ${minSize}%`;
     handle.setAttribute("aria-valuenow", Math.round(leftSize));
   }
   applySize();
@@ -65,9 +61,9 @@ export function ResizablePanels({ direction, storageKey, left, right, defaultSiz
     applySize();
   }
 
+  // updateSize itself branches on orientation, so mouse and touch moves share it.
   function onMove(e) {
-    if (horizontal) updateSize(e.clientX, e.clientY);
-    else updateSize(e.clientX, e.clientY);
+    updateSize(e.clientX, e.clientY);
   }
   function onTouchMove(e) {
     if (e.touches.length === 0) return;

@@ -1,7 +1,6 @@
 // Navigation header, ported from components/Header.svelte + ConnectionStatus.svelte.
 import { el, cleanupAll } from "../dom.js";
-import { themeMode, appTitle, isNarrow, toggleTheme } from "../theme.js";
-import { connectionState } from "../theme.js";
+import { themeMode, appTitle, isNarrow, toggleTheme, connectionState } from "../theme.js";
 import { versionInfo } from "../api.js";
 import { currentRoute } from "../router.js";
 import { playgroundActivity } from "../playgroundActivity.js";
@@ -57,35 +56,27 @@ export function Header() {
 
   themeBtn.addEventListener("click", toggleTheme);
 
-  const subs = [];
-
-  subs.push(
+  const subs = [
     appTitle.subscribe((t) => {
       if (titleEl.textContent !== t) titleEl.textContent = t;
-    })
-  );
-  subs.push(
+    }),
     themeMode.subscribe((mode) => {
       themeBtn.innerHTML = themeIcons[mode] || themeIcons.system;
       themeBtn.title = `Toggle theme (current: ${mode})`;
-    })
-  );
-  subs.push(
-    isNarrow.subscribe((narrow) => root.classList.toggle("header-narrow", narrow))
-  );
-  subs.push(
+    }),
+    isNarrow.subscribe((narrow) => root.classList.toggle("header-narrow", narrow)),
     currentRoute.subscribe((cur) => {
       for (const a of links) {
         a.classList.toggle("active", isActive(a.dataset.path, cur));
       }
-    })
-  );
-  subs.push(
+    }),
     playgroundActivity.subscribe((active) => {
       const pg = links.find((a) => a.dataset.path === "/");
       if (pg) pg.classList.toggle("activity-link", active);
-    })
-  );
+    }),
+    connectionState.subscribe(updateConn),
+    versionInfo.subscribe(updateConn),
+  ];
 
   function updateConn() {
     const cs = connectionState.get();
@@ -97,8 +88,6 @@ export function Header() {
       `Commit Hash: ${vi?.commit?.substring(0, 7) ?? "unknown"}\n` +
       `Build Date: ${vi?.build_date ?? "unknown"}`;
   }
-  subs.push(connectionState.subscribe(updateConn));
-  subs.push(versionInfo.subscribe(updateConn));
 
   return {
     el: root,

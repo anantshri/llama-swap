@@ -86,8 +86,6 @@ table td { padding: 0.5rem; }
 .page { height: 100%; }
 .muted { color: var(--color-txtsecondary); }
 
-.icon-5 { width: 1.25rem; height: 1.25rem; }
-
 /* ---- header ---- */
 .app-header {
   display: flex;
@@ -298,13 +296,6 @@ table td { padding: 0.5rem; }
 .page-activity { padding: 0.5rem; }
 .activity-stats-wrap { margin: 1rem 0 1rem; }
 .activity-table-wrap { overflow: auto; position: relative; min-height: 30rem; }
-.activity-columns-wrap { display: flex; justify-content: flex-end; padding: 0 1rem; }
-.activity-columns-btn-wrap { position: relative; }
-.activity-columns-btn {
-  width: 2rem; height: 2rem; display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 0.25rem; border: none; background: none; cursor: pointer; color: inherit;
-}
-.activity-columns-btn:hover { background: var(--color-secondary-hover); }
 .activity-columns-menu {
   position: absolute; right: 0; top: calc(100% + 0.25rem); z-index: 10;
   min-width: 16rem; padding: 0.25rem 0;
@@ -457,12 +448,12 @@ table td { padding: 0.5rem; }
 .perf-empty { padding: 1rem; color: var(--color-txtsecondary); }
 
 /* ---- Playground shared ---- */
-.page-playground { height: 100%; }
 .pg-shell { height: 100%; display: flex; flex-direction: column; }
 .pg-tab-bar { flex-shrink: 0; margin-bottom: 1rem; }
 .pg-tab-desktop { display: none; flex-wrap: wrap; gap: 0.5rem; }
 @media (min-width: 768px) { .pg-tab-desktop { display: flex; } .pg-tab-mobile { display: none; } }
 .pg-tab-mobile { position: relative; display: block; }
+/* the repeat overrides the base display:block above at desktop widths */
 @media (min-width: 768px) { .pg-tab-mobile { display: none; } }
 .pg-tab-mobile-btn {
   width: 100%; padding: 0.5rem 1rem; border-radius: 0.375rem;
@@ -550,7 +541,6 @@ table td { padding: 0.5rem; }
 .pg-image-dl-big { padding: 0.5rem; }
 .pg-image-single { position: relative; max-width: 100%; max-height: 100%; display: flex; align-items: center; justify-content: center; }
 .pg-image-prompt-row { display: flex; flex-direction: row; gap: 0.5rem; flex-shrink: 0; }
-@media (min-width: 768px) { .pg-image-prompt-row { flex-direction: row; } }
 .pg-image-actions { display: flex; flex-direction: row; gap: 0.5rem; }
 @media (min-width: 768px) { .pg-image-actions { flex-direction: column; } }
 .pg-image-fs {

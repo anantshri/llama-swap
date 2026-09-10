@@ -3,16 +3,9 @@
 // vendored marked v15 + KaTeX + highlight.js globals (loaded as classic <script>
 // tags in index.html) instead of the unified/remark/rehype pipeline.
 
-export function escapeHtml(text) {
-  const htmlEntities = {
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  };
-  return String(text).replace(/[&<>"']/g, (char) => htmlEntities[char]);
-}
+import { escapeHtml } from "./dom.js";
+
+export { escapeHtml };
 
 // ---- streaming block splitting (ported verbatim from markdown.ts) ----
 

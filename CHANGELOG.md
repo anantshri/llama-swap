@@ -52,6 +52,18 @@ Long-form entries with full context live in
 
 ### Changed
 
+- Simplified the web UI's vanilla JS/CSS base with zero functional change:
+  30 files, net −227 lines. Shared helpers now carry what each interface
+  re-implemented locally — a playground task lifecycle (`runTask`), stage
+  spinner/error templates, `escapeHtml`/download/copy/scroll helpers, REST
+  wrappers on `fetchOk`/`apiFetch`/`postJSON`, a throttled conversation
+  saver, a shared SSE reader loop for the three chat streaming parsers, and
+  `statusDotClass`/`modelServerPath` in `util/modelUtils.js`. Dead code and
+  unused CSS rules removed; verified behavior-identical via golden-output
+  harnesses (stream parsers, markdown, DOM-free modules) and the full Go
+  test suite. Also fixes a latent crash: the image playground's SDAPI
+  settings panel referenced an unimported `escapeHtml` (ReferenceError on
+  open).
 - Fixed the Settings page and header tooltip showing "unknown" for Version,
   Commit Hash, and Build Date: the UI's `versionInfo` store was never populated.
   It now fetches `GET /api/version` once at boot.

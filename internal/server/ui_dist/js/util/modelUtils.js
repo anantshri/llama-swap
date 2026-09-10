@@ -10,3 +10,17 @@ export function groupModels(models) {
   }, {});
   return { local, peersByProvider };
 }
+
+// Model status badge + upstream URL helpers, shared by the models list
+// (modelsPanel) and the model detail page.
+export function statusDotClass(m) {
+  if (!m) return "status-dot status-dot--idle";
+  if (m.state === "ready") return "status-dot status-dot--ready";
+  if (m.state === "starting" || m.state === "stopping") return "status-dot status-dot--transition";
+  return "status-dot status-dot--idle";
+}
+
+export function modelServerPath(modelId) {
+  if (modelId === "comfyui_auto") return "/comfyui/";
+  return `/upstream/${encodeURIComponent(modelId)}/`;
+}

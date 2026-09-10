@@ -2,14 +2,13 @@
 // getImageUrls helpers in lib/types.ts. Content is either a plain string or an
 // array of { type: "text", text } / { type: "image_url", image_url: { url } } parts.
 
-export function getTextContent(content) {
-  if (typeof content === "string") {
-    return content;
-  }
+export function getTextContent(content, sep = "\n") {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
   return content
-    .filter((part) => part.type === "text")
+    .filter((part) => part?.type === "text")
     .map((part) => part.text)
-    .join("\n");
+    .join(sep);
 }
 
 export function getImageUrls(content) {

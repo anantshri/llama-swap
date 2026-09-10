@@ -6,20 +6,9 @@ import { observable } from "../store.js";
 import { LogPanel } from "../components/logPanel.js";
 import { ActivityTable } from "../components/activityTable.js";
 import { capabilityLabels } from "../util/capabilities.js";
+import { statusDotClass, modelServerPath } from "../util/modelUtils.js";
 
 const LOG_LENGTH_LIMIT = 1024 * 100; // 100KB
-
-function modelServerPath(modelId) {
-  if (modelId === "comfyui_auto") return "/comfyui/";
-  return `/upstream/${encodeURIComponent(modelId)}/`;
-}
-
-function statusDotClass(m) {
-  if (!m) return "status-dot status-dot--idle";
-  if (m.state === "ready") return "status-dot status-dot--ready";
-  if (m.state === "starting" || m.state === "stopping") return "status-dot status-dot--transition";
-  return "status-dot status-dot--idle";
-}
 
 // Stream a model's log tail by opening a long-lived fetch to
 // GET /logs/stream/{modelId} and accumulating text into an observable.

@@ -1,12 +1,20 @@
 // Stats page: per-model aggregated metrics served by the backend from
 // /api/metrics/stats. Aggregation happens in SQL over the entire activity
 // log, so no request-count limit applies.
-import { el, cleanupAll } from "../dom.js";
+import { el, cleanupAll, escapeHtml } from "../dom.js";
+import { getActivityStats } from "../api.js";
 import { compactNumbers, currencyPref, defaultRatesPref, inrPerUsdPref, showCost } from "../preferences.js";
 import { formatCompactNumber } from "../util/format.js";
 import { estimateCostUSD, formatCost, resolveRates } from "../util/pricing.js";
 
 const nf = new Intl.NumberFormat();
+
+// One summary tile: value over label.
+const statTile = (value, label) => `
+  <div class="stats-stat">
+    <span class="stats-stat-value">${value}</span>
+    <span class="stats-stat-label">${label}</span>
+  </div>`;
 
 function formatSpeed(s) {
   return s == null || s < 0 ? "—" : s.toFixed(2) + " t/s";
@@ -106,9 +114,7 @@ export function StatsPage() {
       // The backend aggregates over the whole activity log (SQL GROUP BY);
       // the response shape is store.ActivityStats plus the server's pricing
       // snapshot from /api/metrics/stats.
-      const resp = await fetch("/api/metrics/stats");
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const stats = await resp.json();
+      const stats = await getActivityStats();
       return {
         totalRequests: stats.total_requests || 0,
         totalInput: stats.total_input_tokens || 0,
@@ -131,43 +137,20 @@ export function StatsPage() {
       return;
     }
 
-    const costTile = showCost.get()
-      ? (() => {
-          const totalUSD = stats.models.reduce((sum, s) => sum + modelCost(s), 0);
-          const cur = effectiveCurrency();
-          const amount = formatCost(totalUSD, cur, effectiveInrPerUsd());
-          return `
-        <div class="stats-stat">
-          <span class="stats-stat-value">${amount}</span>
-          <span class="stats-stat-label">Est. Cost</span>
-        </div>`;
-        })()
-      : "";
+    const tiles = [
+      [formatCount(stats.totalRequests), "Requests"],
+      [formatCount(stats.totalInput), "Input Tokens"],
+      [formatCount(stats.totalOutput), "Output Tokens"],
+      [formatCount(stats.totalCached), "Cached Tokens"],
+      [nf.format(stats.models.length), "Models Used"],
+    ].map(([value, label]) => statTile(value, label));
 
-    summaryEl.innerHTML = `
-      <div class="stats-summary-inner">
-        <div class="stats-stat">
-          <span class="stats-stat-value">${formatCount(stats.totalRequests)}</span>
-          <span class="stats-stat-label">Requests</span>
-        </div>
-        <div class="stats-stat">
-          <span class="stats-stat-value">${formatCount(stats.totalInput)}</span>
-          <span class="stats-stat-label">Input Tokens</span>
-        </div>
-        <div class="stats-stat">
-          <span class="stats-stat-value">${formatCount(stats.totalOutput)}</span>
-          <span class="stats-stat-label">Output Tokens</span>
-        </div>
-        <div class="stats-stat">
-          <span class="stats-stat-value">${formatCount(stats.totalCached)}</span>
-          <span class="stats-stat-label">Cached Tokens</span>
-        </div>
-        <div class="stats-stat">
-          <span class="stats-stat-value">${nf.format(stats.models.length)}</span>
-          <span class="stats-stat-label">Models Used</span>
-        </div>${costTile}
-      </div>
-    `;
+    if (showCost.get()) {
+      const totalUSD = stats.models.reduce((sum, s) => sum + modelCost(s), 0);
+      tiles.push(statTile(formatCost(totalUSD, effectiveCurrency(), effectiveInrPerUsd()), "Est. Cost"));
+    }
+
+    summaryEl.innerHTML = `<div class="stats-summary-inner">${tiles.join("")}</div>`;
   }
 
   function renderTimespan(firstTime, lastTime, totalReqs, modelCount) {
@@ -281,15 +264,6 @@ export function StatsPage() {
         sortOrder = "desc";
       }
     }
-  }
-
-  function escapeHtml(s) {
-    return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
   }
 
   // Initial load

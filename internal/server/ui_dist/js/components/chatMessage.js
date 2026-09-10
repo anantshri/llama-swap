@@ -5,7 +5,7 @@
 // trailing pending block (preserving the incremental-render optimization). The
 // assistant skeleton is built once and patched in place on update() so the
 // codeBlockCopy MutationObserver and settled DOM survive every streaming chunk.
-import { el, cleanupAll } from "../dom.js";
+import { el, copyText } from "../dom.js";
 import {
   renderMarkdown,
   escapeHtml,
@@ -13,6 +13,7 @@ import {
   createStreamingCache,
 } from "../markdown.js";
 import { getTextContent, getImageUrls } from "../util/content.js";
+import { formatDuration } from "../util/format.js";
 
 const ICON_COPY = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
 const ICON_CHECK = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
@@ -25,30 +26,7 @@ const ICON_CHEVRON_RIGHT = `<svg xmlns="http://www.w3.org/2000/svg" width="16" h
 const ICON_BRAIN = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/></svg>`;
 const ICON_CODE = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></svg>`;
 
-function formatDuration(ms) {
-  if (ms < 1000) return `${ms.toFixed(0)}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-async function copyText(text) {
-  try {
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.cssText = "position:fixed;left:-9999px";
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      document.body.removeChild(ta);
-    }
-    return true;
-  } catch (e) {
-    console.error("copy failed", e);
-    return false;
-  }
-}
+const formatDurationMs = (ms) => formatDuration(ms, { subSecondMs: true, precision: 1 });
 
 // Attach copy buttons to any <pre> the renderer produces. Returns a disconnect fn.
 function codeBlockCopy(node) {
@@ -185,7 +163,7 @@ export function ChatMessage(initial) {
       return;
     }
     const rc = props.reasoning_content || "";
-    const meta = `(${rc.length} chars${!props.isReasoning && props.reasoningTimeMs > 0 ? `, ${formatDuration(props.reasoningTimeMs)}` : ""})`;
+    const meta = `(${rc.length} chars${!props.isReasoning && props.reasoningTimeMs > 0 ? `, ${formatDurationMs(props.reasoningTimeMs)}` : ""})`;
     host.innerHTML = `
       <button class="chat-reasoning-btn" data-reasoning-toggle>
         ${showReasoning ? ICON_CHEVRON_DOWN : ICON_CHEVRON_RIGHT}
@@ -361,7 +339,6 @@ export function ChatMessage(initial) {
     },
     destroy() {
       if (proseDisconnect) proseDisconnect();
-      cleanupAll([]);
     },
   };
 }
