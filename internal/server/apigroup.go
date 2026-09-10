@@ -213,7 +213,9 @@ func (s *Server) handleAPIActivity(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(page)
 }
 
-// handleAPIActivityStats serves aggregate activity statistics and histograms.
+// handleAPIActivityStats serves aggregate activity statistics and histograms
+// plus the server's pricing snapshot, which the UI uses to estimate token
+// costs for the same rows.
 func (s *Server) handleAPIActivityStats(w http.ResponseWriter, r *http.Request) {
 	stats, err := s.store.ActivityStats(r.Context(), store.ActivityStatsQuery{
 		Model: strings.TrimSpace(r.URL.Query().Get("model")),
@@ -223,7 +225,10 @@ func (s *Server) handleAPIActivityStats(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(stats)
+	_ = json.NewEncoder(w).Encode(struct {
+		store.ActivityStats
+		Pricing APIPricing `json:"pricing"`
+	}{ActivityStats: stats, Pricing: s.apiPricing()})
 }
 
 func parseActivityLimit(raw string) (int, error) {

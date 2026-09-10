@@ -107,6 +107,10 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 		return Config{}, fmt.Errorf("logToStdout must be one of: proxy, upstream, both, none")
 	}
 
+	if err := config.Pricing.Validate(); err != nil {
+		return Config{}, err
+	}
+
 	// Populate the aliases map
 	config.aliases = make(map[string]string)
 	for modelName, modelConfig := range config.Models {
@@ -154,6 +158,12 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 
 		if err := modelConfig.Capabilities.Validate(); err != nil {
 			return Config{}, fmt.Errorf("model %s: %w", modelId, err)
+		}
+
+		if modelConfig.Pricing != nil {
+			if err := modelConfig.Pricing.Validate(fmt.Sprintf("model %s pricing", modelId)); err != nil {
+				return Config{}, err
+			}
 		}
 
 		// Auto-register setParamsByID keys as aliases (skip the model's own ID)

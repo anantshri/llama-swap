@@ -10,6 +10,26 @@ Long-form entries with full context live in
 
 ## [Unreleased]
 
+### Added
+
+- Port of upstream PR #1075: a `setParams`/`setParamsByID` key ending in `?`
+  (e.g. `max_tokens?: 4096`) is set-if-undefined — the value applies only when
+  the request does not already carry that parameter, so configs can supply
+  defaults without clobbering clients. Works on model and peer filters;
+  stripped parameters count as undefined and a hard spelling of the same key
+  wins over the `?` form. Backward compatible (fixes upstream #1052).
+- Approximate token-cost estimates on the Stats page. A new top-level
+  `pricing:` config section sets the display currency (USD, or INR with a
+  configurable `usdToINR` rate, default 95) and default per-million-token
+  rates; a per-model `pricing:` block overrides them. The server publishes the
+  snapshot through `GET /api/metrics/pricing` and embeds it in
+  `/api/metrics/stats`; the Stats page shows an "Est. Cost" summary tile and a
+  sortable per-model column. Cached tokens are deducted from billable input
+  and charged at their own rate (the input rate when unset). The UI's Settings
+  page adds per-browser overrides (cost on/off, currency, INR rate, default
+  rates) plus a "Compact large numbers" toggle that compresses Stats-page
+  token/request counts to M/B/T suffixes with exact values on hover.
+
 ### Added (selective upstream-PR ports)
 
 - Surface the upstream's own log output in the error when a model process exits
@@ -30,6 +50,9 @@ Long-form entries with full context live in
 
 ### Changed
 
+- Fixed the Settings page and header tooltip showing "unknown" for Version,
+  Commit Hash, and Build Date: the UI's `versionInfo` store was never populated.
+  It now fetches `GET /api/version` once at boot.
 - The Stats page aggregates server-side from `/api/metrics/stats` instead of
   fetching `/api/metrics/activity?limit=999`, so per-model totals now cover the
   entire activity log rather than the most recent 999 requests. The stats
@@ -95,6 +118,19 @@ Long-form entries with full context live in
 
 ### Fixed
 
+- Intel discrete GPUs (Arc / Flex) on the Hardware page no longer report
+  "Shared System" memory with no capacity: a new `xpu-smi` (Intel XPU Manager)
+  probe supplies the dedicated VRAM size and merges over the sysfs record by
+  PCI address, matching the existing `nvidia-smi`/`rocm-smi` probes. Applies
+  when the driver does not expose `mem_info_vram_total` in sysfs. Follow-up
+  fix for a regression in the first cut: the sysfs probe looked for render
+  nodes under `/sys/dev/dri` (which does not exist), silently dropping every
+  sysfs accelerator record — Architecture and Power Limit showed "Not
+  detected" on hosts where they had worked before. Render-node lookup is back
+  to `/dev/dri`, guarded by a fixture test with disjoint sysfs/dev roots. The
+  xpu-smi probe now also derives Architecture from the reported PCI device
+  ID, the Arc Pro B65/B70 model names were added, and the swapped B50/B60
+  entries were corrected (per the pci.ids database).
 - Activity page rows render again. The pin-button change referenced
   `pinningId` from `cellHtml`, a module-scope function where that variable does
   not exist, so any row with a capture threw a `ReferenceError` and the
@@ -127,6 +163,10 @@ Long-form entries with full context live in
 - `TestDirWatcher_MissingDirRecovers` no longer fails on Windows CI: the
   mid-run directory removal retries briefly to tolerate the transient Windows
   sharing violation when the watcher is polling the directory concurrently.
+- `TestConfig_LoadWindows` no longer fails on Windows CI: its expected `Config`
+  was missing the normalized `pricing:` defaults (`currency: USD`,
+  `usdToINR: 95`) that `Load` now applies, unlike the already-updated posix
+  twin of the test.
 
 ### Security
 

@@ -5,6 +5,464 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-10 — config: fix TestConfig_LoadWindows after pricing defaults
+
+### Symptom
+
+GitHub Actions Windows runner failed `make test-all` with
+`TestConfig_LoadWindows` (internal/config/config_windows_test.go:293):
+the loaded `Config` had `Pricing{Currency:"USD", USDToINR:95}` while the
+test expected the zero value `{Currency:"", USDToINR:0}`.
+
+### Diagnosis
+
+The pricing feature (Stats-page cost estimates) added normalization in
+`PricingConfig.Validate()` (internal/config/pricing.go): an unset
+`currency` becomes `USD` and a zero `usdToINR` becomes
+`DefaultUSDToINR` (95). `TestConfig_LoadPosix` — the `!windows` twin —
+was updated with the normalized `Pricing` block in its expected
+`Config`, but the `//go:build windows` copy was not. The file only
+compiles on Windows, so Linux dev/CI never caught the staleness; only
+the Windows leg of the GitHub Actions matrix did.
+
+### Change
+
+- `internal/config/config_windows_test.go`: added the same expected
+  `Pricing: PricingConfig{Currency: "USD", USDToINR: DefaultUSDToINR}`
+  to `TestConfig_LoadWindows`'s expected struct, in the same position
+  as the posix test (between `Upstream` and `Routing`).
+
+Test-only change; no production code touched.
+
+### Commands
+
+- `GOOS=windows go test -c -o /dev/null ./internal/config` — compiles
+  (the test cannot execute on Linux; compilation is the available check)
+- `go test -race -count=1 ./internal/config/` — ok
+- `gofmt -l internal/config/` — clean
+- `make test-all` — ok (full race suite)
+- `make gosec` / `aidc-scan` — see session log
+
+### Verification
+
+Windows CI is the only place the test runs; the compile check plus the
+byte-identical expected block to the passing posix twin (which asserts
+the same normalization path through `Load`) give confidence the Windows
+run is green again.
+
+### Notes
+
+Follow-up to the pricing commit ("stats shananigans", 79ac1a0). The
+other Windows-only test files (internal/hw/hardware_windows_test.go,
+internal/perf/d3dkmt_windows_test.go, internal/perf/pdh_windows_test.go)
+do not compare `Config` structs and are unaffected.
+
+
+### Symptom
+
+After deploying the xpu-smi probe to dumbo, the Hardware page showed the
+Arc Pro B70 with `31.9 GiB (Dedicated)` but **Architecture: Not detected**
+and **Power Limit: Not detected** — both had worked before the change.
+
+### Diagnosis
+
+Two independent defects:
+
+1. **Regression (the important one):** the xpu-smi refactor introduced
+   `detectDRMSysfsFrom(sysRoot)` and rewired the render-node check to
+   `filepath.Join(sysRoot, "dev", "dri")` → `/sys/dev/dri`, which does not
+   exist — render nodes live at `/dev/dri`, a different hierarchy from
+   sysfs. `hasAccessibleRenderNode` therefore failed for every card on a
+   real host and `detectDRMSysfs` returned nothing, losing the sysfs
+   record that supplied architecture (PCI-ID table), power limit, and
+   driver-module name. The unit test missed it because its fixture
+   created `renderD128` under the temp sysfs root's own `dev/dri`,
+   mirroring the wrong path.
+2. **Classification gaps (pre-existing):** `intelModelByID` had B50/B60
+   swapped (`0xE211` is B60, `0xE212` is B50 per pci.ids) and no entries
+   for the Battlemage G31 dies (`0xE222` Arc Pro B65, `0xE223` Arc Pro
+   B70) — although both G31 IDs were already in the architecture table,
+   so sysfs-side architecture for the B70 worked before the regression.
+
+### Change
+
+- `internal/hw/detect_linux.go`: `detectDRMSysfsFrom(sysfsRoot, driRoot)`
+  takes **two** roots; production wiring passes `/sys` and `/dev/dri`.
+  A comment records that the hierarchies are distinct.
+- `internal/hw/intel_linux_test.go`: the sysfs fixture uses disjoint temp
+  directories for the sysfs tree and the DRI tree, so joining them under
+  one root fails the test (this is the guard that was missing).
+- `internal/hw/intel_linux.go`: the xpu-smi record now maps
+  `pci_device_id` through `intelGPU()` to fill Architecture (and a model
+  fallback), so it is populated even where sysfs is unavailable; the
+  driver name is inferred from the branded version prefix (`I915_` →
+  i915, `XE_` → xe) instead of being hardcoded `xe` (wrong for i915
+  Flex cards) — bare versions like dumbo's `17012946` leave the name for
+  sysfs to fill.
+- `internal/hw/intel.go`: Battlemage comment split G21/G31; model table
+  fixed — `0xE211` Arc Pro B60, `0xE212` Arc Pro B50, `0xE222` Arc Pro
+  B65, `0xE223` Arc Pro B70 (verified against the pci.ids database and
+  torvalds/linux `include/drm/intel/pciids.h`).
+
+### Tests
+
+- Fixture test now proves a card is detected with render nodes in a root
+  disjoint from sysfs (fails under the `/sys/dev/dri` bug).
+- `TestHardware_IntelXPUSMIB70`: dumbo's exact record — Battlemage from
+  `0xE223`, nil driver name for a bare numeric version, 32 GiB dedicated.
+- `TestHardware_IntelXPUSMII915DriverName`: I915_ prefix infers i915.
+- `TestIntelGPU_DiscreteWithModel` / `BattlemageArchOnly` updated for the
+  corrected B50/B60 and new B65/B70 entries.
+- Merge test rebuilt to use a no-`pci_device_id` fixture so it still
+  proves the sysfs record contributes architecture and driver name.
+
+### Commands
+
+- `go test -run "TestHardware_Intel|TestIntelGPU" ./internal/hw/` — 14 passed.
+- `make test-dev` — all packages ok (go test + staticcheck).
+- `make gosec` — 0 issues (linux, darwin, windows).
+- `aidc-scan` — clean.
+
+### Notes
+
+Lesson recorded: a fixture that mirrors the code's (wrong) path
+convention instead of the real filesystem layout passes while production
+breaks — fixture layouts for path-based code should be modeled on the
+real host hierarchy, and refactors that parameterize hardcoded paths
+need extra suspicion when the paths span different filesystem roots.
+
+---
+
+## 2026-09-09 — hw: Intel dGPU VRAM via xpu-smi (was "Shared System")
+
+### Symptom
+
+On the dumbo server (Intel graphics), the Hardware page showed the GPU's
+memory as `Shared System` with no capacity, while `xpu-smi` on that host
+correctly reports 32 GB of VRAM.
+
+### Diagnosis
+
+`internal/hw/detect_linux.go` `detectDRMSysfs` classifies every DRM device
+without a readable `mem_info_vram_total` sysfs file as `shared_system`. On
+this host the Intel driver stack does not expose that file for the card, so
+the discrete GPU fell into the integrated-GPU bucket. NVIDIA and AMD each
+have a CLI probe (`nvidia-smi`, `rocm-smi`) that merges over the sysfs
+record by PCI identity — Intel had none; only the PCI-ID architecture/model
+table in `intel.go`.
+
+### Change
+
+- `internal/hw/intel_linux.go` (new): `detectIntel` probe using
+  `xpu-smi discovery -j` to list devices, then `xpu-smi discovery -d <id> -j`
+  per device for full detail (the bare listing omits memory). Maps
+  `memory_physical_size_byte` to `dedicated` capacity; a `device_type`
+  containing "integrated" keeps `shared_system`. Merges with the sysfs
+  record via normalized PCI BDF (`normalizePCIIdentity`), so sysfs still
+  contributes architecture (e.g. Alchemist/Battlemage from the PCI-ID
+  table) and power limits where xpu-smi's record is thinner.
+- `internal/hw/detect_linux.go`: `detectPlatform` runs `detectIntel` after
+  AMD and before sysfs (merge order: existing non-null value wins, so the
+  authoritative CLI probe must come first — same pattern as NVIDIA/AMD).
+  `detectDRMSysfs` refactored to `detectDRMSysfsFrom(sysRoot)` and
+  `hasAccessibleRenderNode(devicePath, deviceRoot)` now takes roots, making
+  the sysfs path testable off the live `/sys`.
+- Driver name in the xpu-smi record is `xe` with xpu-smi's
+  `driver_version` string (that string is driver-branded, e.g.
+  `XE_1.0.4_...` / `I915_...`).
+
+gosec G204 on the `xpu-smi` invocation is suppressed inline (fixed binary +
+integer device id, same pattern as `nvidia-smi`/`rocm-smi` calls); ledger
+`docs/gosec-suppressions.md` updated (G204 ×8, total 92).
+
+### Tests
+
+`internal/hw/intel_linux_test.go` (new, captured-JSON parser tests, no
+local hardware needed):
+
+- Flex 170 detail JSON → dedicated + 14942253056 bytes + driver version.
+- `device_type: "Integrated GPU"` stays `shared_system`.
+- Missing memory fields → dedicated without invented capacity.
+- BDF normalization of xpu-smi's domain-qualified form.
+- `detectIntel` returns nil without xpu-smi on PATH.
+- Merge test: xpu-smi `dedicated`+capacity wins over a sysfs
+  `shared_system` record for the same PCI address, sysfs architecture
+  preserved.
+- Sysfs fixture test (`detectDRMSysfsFrom`): `mem_info_vram_total`
+  present → dedicated (regression guard for the pure-sysfs path), ATS-M
+  device ID resolves to Alchemist.
+
+### Commands
+
+- `go test -v -run "TestHardware_Intel" ./internal/hw/` — 7 passed.
+- `make test-dev` — ok (go test + staticcheck).
+- `make gosec` — 0 issues (linux, darwin, windows).
+- `go test -cover ./...` — 1501 passed in 31 packages.
+- `aidc-scan` — clean.
+
+### Verification notes
+
+- Live verification on dumbo requires the rebuilt binary on that host;
+  expected result: Flex/Arc card shows `Dedicated` with ~32 GB (xpu-smi's
+  `memory_physical_size_byte`).
+- xpu-smi JSON field names verified against intel/xpumanager source
+  (`ial/cmn/cmd_discovery.cpp`): listing uses `device_list[].device_id` /
+  `pci_bdf_address`; per-device detail uses `device_name`, `device_type`
+  ("Discrete GPU" / "Integrated GPU"), `driver_version`, and
+  `memory_physical_size_byte` (bytes, promoted to a JSON number).
+
+---
+
+## 2026-09-09 — UI: populate Build Information (was always "unknown")
+
+### Symptom
+
+The Settings page's "Build Information" card (and the header connection
+tooltip) showed `unknown` for Version, Commit Hash, and Build Date, even
+though `GET /api/version` returns correct values and the binary is built
+with `-ldflags -X main.version/main.commit/main.date` (Makefile).
+
+### Diagnosis
+
+The UI's `versionInfo` store (`ui_dist/js/api.js`) was initialized to
+`"unknown"` placeholders and never updated: no code fetched `/api/version`,
+and the SSE event stream (`handleAPIEventMessage`) has no version event.
+The Settings page and header subscribe to the store, so they rendered the
+initial placeholders forever. The store was ported from the old Svelte UI
+(`stores/api.ts`) but the code that populated it was lost in the port.
+
+### Change
+
+- `internal/server/ui_dist/js/api.js`: new `fetchVersionInfo()` — fetches
+  `GET /api/version` once and populates `versionInfo`, keeping "unknown"
+  defaults on HTTP error or network failure (non-fatal).
+- `internal/server/ui_dist/js/main.js`: calls `fetchVersionInfo()` at boot,
+  right after `enableAPIEvents(true)`.
+
+Also removed `max-width: 34rem` from `.page-settings`
+(`ui_dist/css/newpages.css`) so the Settings page uses the full content
+width (per user request in the same session).
+
+### Commands
+
+- `go test -short ./internal/server/` — 365 passed (covers UI
+  serving/embedding via `internal/server/ui_test.go`).
+- `aidc-scan` — clean.
+
+### Verification
+
+Rebuilding and loading the UI now fills the Build Information card from
+`/api/version`; on a server built with plain `go build` (no ldflags) it
+will show the compile-time defaults (`0` / `abcd1234` / `unknown`) rather
+than a fetch failure.
+
+### Notes
+
+- `node` is not available in this container, so the modified ES modules
+  were syntax-checked by review only; browser loading is exercised by the
+  existing UI serving tests only at the HTTP layer.
+
+---
+
+## 2026-09-09 — Port upstream #1075: set-if-undefined params via `?` key suffix
+
+### What / goal
+
+Surveyed the 12 upstream commits since this fork's baseline (`7a14664`) and
+the user picked the port of upstream PR #1075 (fixes upstream issue #1052):
+a `setParams`/`setParamsByID` key ending in `?` (e.g. `max_tokens?: 4096`)
+is **set-if-undefined** — applied only when the request does not already
+carry that parameter. Plain keys keep forcing their values; a config that
+never uses the suffix behaves exactly as before.
+
+### Porting notes (why not a cherry-pick)
+
+Upstream's `filters.go` lacks this fork's `SetParamsByMatch` (upstream PR
+#934 was never merged upstream; the fork carries its own implementation), so
+the patch was merged by hand:
+
+- `internal/config/filters.go` — refactored `SanitizedSetParams` /
+  `SanitizedSetParamsByID` to delegate to a shared `sanitizeParams()`
+  (upstream's refactor, which also de-duplicates the fork's copies) returning
+  `(params, keys, soft)` where `soft` marks `?`-spelled keys (suffix
+  stripped). Hard spelling wins when both `key` and `key?` exist; `model?`
+  stays protected; a bare `?` key is ignored; `soft` is nil when empty.
+- `internal/server/filters.go` — `applyFilters` skips a soft key when
+  `gjson.GetBytes(body, key).Exists()` at its pipeline stage. The fork's
+  pipeline is `stripParams | setParamsByMatch | setParams | setParamsByID`
+  (upstream has no byMatch stage), so a stripped key counts as undefined and
+  a key set by an earlier stage (byMatch rule or setParams) counts as
+  defined.
+- `MatchRule.SanitizedSet()` (fork-only feature) intentionally unchanged —
+  upstream scope covers `setParams`/`setParamsByID` only.
+
+### Docs
+
+- `config-schema.json`: `?` suffix documented in model `setParams`,
+  `setParamsByID`, and peer `setParams` descriptions.
+- `docs/config.example.yaml`: model + peer `setParams` comments and a
+  `max_tokens?: 4096` example (feeds the MCP doc agent automatically).
+- `docs/kb/guides/api-integration/set-if-undefined.md` (new, adapted to name
+  the fork's byMatch stage in the pipe order).
+- `docs/kb/guides/api-integration/filters-and-request-rewriting.md`:
+  set-if-undefined paragraph, pipe-order note, and the Order of operations
+  list gained the previously missing `setParamsByMatch` step.
+
+### Tests
+
+- `internal/config/filters_test.go`: soft-suffix stripped/reported,
+  hard-wins-over-soft, protected param cannot be soft, bare `?` ignored, and
+  per-alias `?` cases for both sanitize functions (ported from upstream's
+  table additions).
+- `internal/server/filters_test.go`: seven new `applyFilters` subtests
+  covering applied-when-missing, request-value-wins, `0`/`false`/`null`
+  counting as sent, stripped-then-refilled, dotted path keys, byID no-op
+  after setParams, and the issue #1052 pipeline example.
+
+### Commands
+
+- `go test ./internal/config/ ./internal/server/ -run "Filters|Filter"` → ok
+- `go test ./internal/config/ ./internal/server/ ./internal/docagent/` → ok
+- `make test-dev` → all packages ok; `make gosec` → 0 issues
+- E2E: ran the binary with `setParams: {temperature: 0.7, max_tokens?: 4096}`
+  against the fake responder — a request carrying `max_tokens: 100` kept 100;
+  one without gained `max_tokens: 4096`; both got `temperature: 0.7`.
+
+### Verification notes
+
+First `aidc-scan` run after the port flagged 2 gitleaks findings — both the
+literal placeholder `nodekey:0123456789abcdef…` from tailcat documentation in
+git history (one commit is this fork's since-removed tailcat experiment, one
+is upstream's tailcat commit on the fetched `upstream` ref). None exist in
+the working tree; `trufflehog filesystem` reports zero secrets. Fingerprints
+registered in `.gitleaksignore` following its documented convention, and
+`aidc-scan` is clean again.
+
+---
+
+## 2026-09-09 — Stats page: approximate token costs + compact number display
+
+### What / goal
+
+Two Stats-page (`/ui/#/stats`) requests:
+
+1. An "approximate cost of tokens" column alongside the existing totals.
+2. Optionally compress large counts to M/B/T suffixes, controlled by a
+   setting.
+
+Design brainstormed with the user. Decisions:
+
+- Pricing source: a real `pricing:` config block (validated by the Go config
+  loader), **plus** per-browser overrides in the UI Settings page. Models
+  without their own pricing fall back to defaults; the cost display can be
+  turned off in Settings.
+- Currency: USD default, INR alternate, with an INR-per-USD ratio
+  configurable both in config (top-level `pricing.usdToINR`, default 95) and
+  in the UI.
+- Cost formula: cached tokens are a *subset* of prompt tokens in llama.cpp,
+  so they are deducted from billable input:
+  `(input − cached)×input_rate + cached×cached_rate + output×output_rate`,
+  all divided by 1M (rates are $/1M tokens). When a model has no `cached`
+  rate, cached tokens bill at the input rate (the OpenAI-style default).
+- Cost display: adaptive precision (`~$12.34` ≥ $0.01, four decimals down to
+  $0.0001, `<0.0001` below that, `—` for zero/unconfigured).
+- Compact numbers scope: Stats page only.
+
+### Change — backend
+
+- `internal/config/pricing.go` (new): `PricingRates` (`input`, `output`,
+  optional `cached`, all USD per 1M tokens, `>= 0` validation) and
+  `PricingConfig` (top-level `pricing:` section: `currency` USD|INR,
+  `usdToINR` default `DefaultUSDToINR = 95`, `defaults PricingRates`).
+  `Validate()` normalizes (empty currency → USD, zero ratio → 95).
+- `internal/config/model_config.go`: `ModelConfig.Pricing *PricingRates`
+  (`yaml:"pricing"`); pointer so "not set" (inherit defaults) is distinct.
+- `internal/config/load.go`: validates top-level pricing and every model's
+  pricing during load (errors name the model, e.g. `model m1 pricing.output`).
+- `internal/server/apipricing.go` (new): `APIPricing` snapshot
+  (`currency`, `usd_to_inr`, `defaults`, `models: {modelId: rates}` — only
+  models with a pricing block listed) served at `GET /api/metrics/pricing`
+  and embedded in the `/api/metrics/stats` response as a `pricing` key (the
+  handler now encodes `struct { store.ActivityStats; Pricing APIPricing }`,
+  so the existing JSON shape is unchanged apart from the new key). Normalizes
+  blank currency/zero ratio so consumers never see a degenerate snapshot.
+  No locking needed: `s.cfg` is immutable per Server instance (hot reload
+  creates a new Server).
+- `internal/config/config-schema.json`: shared `pricingRates` definition,
+  root `pricing` property, model-level `pricing` property.
+- `docs/config.example.yaml`: documents the top-level `pricing:` section and
+  a per-model example (the MCP doc agent indexes this file, so its golden
+  section list in `internal/docagent/golden_test.go` gained `pricing`).
+
+### Change — frontend (vanilla ES modules, no build step)
+
+- `js/util/format.js`: `formatCompactNumber()` (3 significant digits with
+  M/B/T suffixes from 1e6 up; full locale format below) and `formatMoney()`
+  (adaptive precision, `~` prefix, `—` for zero/missing).
+- `js/util/pricing.js` (new): `resolveRates()` (model config block is
+  authoritative; otherwise UI default rates per field, falling through to
+  server defaults), `estimateCostUSD()` (cached-deducted formula),
+  `toDisplayCurrency()`/`currencySymbol()`/`formatCost()`.
+- `js/preferences.js` (new): `persistent()` stores —
+  `stats-compactNumbers` (off), `stats-showCost` (on), `stats-currency`
+  ("" = follow server), `stats-inrPerUsd` (0 = follow server),
+  `stats-defaultRates` (null fields = follow server).
+- `js/pages/stats.js`: sortable `Est. Cost` column (cost header/cells appear
+  only when `showCost` is on; `renderHeader()` adds/removes the `th`, the
+  colspan tracks 9/10), "Est. Cost" summary tile (sum of per-model costs),
+  compact formatting with exact-value `title` tooltips on the four count
+  columns, and live re-render on preference changes (subscriptions cleaned
+  up in `destroy()`).
+- `js/pages/settings.js`: new "Stats page" card — compact-numbers toggle,
+  show-cost toggle, currency segmented control (Auto/USD/INR; the INR-rate
+  input is disabled only for USD since Auto may resolve to INR), INR-per-USD
+  input, and per-field default-rate inputs whose placeholders show the
+  server's configured defaults (fetched from `/api/metrics/pricing`).
+- `css/newpages.css`: `.settings-number-input`, `.settings-rates-row`,
+  `.settings-rates-field`.
+
+### Commands
+
+- `go test ./internal/config/ -run TestConfig_Pricing` → ok
+- `go test ./internal/server/ -run "TestServer_APIMetricsPricing|TestServer_APIMetricsStats"` → ok
+- `bun build --no-bundle` on every touched JS module → parses/resolves
+- `bun /tmp/opencode/pricing-selftest.js` → formatter/cost unit checks ALL PASS
+- `make test-dev` → all packages ok (staticcheck binary absent in env)
+- `make gosec` → 0 issues across linux/darwin/windows
+- `aidc-scan` → semgrep + gitleaks + gosec clean
+- End-to-end: built the binary, ran it with a priced config
+  (`/tmp/opencode/e2e-config.yaml`), sent one chat completion, confirmed
+  `/api/metrics/pricing`, `/api/metrics/stats` (now including `pricing`), and
+  the served UI modules (`/ui/js/...` → 200).
+
+### Verification
+
+Backend unit tests cover defaults, valid/invalid YAML (bad currency,
+negative ratio/rates), API snapshot shape, stats-embedding, and the
+unconfigured fallback. The JS pricing selftest exercises rate precedence
+(model config > UI defaults > server defaults), the cached-deduction math
+(600k×2.5 + 400k×1.25 + 500k×10 = $7.00/1M), INR conversion (~₹665.00), and
+compact/money formatting edge cases. `make test-dev`, `make gosec`, and
+`aidc-scan` all clean.
+
+### Notes
+
+- Caught in review: `renderHeader()` initially queried `[data-cost-th]`
+  which was never set — the cost column would have been appended on every
+  re-render. Fixed to query `th[data-sort="cost"]`.
+- Caught by the selftest: an earlier `resolveRates()` let a model's omitted
+  `cached` inherit the *server default* cached rate; per the documented
+  semantics a model pricing block is authoritative (omitted cached bills at
+  the model's input rate), so the fallback chain only applies to models
+  without a pricing block.
+- JSON cannot distinguish "model pricing omitted `cached`" from
+  "`cached: null`" (Go `*float64(nil)` marshals to `null`), which is exactly
+  the same meaning here — convenient, not a limitation.
+- Pre-existing dead `loading` flag in `stats.js` removed while touching the
+  file.
+
+---
+
 ## 2026-09-09 — Fix Activity page failing to render rows (`pinningId` scope)
 
 ### What / symptom

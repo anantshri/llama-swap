@@ -2,6 +2,9 @@
 // /api/metrics/stats. Aggregation happens in SQL over the entire activity
 // log, so no request-count limit applies.
 import { el, cleanupAll } from "../dom.js";
+import { compactNumbers, currencyPref, defaultRatesPref, inrPerUsdPref, showCost } from "../preferences.js";
+import { formatCompactNumber } from "../util/format.js";
+import { estimateCostUSD, formatCost, resolveRates } from "../util/pricing.js";
 
 const nf = new Intl.NumberFormat();
 
@@ -64,15 +67,45 @@ export function StatsPage() {
 
   const summaryEl = root.querySelector("[data-summary]");
   const timespanEl = root.querySelector("[data-timespan]");
+  const thead = root.querySelector("thead");
   const body = root.querySelector("[data-body]");
 
   let sortKey = "requests";
   let sortOrder = "desc";
+  let stats = { totalRequests: 0, totalInput: 0, totalOutput: 0, totalCached: 0, firstTime: null, lastTime: null, models: [], pricing: null };
+
+  // Display currency and conversion rate: UI settings override the server
+  // config snapshot that arrives with the stats payload.
+  function effectiveCurrency() {
+    return currencyPref.get() || stats.pricing?.currency || "USD";
+  }
+
+  function effectiveInrPerUsd() {
+    const v = Number(inrPerUsdPref.get());
+    if (Number.isFinite(v) && v > 0) return v;
+    return stats.pricing?.usd_to_inr || 95;
+  }
+
+  function formatCount(n) {
+    if (compactNumbers.get()) return formatCompactNumber(n);
+    return nf.format(n);
+  }
+
+  /** Full-value tooltip content for compact cells; "" when not compact. */
+  function countTitle(n) {
+    return compactNumbers.get() && Number.isFinite(n) ? ` title="${nf.format(n)} tokens"` : "";
+  }
+
+  function modelCost(s) {
+    const rates = resolveRates(s.model, stats.pricing, defaultRatesPref.get());
+    return estimateCostUSD(s, rates);
+  }
 
   async function fetchStats() {
     try {
       // The backend aggregates over the whole activity log (SQL GROUP BY);
-      // the response shape is store.ActivityStats from /api/metrics/stats.
+      // the response shape is store.ActivityStats plus the server's pricing
+      // snapshot from /api/metrics/stats.
       const resp = await fetch("/api/metrics/stats");
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const stats = await resp.json();
@@ -84,10 +117,11 @@ export function StatsPage() {
         firstTime: stats.first_timestamp || null,
         lastTime: stats.last_timestamp || null,
         models: Array.isArray(stats.models) ? stats.models : [],
+        pricing: stats.pricing || null,
       };
     } catch (err) {
       console.error("Failed to fetch stats:", err);
-      return { totalRequests: 0, totalInput: 0, totalOutput: 0, totalCached: 0, firstTime: null, lastTime: null, models: [] };
+      return { totalRequests: 0, totalInput: 0, totalOutput: 0, totalCached: 0, firstTime: null, lastTime: null, models: [], pricing: null };
     }
   }
 
@@ -97,28 +131,41 @@ export function StatsPage() {
       return;
     }
 
+    const costTile = showCost.get()
+      ? (() => {
+          const totalUSD = stats.models.reduce((sum, s) => sum + modelCost(s), 0);
+          const cur = effectiveCurrency();
+          const amount = formatCost(totalUSD, cur, effectiveInrPerUsd());
+          return `
+        <div class="stats-stat">
+          <span class="stats-stat-value">${amount}</span>
+          <span class="stats-stat-label">Est. Cost</span>
+        </div>`;
+        })()
+      : "";
+
     summaryEl.innerHTML = `
       <div class="stats-summary-inner">
         <div class="stats-stat">
-          <span class="stats-stat-value">${nf.format(stats.totalRequests)}</span>
+          <span class="stats-stat-value">${formatCount(stats.totalRequests)}</span>
           <span class="stats-stat-label">Requests</span>
         </div>
         <div class="stats-stat">
-          <span class="stats-stat-value">${nf.format(stats.totalInput)}</span>
+          <span class="stats-stat-value">${formatCount(stats.totalInput)}</span>
           <span class="stats-stat-label">Input Tokens</span>
         </div>
         <div class="stats-stat">
-          <span class="stats-stat-value">${nf.format(stats.totalOutput)}</span>
+          <span class="stats-stat-value">${formatCount(stats.totalOutput)}</span>
           <span class="stats-stat-label">Output Tokens</span>
         </div>
         <div class="stats-stat">
-          <span class="stats-stat-value">${nf.format(stats.totalCached)}</span>
+          <span class="stats-stat-value">${formatCount(stats.totalCached)}</span>
           <span class="stats-stat-label">Cached Tokens</span>
         </div>
         <div class="stats-stat">
           <span class="stats-stat-value">${nf.format(stats.models.length)}</span>
           <span class="stats-stat-label">Models Used</span>
-        </div>
+        </div>${costTile}
       </div>
     `;
   }
@@ -143,6 +190,7 @@ export function StatsPage() {
       case "inputTokens": return s.input_tokens;
       case "outputTokens": return s.output_tokens;
       case "cachedTokens": return s.cached_tokens;
+      case "cost": return modelCost(s);
       case "avgPromptSpeed": return s.avg_prompt_speed == null ? -1 : s.avg_prompt_speed;
       case "avgGenSpeed": return s.avg_gen_speed == null ? -1 : s.avg_gen_speed;
       case "avgDuration": return s.requests > 0 ? (s.total_duration_ms || 0) / s.requests : 0;
@@ -178,32 +226,61 @@ export function StatsPage() {
   }
 
   function renderTable(stats) {
+    const cost = showCost.get();
+    const cols = cost ? 10 : 9;
+
     if (stats.totalRequests === 0) {
-      body.innerHTML = `<tr><td class="stats-empty" colspan="9">No activity recorded</td></tr>`;
+      body.innerHTML = `<tr><td class="stats-empty" colspan="${cols}">No activity recorded</td></tr>`;
+      renderHeader(cost);
       renderSortIndicator();
       return;
     }
 
     const sorted = [...stats.models].sort(compareRows);
+    const cur = effectiveCurrency();
+    const ratio = effectiveInrPerUsd();
 
     body.innerHTML = sorted
       .map((s) => {
         const totalDuration = s.total_duration_ms;
+        const costCell = cost
+          ? `<td class="stats-td stats-td-num">${formatCost(modelCost(s), cur, ratio)}</td>`
+          : "";
 
         return `<tr class="stats-tr">
           <td class="stats-td stats-td-model">${escapeHtml(s.model)}</td>
-          <td class="stats-td stats-td-num">${nf.format(s.requests)}</td>
-          <td class="stats-td stats-td-num">${nf.format(s.input_tokens)}</td>
-          <td class="stats-td stats-td-num">${nf.format(s.output_tokens)}</td>
-          <td class="stats-td stats-td-num">${s.cached_tokens > 0 ? nf.format(s.cached_tokens) : "—"}</td>
+          <td class="stats-td stats-td-num"${countTitle(s.requests)}>${formatCount(s.requests)}</td>
+          <td class="stats-td stats-td-num"${countTitle(s.input_tokens)}>${formatCount(s.input_tokens)}</td>
+          <td class="stats-td stats-td-num"${countTitle(s.output_tokens)}>${formatCount(s.output_tokens)}</td>
+          <td class="stats-td stats-td-num"${countTitle(s.cached_tokens)}>${s.cached_tokens > 0 ? formatCount(s.cached_tokens) : "—"}</td>
           <td class="stats-td stats-td-num">${formatSpeed(s.avg_prompt_speed)}</td>
           <td class="stats-td stats-td-num">${formatSpeed(s.avg_gen_speed)}</td>
           <td class="stats-td stats-td-num">${formatDuration(totalDuration, s.requests)}</td>
-          <td class="stats-td stats-td-num">${s.last_used ? formatRelativeTime(s.last_used) : "—"}</td>
+          <td class="stats-td stats-td-num">${s.last_used ? formatRelativeTime(s.last_used) : "—"}</td>${costCell}
         </tr>`;
       })
       .join("");
+    renderHeader(cost);
     renderSortIndicator();
+  }
+
+  // renderHeader keeps the Est. Cost column in sync with the showCost
+  // preference without rebuilding the table element itself.
+  function renderHeader(cost) {
+    const existing = thead.querySelector('th[data-sort="cost"]');
+    if (cost && !existing) {
+      const th = document.createElement("th");
+      th.className = "stats-th stats-th-num stats-th-sortable";
+      th.dataset.sort = "cost";
+      th.innerHTML = `Est. Cost<span class="stats-sort-ind"></span>`;
+      thead.querySelector("tr").appendChild(th);
+    } else if (!cost && existing) {
+      existing.remove();
+      if (sortKey === "cost") {
+        sortKey = "requests";
+        sortOrder = "desc";
+      }
+    }
   }
 
   function escapeHtml(s) {
@@ -216,9 +293,6 @@ export function StatsPage() {
   }
 
   // Initial load
-  let stats = { totalRequests: 0, totalInput: 0, totalOutput: 0, totalCached: 0, firstTime: null, lastTime: null, models: [] };
-  let loading = true;
-
   root.querySelector("thead").addEventListener("click", (e) => {
     const th = e.target.closest("th[data-sort]");
     if (!th) return;
@@ -240,13 +314,25 @@ export function StatsPage() {
     renderSummary(stats);
     renderTimespan(stats.firstTime, stats.lastTime, stats.totalRequests, stats.models.length);
     renderTable(stats);
-    loading = false;
   });
+
+  // Re-render live when display preferences change (edited on the Settings
+  // page or toggled while this page is open in another tab).
+  const subs = [
+    compactNumbers.subscribe(() => {
+      renderSummary(stats);
+      renderTable(stats);
+    }),
+    showCost.subscribe(() => {
+      renderSummary(stats);
+      renderTable(stats);
+    }),
+  ];
 
   return {
     el: root,
     destroy() {
-      // No timers or subscriptions to clean up
+      cleanupAll(subs);
     },
   };
 }

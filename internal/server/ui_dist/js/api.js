@@ -30,6 +30,23 @@ export const versionInfo = observable({
 
 let apiEventSource = null;
 
+// Build metadata is static for the process lifetime; fetched once at boot so
+// the settings page and header tooltip can display it.
+export async function fetchVersionInfo() {
+  try {
+    const response = await fetch("/api/version");
+    if (!response.ok) return;
+    const v = await response.json();
+    versionInfo.set({
+      version: v.version ?? "unknown",
+      commit: v.commit ?? "unknown",
+      build_date: v.build_date ?? "unknown",
+    });
+  } catch {
+    // Network failure leaves the "unknown" defaults in place.
+  }
+}
+
 function appendLog(newData, store) {
   store.update((prev) => {
     const updated = prev + newData;
