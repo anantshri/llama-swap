@@ -277,6 +277,10 @@ groups:
 		Upstream: UpstreamConfig{
 			IgnorePaths: DefaultUpstreamIgnorePaths(),
 		},
+		Pricing: PricingConfig{
+			Currency: "USD",
+			USDToINR: DefaultUSDToINR,
+		},
 		Routing: RoutingConfig{
 			Router: RouterConfig{
 				Use: "group",

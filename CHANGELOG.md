@@ -163,6 +163,10 @@ Long-form entries with full context live in
 - `TestDirWatcher_MissingDirRecovers` no longer fails on Windows CI: the
   mid-run directory removal retries briefly to tolerate the transient Windows
   sharing violation when the watcher is polling the directory concurrently.
+- `TestConfig_LoadWindows` no longer fails on Windows CI: its expected `Config`
+  was missing the normalized `pricing:` defaults (`currency: USD`,
+  `usdToINR: 95`) that `Load` now applies, unlike the already-updated posix
+  twin of the test.
 
 ### Security
 

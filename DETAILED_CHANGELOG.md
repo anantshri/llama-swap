@@ -5,7 +5,58 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## 2026-09-09 — hw: follow-up — sysfs probe regression + B70 classification
+## 2026-09-10 — config: fix TestConfig_LoadWindows after pricing defaults
+
+### Symptom
+
+GitHub Actions Windows runner failed `make test-all` with
+`TestConfig_LoadWindows` (internal/config/config_windows_test.go:293):
+the loaded `Config` had `Pricing{Currency:"USD", USDToINR:95}` while the
+test expected the zero value `{Currency:"", USDToINR:0}`.
+
+### Diagnosis
+
+The pricing feature (Stats-page cost estimates) added normalization in
+`PricingConfig.Validate()` (internal/config/pricing.go): an unset
+`currency` becomes `USD` and a zero `usdToINR` becomes
+`DefaultUSDToINR` (95). `TestConfig_LoadPosix` — the `!windows` twin —
+was updated with the normalized `Pricing` block in its expected
+`Config`, but the `//go:build windows` copy was not. The file only
+compiles on Windows, so Linux dev/CI never caught the staleness; only
+the Windows leg of the GitHub Actions matrix did.
+
+### Change
+
+- `internal/config/config_windows_test.go`: added the same expected
+  `Pricing: PricingConfig{Currency: "USD", USDToINR: DefaultUSDToINR}`
+  to `TestConfig_LoadWindows`'s expected struct, in the same position
+  as the posix test (between `Upstream` and `Routing`).
+
+Test-only change; no production code touched.
+
+### Commands
+
+- `GOOS=windows go test -c -o /dev/null ./internal/config` — compiles
+  (the test cannot execute on Linux; compilation is the available check)
+- `go test -race -count=1 ./internal/config/` — ok
+- `gofmt -l internal/config/` — clean
+- `make test-all` — ok (full race suite)
+- `make gosec` / `aidc-scan` — see session log
+
+### Verification
+
+Windows CI is the only place the test runs; the compile check plus the
+byte-identical expected block to the passing posix twin (which asserts
+the same normalization path through `Load`) give confidence the Windows
+run is green again.
+
+### Notes
+
+Follow-up to the pricing commit ("stats shananigans", 79ac1a0). The
+other Windows-only test files (internal/hw/hardware_windows_test.go,
+internal/perf/d3dkmt_windows_test.go, internal/perf/pdh_windows_test.go)
+do not compare `Config` structs and are unaffected.
+
 
 ### Symptom
 
