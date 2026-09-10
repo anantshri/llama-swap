@@ -461,6 +461,16 @@ compact/money formatting edge cases. `make test-dev`, `make gosec`, and
 - Pre-existing dead `loading` flag in `stats.js` removed while touching the
   file.
 
+### Documentation follow-up (2026-09-10)
+
+The original change shipped without updating `README.md`. Synced now:
+fork-notice item 6 (token-cost estimates), `GET /api/metrics/pricing` +
+cost estimates in the `/api/metrics/stats` API-list entries, the Web UI
+paragraph (Est. Cost, Settings overrides, compact numbers), and
+`pricing` bullets in the Configuration section's advanced/model lists
+(alongside the `filters` `?` set-if-undefined note from the PR #1075
+port). `docs/config.example.yaml` already documented the config keys.
+
 ---
 
 ## 2026-09-09 — Fix Activity page failing to render rows (`pinningId` scope)

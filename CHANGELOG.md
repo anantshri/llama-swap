@@ -29,6 +29,8 @@ Long-form entries with full context live in
   page adds per-browser overrides (cost on/off, currency, INR rate, default
   rates) plus a "Compact large numbers" toggle that compresses Stats-page
   token/request counts to M/B/T suffixes with exact values on hover.
+  Documented in `README.md` (fork notice, API list, Web UI, Configuration)
+  and `docs/config.example.yaml`.
 
 ### Added (selective upstream-PR ports)
 

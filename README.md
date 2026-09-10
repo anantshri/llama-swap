@@ -34,10 +34,20 @@
 >    kernel interfaces only (hwmon + DRM fdinfo; Intel `xe`/`i915` and other drivers), so
 >    hosts without `nvidia-smi`/`rocm-smi`/LACT get GPU telemetry. Sensor reads are throttled
 >    to 5s while the GPU is active and skipped while idle, so runtime-suspended cards stay
->    asleep.
+>    asleep. Hardware detection gets the same treatment on Linux: an `xpu-smi` (Intel XPU
+>    Manager) probe supplies dedicated VRAM for Arc/Flex cards whose driver doesn't expose it
+>    in sysfs, and PCI device IDs map to architecture (Alchemist, Battlemage, …) and model
+>    names.
 > 5. **Security hardening** — `make gosec` reports zero findings across
 >    `GOOS=linux/darwin/windows`; every suppression is a reviewed false positive documented in
 >    [docs/gosec-suppressions.md](docs/gosec-suppressions.md) and kept in sync by a test.
+> 6. **Token-cost estimates** — a top-level `pricing:` config section (display currency USD
+>    or INR with a configurable `usdToINR` rate, default per-million-token rates) plus
+>    per-model `pricing:` overrides feed an "Est. Cost" summary tile and per-model column on
+>    the Stats page. Published via `GET /api/metrics/pricing` and embedded in
+>    `/api/metrics/stats`. The UI's Settings page adds per-browser overrides (cost on/off,
+>    currency, INR rate, default rates) and a "Compact large numbers" toggle (M/B/T suffixes,
+>    exact values on hover).
 >
 > Divergence baseline: upstream `7a14664`. The fork is re-established on top of the upstream
 > base with the additions above applied as a small set of clean commits, so the divergence
@@ -109,7 +119,8 @@ Built in Go for performance and simplicity, llama-swap has zero dependencies and
   - `/health` - just returns "OK"
   - `/metrics` - system and GPU metrics for prometheus (NVIDIA via nvidia-smi, AMD via rocm-smi, Intel/others via kernel sysfs — fork addition)
   - `GET /api/metrics/activity` - paginated activity log (token usage, speeds, durations) backed by sqlite storage
-  - `GET /api/metrics/stats` - aggregate activity statistics and speed histograms
+  - `GET /api/metrics/stats` - aggregate activity statistics, speed histograms and token-cost estimates
+  - `GET /api/metrics/pricing` - configured token-pricing snapshot used for cost estimates (fork addition)
   - `POST /api/inflight/:id/cancel` - cancel an in-flight request
   - `GET /api/hardware` - detected inference-host hardware profile (experimental)
   - `/api/mcp` - llama-swap's own documentation as MCP tools, for the Playground's docs agent and any MCP client
@@ -146,9 +157,11 @@ Real time log streaming:
 
 The web UI also includes a per-model **Stats** page, a **Hardware** page, a
 **Settings** page, model detail pages with per-model logs, and a **Load Test**
-playground tab for firing concurrent requests at llama-swap. In this fork the
-UI is hand-authored vanilla JavaScript committed to the repo — same features,
-no Node.js/npm build step.
+playground tab for firing concurrent requests at llama-swap. The Stats page
+shows approximate token-cost estimates from the `pricing:` config section
+(fork addition), with per-browser overrides and a compact M/B/T number format
+in Settings. In this fork the UI is hand-authored vanilla JavaScript committed
+to the repo — same features, no Node.js/npm build step.
 
 ## Installation
 
@@ -280,6 +293,7 @@ Almost all configuration settings are optional and can be added one step at a ti
   - `matrix` to run concurrent models with a custom swap logic DSL
   - `hooks` to run things on startup
   - `macros` reusable snippets
+  - `pricing` to set the display currency (USD/INR) and default per-million-token rates behind the Stats page's cost estimates (fork addition)
 - Model customization
   - `ttl` to automatically unload models
   - `unloadTimeout` to tune graceful unloads (manual, API and `ttl` expiry)
@@ -288,8 +302,9 @@ Almost all configuration settings are optional and can be added one step at a ti
   - `cmdStop` gracefully stop Docker/Podman containers
   - `useModelName` to override model names sent to upstream servers
   - `passthroughAnthropic` / `passthroughOllama` (fork addition) to forward Anthropic/Ollama requests to the upstream unchanged, for backends that speak those APIs natively
+  - `pricing` per-model token rates overriding the top-level defaults (fork addition)
   - `${PORT}` automatic port variables for dynamic port assignment
-  - `filters` rewrite parts of requests before sending to the upstream server
+  - `filters` rewrite parts of requests before sending to the upstream server — a key ending in `?` (e.g. `max_tokens?: 4096`) applies only when the request doesn't already carry that parameter
 
 See the [knowledge base](docs/kb/) for focused guides on the features people ask
 about most.
