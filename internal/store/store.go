@@ -37,6 +37,7 @@ type ActivityLogEntry struct {
 	Timestamp       time.Time         `json:"timestamp"`
 	Model           string            `json:"model"`
 	ReqPath         string            `json:"req_path"`
+	Src             string            `json:"src"`
 	RespContentType string            `json:"resp_content_type"`
 	RespStatusCode  int               `json:"resp_status_code"`
 	Tokens          TokenMetrics      `json:"tokens"`
@@ -71,6 +72,7 @@ type ActivityQuery struct {
 var activitySortColumns = map[string]string{
 	"id":                "id",
 	"time":              "ts_created",
+	"src":               "src",
 	"model":             "model_id",
 	"req_path":          "req_path",
 	"resp_status_code":  "resp_status_code",
@@ -220,11 +222,12 @@ func (s *Store) InsertActivity(ctx context.Context, entry ActivityLogEntry) (Act
 
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO activity (
-			ts_created, model_id, req_path, resp_content_type, resp_status_code,
+			ts_created, src, model_id, req_path, resp_content_type, resp_status_code,
 			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens, output_tokens,
 			prompt_per_second, tokens_per_second, duration_ms, error_msg, metadata_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.Timestamp.Unix(),
+		entry.Src,
 		entry.Model,
 		entry.ReqPath,
 		entry.RespContentType,
@@ -266,7 +269,7 @@ func (s *Store) ListActivity(ctx context.Context, query ActivityQuery) (Activity
 	// no user input is concatenated into the SQL text.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
-			id, ts_created, model_id, req_path, resp_content_type, resp_status_code,
+			id, ts_created, src, model_id, req_path, resp_content_type, resp_status_code,
 			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens, output_tokens,
 			prompt_per_second, tokens_per_second, duration_ms, error_msg, metadata_json
 		FROM activity`+where+activityOrderBy(query)+`
@@ -708,6 +711,7 @@ func scanActivity(scanner activityScanner) (ActivityLogEntry, error) {
 	if err := scanner.Scan(
 		&entry.ID,
 		&ts,
+		&entry.Src,
 		&entry.Model,
 		&entry.ReqPath,
 		&entry.RespContentType,
