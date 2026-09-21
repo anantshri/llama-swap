@@ -208,6 +208,9 @@ type Config struct {
 	// Pricing configures approximate token costs shown in the UI's stats
 	// page: display currency, USD -> INR rate, and default per-model prices.
 	Pricing PricingConfig `yaml:"pricing"`
+
+	// security groups CORS and related hardening settings, see issue #1133
+	Security SecurityConfig `yaml:"security"`
 }
 
 // RoutingConfig is the canonical, normalized routing/scheduling configuration.
