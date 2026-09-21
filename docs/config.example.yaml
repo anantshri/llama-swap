@@ -266,8 +266,10 @@ upstream:
     - '.*\.(js|json|css|png|gif|jpg|jpeg|ico|txt)$'
 
     # ComfyUI specific: ignore /ws and /api/jobs to prevent swaps
-    # when the UI is open
-    - ^\/ws$|^\/api\/jobs$
+    # when the UI is open. The /comfyui endpoint applies these on its own;
+    # they are only needed to serve ComfyUI through /upstream/<model>/
+    - ^\/ws(\/|$)
+    - ^\/api\/jobs$
 
 # pricing: approximate token pricing used by the UI's stats page to
 #   estimate request costs
