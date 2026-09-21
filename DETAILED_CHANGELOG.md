@@ -5,6 +5,98 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-21 — Activity capture dialog: request-body parts view
+
+### Goal
+
+Issue #24 ("Activity View enhacement"): when a request contains multiple parts,
+show them separately — system prompt, user prompt, tool calls — with a word
+count and, if possible, a token count for each.
+
+### Why
+
+The capture dialog rendered the request body as pretty-printed JSON only, so a
+multi-turn tool-using request had to be read as one blob: the system prompt, the
+individual messages, tool calls and the tool schemas were all mixed together and
+there was no sense of how the prompt budget was spent across them.
+
+### How
+
+`internal/server/ui_dist/js/components/captureDialog.js` — the UI is hand-authored
+ES modules with no build step, so the served files are edited directly:
+
+- `countWords(text)` / `estimateTokens(text)` — words split on whitespace runs;
+  tokens are `max(1, chars ÷ 4)`. There is no tokenizer in the tree (the proxy
+  only forwards `/v1/messages/count_tokens` upstream), so the estimate is
+  labelled as such everywhere it is displayed.
+- `contentText(content)` flattens a `content` value — plain string, array of
+  typed parts (`text`/`input_text`, `image_url`, `input_audio`, `tool_use`,
+  `tool_result`) or arbitrary object — into display text.
+- `splitRequestParts(body)` returns `{parts, totals}` with one entry per
+  readable piece: top-level `system` and `instructions`, one part per
+  `messages[]` item keyed by role, one part per `tool_calls` / legacy
+  `function_call` (arguments JSON-decoded and re-indented), one part per tool
+  result (label carries the `tool_call_id`), a `tools`/`functions` part for the
+  schemas, and the bare `prompt`/`input` of the completions and responses APIs.
+  Returns `null` when the body carries none of these (audio, images,
+  embeddings, rerank), so the parts tab simply does not appear.
+- `requestPartsHTML(parts)` / `requestPartsText(parts)` render the view and the
+  plain-text form used by the dialog's Copy button; all model-supplied text goes
+  through `escapeHtml`.
+- `requestPartsFor(rawBody)` memoizes the parse of the last body so tab switches
+  do not re-parse multi-megabyte prompts.
+- The Request Body tab row becomes `Parts | Pretty | Raw` for such bodies, and
+  `defaultReqTab()` lands multi-part requests on `Parts` (single-part bodies and
+  non-JSON bodies keep the previous pretty/raw behaviour). A stale `parts`
+  selection falls back to `pretty` if the body has no parts.
+
+`internal/server/ui_dist/css/app.css` styles the parts blocks
+(`.capture-parts`, `.capture-part`, role-coloured `.capture-part-role--*`,
+monospaced stats line).
+
+### Commands
+
+```
+make test                                  # go test -short -count=1 ./internal/...
+gofmt -l .                                 # clean
+go vet ./internal/server/                  # clean
+python3 ../verify24_parts_view.py          # headless Chromium checks
+```
+
+### Verification
+
+- `internal/server/ui_dist/__selftest.html` (the repo's in-browser test harness)
+  gained 20 tests over `countWords`/`estimateTokens`/`splitRequestParts`/
+  `requestPartsHTML`/`requestPartsText`, covering every request shape, the
+  tool-call/tool-result labelling, content-array flattening, totals, the
+  no-parts `null` return and HTML escaping. Headless Chromium run:
+  **107/107 passed — all green**.
+- The dialog itself was driven in the same browser session with a synthetic
+  capture (system prompt + user + tool_call + tool result + assistant + tool
+  schema): tabs render `Parts | Pretty | Raw`, the request lands on `Parts`, the
+  six parts carry the expected labels and counts (`6 parts · 189 chars · 30
+  words · ≈49 tokens`), switching to Raw and back preserves the parts, and a
+  single-message body still opens on `Pretty`. No page errors.
+- `make test` (go test -short ./internal/...) passes: the UI is embedded and
+  served unchanged (`TestServer_EmbeddedUIAssets`, `TestServer_ServeUI_*`).
+- No Go code changed, so `make gosec` is unaffected.
+
+### Notes
+
+- Token counts are an approximation by design. Exact per-part counts would need
+  a tokenizer: either a llama.cpp `/tokenize` round-trip per part through a new
+  server-side breakdown endpoint, or a bundled tokenizer in the UI. The estimate
+  is labelled `≈` and the totals line states the formula, so nobody mistakes it
+  for a server-reported number.
+- Empty parts are skipped — an assistant turn that only carries tool calls
+  contributes its tool-call part, not an empty message part — and a body with no
+  recognizable prompt keys returns `null`, so the parts tab stays hidden.
+- Follow-up ideas (not implemented): show the server-reported prompt token count
+  from the activity row next to the estimate, and offer the same breakdown for
+  the response body.
+
+---
+
 ## 2026-09-10 — config: fix TestConfig_LoadWindows after pricing defaults
 
 ### Symptom

@@ -12,6 +12,13 @@ Long-form entries with full context live in
 
 ### Added
 
+- Activity captures: the capture dialog's Request Body gained a **Parts** view
+  that splits a JSON request into separately readable pieces — top-level
+  `system`/`instructions`, every `messages[]` entry by role, each tool call and
+  tool result, and the tool definitions — with per-part character, word and
+  approximate token counts (chars ÷ 4; the proxy ships no tokenizer, so the
+  number is labelled an estimate). Multi-part requests open on the parts view;
+  single-part bodies keep the pretty JSON view.
 - Port of upstream PR #1075: a `setParams`/`setParamsByID` key ending in `?`
   (e.g. `max_tokens?: 4096`) is set-if-undefined — the value applies only when
   the request does not already carry that parameter, so configs can supply
