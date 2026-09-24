@@ -36,6 +36,9 @@
       } from "/ui/js/markdown.js";
       import { calculateHistogramData } from "/ui/js/util/histogram.js";
       import { parseStream } from "/ui/js/api/chat.js";
+      import {
+        countWords, estimateTokens, splitRequestParts, requestPartsHTML, requestPartsText,
+      } from "/ui/js/components/captureDialog.js";
 
       // ---- tiny test harness ----
       const groups = [];
@@ -175,6 +178,114 @@
       test("identifies min/max", () => { const r = calculateHistogramData([5, 3, 8, 1, 9, 2]); expect(r.min).toBe(1); expect(r.max).toBe(9); });
       test("negative values", () => { const r = calculateHistogramData([-10, -5, 0, 5, 10]); expect(r.min).toBe(-10); expect(r.max).toBe(10); });
       test("floating point values", () => { const r = calculateHistogramData([1.5, 2.7, 3.14, 0.5, 4.99]); expect(r.min).toBe(0.5); expect(r.max).toBe(4.99); });
+
+      // ===== request-body parts (capture dialog) =====
+      group("countWords / estimateTokens");
+      test("empty and whitespace-only text", () => { expect(countWords("")).toBe(0); expect(countWords("   \n ")).toBe(0); expect(estimateTokens("")).toBe(0); });
+      test("word count splits on runs of whitespace", () => expect(countWords("one  two\nthree\tfour")).toBe(4));
+      test("token estimate is ~4 chars per token", () => { expect(estimateTokens("abcd")).toBe(1); expect(estimateTokens("a".repeat(400))).toBe(100); });
+      test("sub-token text never reports zero", () => expect(estimateTokens("a")).toBe(1));
+
+      const chatBody = {
+        model: "qwen3",
+        system: "You are terse.",
+        messages: [
+          { role: "user", content: "What is 2+2?" },
+          { role: "assistant", content: "", tool_calls: [{ id: "call_1", type: "function", function: { name: "add", arguments: '{"a":2,"b":2}' } }] },
+          { role: "tool", tool_call_id: "call_1", content: "4" },
+          { role: "assistant", content: [{ type: "text", text: "Four." }, { type: "image_url", image_url: { url: "https://x/y.png" } }] },
+        ],
+        tools: [{ type: "function", function: { name: "add", parameters: { type: "object" } } }],
+      };
+
+      group("splitRequestParts — chat/completions body");
+      test("one part per prompt piece, in request order", () => {
+        const { parts } = splitRequestParts(chatBody);
+        expect(parts.map((p) => p.label)).toEqual([
+          "system (top-level)",
+          "messages[0] · user",
+          "messages[1] · tool_call add",
+          "messages[2] · tool · result for call_1",
+          "messages[3] · assistant",
+          "tools (1)",
+        ]);
+      });
+      test("tool call arguments are their own decoded part", () => {
+        const { parts } = splitRequestParts(chatBody);
+        const call = parts.find((p) => p.kind === "tool_call");
+        expect(call.label).toBe("messages[1] · tool_call add");
+        expect(call.role).toBe("tool");
+        expect(call.text).toContain('"a": 2');
+        expect(call.words).toBeGreaterThanOrEqual(1);
+      });
+      test("content arrays flatten text, images and tool results", () => {
+        const { parts } = splitRequestParts(chatBody);
+        const assistant = parts.find((p) => p.label === "messages[3] · assistant");
+        expect(assistant.text).toBe("Four.\n[image: https://x/y.png]");
+        expect(parts.find((p) => p.label === "messages[2] · tool · result for call_1").text).toBe("4");
+      });
+      test("content-less messages yield no phantom part", () => {
+        // A body whose only content is empty carries nothing to show, so the
+        // parts view stays off and the dialog keeps the JSON view.
+        expect(splitRequestParts({ messages: [{ role: "assistant", content: "" }] })).toBeNull();
+        expect(splitRequestParts({ messages: [{ role: "assistant", content: "", tool_calls: [] }] })).toBeNull();
+        expect(splitRequestParts({ messages: [] })).toBeNull();
+      });
+      test("totals sum the parts", () => {
+        const { parts, totals } = splitRequestParts(chatBody);
+        expect(totals.parts).toBe(parts.length);
+        expect(totals.chars).toBe(parts.reduce((n, p) => n + p.chars, 0));
+        expect(totals.tokens).toBe(parts.reduce((n, p) => n + p.tokens, 0));
+      });
+      test("no recognizable prompt returns null", () => {
+        expect(splitRequestParts({ model: "m", temperature: 0.7 })).toBeNull();
+        expect(splitRequestParts(null)).toBeNull();
+        expect(splitRequestParts([])).toBeNull();
+      });
+
+      group("splitRequestParts — other request shapes");
+      test("responses API: instructions + string input", () => {
+        const { parts } = splitRequestParts({ instructions: "Be brief.", input: "hi there" });
+        expect(parts.map((p) => p.label)).toEqual(["instructions (top-level)", "input"]);
+      });
+      test("responses API: input items as messages", () => {
+        const { parts } = splitRequestParts({ input: [{ role: "user", content: "ping" }] });
+        expect(parts.map((p) => p.label)).toEqual(["input[0] · user"]);
+      });
+      test("completions API: prompt string and legacy function_call", () => {
+        const { parts } = splitRequestParts({ prompt: "once upon", messages: [{ role: "assistant", function_call: { name: "f", arguments: '{"k":1}' } }] });
+        expect(parts.map((p) => p.label)).toEqual(["messages[0] · function_call f", "prompt"]);
+        expect(parts[0].text).toContain('"k": 1');
+      });
+      test("legacy functions list is labelled functions", () => {
+        const { parts } = splitRequestParts({ functions: [{ name: "f" }], messages: [{ role: "user", content: "x" }] });
+        expect(parts.find((p) => p.kind === "tools").label).toBe("functions (1)");
+      });
+
+      group("requestPartsHTML / requestPartsText");
+      test("html escapes model-supplied prompt text", () => {
+        // The literal tags are split so the HTML parser does not end the
+        // script block early.
+        const open = "<scr" + "ipt>";
+        const close = "</scr" + "ipt>";
+        const html = requestPartsHTML(splitRequestParts({ messages: [{ role: "user", content: open + "alert(1)" + close }] }));
+        expect(html).toContain("&lt;script&gt;");
+        if (html.includes(open)) fail("raw <script> leaked into parts HTML");
+      });
+      test("html carries role classes, per-part stats and totals", () => {
+        const html = requestPartsHTML(splitRequestParts(chatBody));
+        expect(html).toContain("capture-part-role--user");
+        expect(html).toContain("capture-part-role--system");
+        expect(html).toContain("6 parts ·");
+        expect(html).toMatch(/≈\d+ tokens/);
+        expect(html).toContain("chars ÷ 4");
+      });
+      test("null parts render nothing", () => { expect(requestPartsHTML(null)).toBe(""); expect(requestPartsText(null)).toBe(""); });
+      test("text form lists every part with its counts", () => {
+        const text = requestPartsText(splitRequestParts(chatBody));
+        expect(text).toContain("### messages[0] · user");
+        expect(text).toMatch(/### tools \(1\) \[\d+ chars · \d+ words · ≈\d+ tokens\]/);
+      });
 
       // ===== chat SSE parsers (canned chunks) =====
       const enc = new TextEncoder();
