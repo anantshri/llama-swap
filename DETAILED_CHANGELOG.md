@@ -5,6 +5,54 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-25 — Port upstream small-fix batch 2 (#1165, #1090, #1145, #1089)
+
+### Goal
+
+Final cheap wins from the upstream survey: cmdStop output logging, vllm
+wrapper timeout cleanup, the comfyui endpoint rework + guide, and the Docs
+Agent max_tokens raise. (Branch tip was first cleaned of a test README
+commit by the operator.)
+
+### What was picked
+
+| Upstream commit | PR | Change |
+|---|---|---|
+| `e1526c8` | #1090 | vllm-wrapper: drop the custom `http.Transport`, use Go's default timeouts. Conflict resolved by removing the transport while keeping the fork's CORS comment on `ModifyResponse`. |
+| `111d2d3` | #1165 | `cmdStop` stdout/stderr now go to the process logger; `WaitDelay` bounds the pipe copy so a backgrounded child cannot hang `Run()`; `ErrWaitDelay` is a warning. Conflict: kept the fork's `#nosec G204` line on `exec.Command`, added upstream's wiring. |
+| `29d10df` | #1145 | ComfyUI handlers moved from `api.go` into `comfyui.go` (+282-line test suite); root-only start rule replaced by `comfyUIIgnorePaths` (static assets, `/ws`, `/api/jobs` — GET only, writes still start the model); 178-line KB guide; targeted swap-restriction patterns. `api.go` conflict resolved to upstream's deletion — its version strictly supersedes the fork's. |
+| `8365956` | #1089 | Docs Agent max_tokens 4096 → 65536; hand-ported as a one-liner to `docsInterface.js` (upstream's Svelte/CLI half N/A). Long agent answers were being truncated at 4k. |
+
+### Security-gate follow-ups
+
+- gosec G710 fires on the moved `/comfyui/` redirect; suppressed at the exact
+  line in `comfyui.go` (same false-positive verdict as before) and
+  `docs/gosec-suppressions.md` updated: the site is now
+  `internal/server/comfyui.go`, not `api.go`.
+
+### Verification
+
+```
+go test -short -count=1 ./internal/... ./cmd/vllm-wrapper/  # all ok
+make test-dev                                               # ok; same 4
+                                                            # pre-existing staticcheck
+make gosec                                                  # 0 issues
+aidc-scan                                                   # semgrep/gitleaks clean
+__selftest.html (headless Chromium)                         # 113/113
+```
+
+### Notes
+
+- These commits are unsigned (container has no signing key); the operator
+  re-signs the tip with the established
+  `git rebase main --rebase-merges --exec 'git commit --amend --no-edit -S'`.
+- With this batch, every small/medium upstream commit is ported. Remaining
+  upstream deltas are the decision-gated ones: store interface split
+  (`aecf92e`), kubeswap (`c5753ce`+), the tailcat stack, release tooling,
+  docker images, and the agreed-last UI ports.
+
+---
+
 ## 2026-09-24 — Port upstream jq-backed get_config for the Docs Agent (#1087)
 
 ### Goal
