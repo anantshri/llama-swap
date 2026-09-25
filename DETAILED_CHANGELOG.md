@@ -5,6 +5,83 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-24 — Port upstream CORS controls (#1133); browser self-test green
+
+### Goal
+
+Second batch of the upstream survey: the CORS hardening (biggest of the
+"bigger features", done first per the agreed order) plus getting the
+in-browser self-test runnable in this environment.
+
+### Browser test setup
+
+- Installed Playwright + Chromium (headless shell 153) in `/tmp/opencode/venv`
+  with OS deps via `playwright install-deps`.
+- Self-test served over HTTP (ES modules need a real origin):
+  `ui_dist` symlinked as `/tmp/opencode/serve/ui`, `python3 -m http.server`.
+- Result: **113/113 passed — all green**, no page errors. This is the first
+  real-browser verification of the merged PR #25 (107 tests) plus this
+  session's 6 M1/L2 tests.
+
+### CORS port (upstream `769dbac`, + `6c36b88` follow-up)
+
+Conflicts/adaptations (fork has no tailcat, no kubeswap, no global
+concurrency limit yet, and keeps its own pricing block):
+
+- `cmd/kubeswap/serve.go` hunk dropped (`git rm`) — kubeswap not ported yet.
+- `cmd/vllm-wrapper/main.go`: kept the fork's custom transport, took
+  upstream's updated comment (headers now stripped by llama-swap).
+- `config-schema.json`: kept fork `pricing` + added upstream `security`.
+- `docs/config.example.yaml`: added `security` example, dropped the tailcat
+  example.
+- `internal/config/config.go`: added `Security SecurityConfig`, dropped
+  upstream's `tailcatEnabled` runtime state.
+- `internal/docagent/golden_test.go`: expected-sections list gained
+  `security` only (not `tailcat`/`globalConcurrencyLimit`).
+- `internal/server/auth.go`: old hardcoded permissive `CreateCORSMiddleware`
+  and its sanitize helpers deleted — replaced by new `cors.go` (added clean).
+- `internal/server/server_test.go`: ported upstream's
+  `newTestServerWithConfig` helper (adapted to the fork's `store.New`),
+  dropped the obsolete `TestServer_CORSPreflight`.
+- `6c36b88` is an ancestor of `769dbac` upstream; its auth.go fix is already
+  superseded by `cors.go`, but its `api.go`/`api_test.go` hunks still matter:
+  the `/api/tags` Origin echo was removed (redundant in permissive mode and a
+  bypass of `allowedOrigins` in restrictive mode), with the actual-response
+  regression test added.
+
+### Security-gate cleanup (`aidc-scan --all`)
+
+Pre-existing findings surfaced by the first full-repo scan, fixed:
+
+- `internal/server/captures_test.go`: `math/rand` → inline deterministic
+  xorshift64 (keeps reproducibility, drops the flagged import).
+- `docker/build-container.sh`: quoted `cd`, loop-based ARCH check (SC2199/
+  SC2076/SC2145), `local`/assign separation (SC2155).
+- `scripts/uninstall.sh`: quoted `command -v` instead of unquoted `which`.
+
+### Verification
+
+```
+go test -short -count=1 ./internal/...   # all ok
+make test-dev                            # ok; staticcheck: same 5 pre-existing
+                                         # findings (internal/perf, server.go,
+                                         # swaputil) — untouched by this session
+make gosec                               # 0 issues
+aidc-scan --all                          # all scanners clean
+__selftest.html (headless Chromium)      # 113/113, no page errors
+```
+
+### Notes
+
+- staticcheck's 5 pre-existing findings remain open and predate this session
+  (`d3dkmt_types.go` unused fields, `monitor_unix.go` `readSysfs`,
+  `server.go:283` TrimPrefix, `swaputil/http.go` unused assignment) — flagged
+  for a separate decision, since the perf code is Windows/sysfs-specific.
+- Upstream also strips CORS headers in the peer proxy and kubeswap; the peer
+  hunk landed as part of `769dbac` (staged file `internal/router/peer.go`).
+
+---
+
 ## 2026-09-24 — Upstream ports: forwarded headers, totals-after-prune, TTL, zstd, tabbyAPI
 
 ### Goal

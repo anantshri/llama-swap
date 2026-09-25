@@ -73,6 +73,16 @@ Long-form entries with full context live in
 - tabbyAPI `usage` extensions (`prompt_tokens_per_sec`,
   `completion_tokens_per_sec`, `total_time`) are extracted into activity
   metrics (upstream #1104, commit `8fa8589`).
+- Configurable CORS controls (upstream #1133, commits `769dbac` + follow-up):
+  a new `security.cors` config block — `allowedOrigins`, `allowCredentials`,
+  `allowPrivateNetwork`, `allowedMethods`, `allowedHeaders`,
+  `exposedHeaders`, `maxAge`. Omitting `allowedOrigins` keeps the permissive
+  any-origin default; setting it switches to deny-by-default. CORS headers
+  are only sent when the request carries an `Origin`, and upstream-set CORS
+  headers are stripped from proxied responses so exactly one set reaches the
+  client. Replaces the old hardcoded permissive middleware; the redundant
+  `/api/tags` Origin echo was removed (it would have bypassed the
+  restriction).
 
 ### Changed
 
