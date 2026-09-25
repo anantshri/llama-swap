@@ -52,6 +52,65 @@ headless dialog drive                 # buttons render; 3/3 open → Collapse
 
 ---
 
+## 2026-09-25 — UI ports: live chat stats (#1099), profile controls (#1170), Help topics (#1088), responsive chat (#1120)
+
+### Live generation stats (#1099)
+
+- `js/api/chat.js`: requests `stream_options.include_usage` (OpenAI) and
+  llama.cpp's `timings_per_token`; `normalizeUsage` accepts OpenAI and
+  Anthropic spellings incl. cached-token variants, `normalizeTimings` maps
+  llama.cpp `prompt_n + cache_n` timings; all three stream parsers now emit
+  `usage` on chunks. Sampling params `top_k` / `top_p` / `min_p` are plumbed
+  into the request bodies (responses API: `top_p` only).
+- `js/util/generationStats.js` (new, harness-tested): per-turn tracker with
+  prompt/decode phase clocks, reasoning/answer chunk split, draft-token
+  counts; chunk-based estimates are replaced by real usage when reported.
+  `formatStatsLine` renders one readable line.
+- `chatInterface.js` / `chatMessage.js`: live stats line under the streaming
+  answer, frozen per-turn stats after completion; cancelled turns are marked
+  "stopped".
+
+### Profile mappings (#1170)
+
+`modelsPanel.js` profile rows resolve their target against the model list:
+live status dot (local only), link to the model detail page, Load/Unload
+buttons reusing the panel's delegated handlers. Peer targets link without
+controls; unresolved/disabled render as before.
+
+### Help agent topics and controls (#1088)
+
+`agent/docsSuggestions.js` (new): 37-question curated pool +
+`pickSuggestions` (Fisher-Yates). The Help empty state offers 4 random topics
+with a "New topics" refresh button and streamlined copy. Agent loop limit
+8 → 16 iterations. Stale speculative-decoding KB article removed; docs search
+description now cites "Docker health check" instead of draft models.
+
+### Responsive chat (#1120)
+
+Settings panel capped at `min(60vh, 26rem)` with internal scrolling, so a
+large system prompt no longer stretches the page; system textarea gets a
+bounded vertical resize; the three sampling params share a compact row;
+mobile breakpoint tightens gutters and wraps the param row.
+
+### Verification
+
+```
+go test -short -count=1 ./internal/server/ ./internal/docagent/  # ok
+__selftest.html (headless Chromium)   # 135/135 across the batch
+headless drives: combobox filter+select, agent-work counters/expansion,
+fetch capture proving the request body carries stream_options,
+timings_per_token, top_k/top_p/min_p; no page errors
+```
+
+### Notes
+
+- `make eval-docs-agent` still needs a live model (see 2026-09-24 jq entry).
+- The remaining upstream deltas are the tailcat stack (internal + #1091 UI)
+  and the decision-skipped items (store split, kubeswap, release tooling,
+  docker images).
+
+---
+
 ## 2026-09-25 — UI ports: searchable model picker (#1153) and stable Work header (#1101)
 
 ### Model picker combobox (#1153)

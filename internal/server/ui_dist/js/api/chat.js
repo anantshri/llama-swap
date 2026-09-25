@@ -57,6 +57,10 @@ function buildChatCompletionsBody(model, messages, options) {
     // stream never delivers.
     timings_per_token: true,
     temperature: options?.temperature,
+    // Sampling hyper params; undefined keys are dropped by JSON.stringify.
+    top_k: options?.top_k,
+    top_p: options?.top_p,
+    min_p: options?.min_p,
     ...(options?.max_tokens ? { max_tokens: options.max_tokens } : {}),
     // Tools are only supported on the chat-completions endpoint.
     ...(options?.tools?.length
@@ -97,6 +101,9 @@ function buildMessagesBody(model, messages, options) {
     messages: mapped,
     stream: true,
     max_tokens: options?.max_tokens ?? 4096,
+    // Anthropic understands top_p/top_k; min_p is not part of that API.
+    top_p: options?.top_p,
+    top_k: options?.top_k,
   };
   if (system) body.system = system;
   if (options?.temperature !== undefined) body.temperature = options.temperature;
@@ -124,6 +131,8 @@ function buildResponsesBody(model, messages, options) {
     model,
     input,
     stream: true,
+    // The responses API has top_p only.
+    top_p: options?.top_p,
   };
   if (system) body.instructions = system;
   if (options?.temperature !== undefined) body.temperature = options.temperature;
