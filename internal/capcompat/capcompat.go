@@ -271,7 +271,9 @@ func (c *Client) GetJSON(ctx context.Context, path string, v any) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		// Best-effort drain so the connection can be reused; nothing useful
+		// can be done with a drain error on an error path.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("requesting %s: upstream returned %s", path, resp.Status)
 	}
 
