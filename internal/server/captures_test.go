@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"math/rand"
 	"runtime"
 	"sync"
 	"testing"
@@ -85,11 +84,19 @@ func TestServer_CaptureFieldsFor(t *testing.T) {
 
 // jsonBody builds an embeddings-style JSON body of roughly n bytes.
 func jsonBody(n int, seed int64) []byte {
-	r := rand.New(rand.NewSource(seed))
+	// Deterministic xorshift64 keeps the body reproducible without math/rand,
+	// which security scanners flag even in test code.
+	state := uint64(seed) | 1
+	next := func() float64 {
+		state ^= state << 13
+		state ^= state >> 7
+		state ^= state << 17
+		return float64(state>>11)/float64(1<<53)*2 - 1
+	}
 	b := make([]byte, 0, n+32)
 	b = append(b, `{"data":[{"index":0,"embedding":[`...)
 	for len(b) < n {
-		b = append(b, fmt.Sprintf("%.7f,", r.Float64()*2-1)...)
+		b = append(b, fmt.Sprintf("%.7f,", next())...)
 	}
 	return append(b, `0]}]}`...)
 }
