@@ -5,6 +5,64 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-24 — Port upstream jq-backed get_config for the Docs Agent (#1087)
+
+### Goal
+
+Fifth batch of the upstream survey: replace the Docs Agent's path-based
+`get_config` with a jq query (upstream `a77f107`, updates upstream #1085) —
+a large multi-model config no longer has to be paged through whole.
+
+### How
+
+- `internal/config/mcpprovider.go` (auto-merged): `get_config` evaluates a
+  jq expression (gojq) against the running, credential-redacted config.
+  Hardening, all carried over from upstream: 5s evaluation timeout, 200k
+  value-node cap, 32 KB rendered-result cap, and a heap-growth guard
+  (128 MiB, sampled every 10 ms) that can stop unbounded constructs like
+  `[range(0; 5000000)]` — relevant because `/api/mcp` needs no credentials
+  by default.
+- `internal/server/apimcp.go` wiring + 300 lines of provider tests + a
+  config eval-fixture helper landed with it.
+- `evals/docs-agent/`: new jq cases (incl. holdout), fixture models, and an
+  updated `run.sh`.
+- `docs/kb/`: mcp-endpoint guide and README updated for the new tool.
+
+### Adaptations for the fork
+
+- Upstream's Svelte UI half of the commit (`ui/src/**` — Help page move,
+  playground stores, suggestion lists) was dropped entirely: the fork's UI
+  is hand-authored vanilla JS under `internal/server/ui_dist/`.
+- The agent-facing prompt text was ported by hand instead: the fork keeps
+  the Docs Agent system prompt in
+  `internal/server/ui_dist/js/agent/docsAgentPrompt.js`, whose
+  `config__get_config` bullet now documents the jq query form with the same
+  examples upstream uses.
+- `AGENTS.md` conflict resolved to the fork's version (upstream's change
+  only renamed the Svelte page hosting the agent).
+- `go.mod`: `github.com/itchyny/gojq v0.12.19` (+ `timefmt-go` indirect)
+  added to the fork's dependency set; upstream's klauspost/compress bump
+  not taken.
+
+### Verification
+
+```
+go test -short -count=1 ./internal/...   # all ok, incl. new provider tests
+make test-dev                            # ok; staticcheck: same 4 pre-existing
+make gosec                               # 0 issues
+__selftest.html (headless Chromium)      # 113/113; docsAgentPrompt.js imports clean
+```
+
+### Notes
+
+- `make eval-docs-agent` (scoring the agent against a local model) could not
+  run in this environment — it needs a llama-swap-served model. Run it once
+  where a model is available to confirm the new cases pass.
+- The UI-side Help page did not change: the fork's docsInterface.js already
+  talks to `/api/mcp`, whose tool contract changed transparently.
+
+---
+
 ## 2026-09-24 — Port upstream capcompat: automatic capability discovery (#1083/#1105)
 
 ### Goal

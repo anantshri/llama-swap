@@ -33,6 +33,13 @@ Long-form entries with full context live in
   are rejected with HTTP 429 rather than queued. Implemented as middleware at
   the top of the inference chain, only wired when the limit is > 0
   (upstream #1086/#1110, commit `41ec321`).
+- Docs Agent `get_config` tool now answers jq queries instead of a dotted
+  path: the agent can request exactly the slice of the running configuration
+  it needs (`.models | keys`, `.models.qwen3`, …) instead of paging through a
+  full dump. Evaluation is bounded by a 5s timeout, a value-count cap, a
+  32 KB result cap, and a heap-growth guard, since `/api/mcp` needs no
+  credentials by default and jq is a real language. The Help agent's system
+  prompt documents the query form (upstream #1087/#1085, commit `a77f107`).
 - Automatic capability discovery (new `internal/capcompat`): when a model
   becomes ready, llama-swap asks the upstream what it supports — context
   length, input/output modalities, tools — and caches the result in the
