@@ -468,6 +468,7 @@
 .agent-work { display: flex; flex-direction: column; gap: 0.375rem; }
 .agent-work-section { border: 1px solid var(--color-card-border); border-radius: 8px; overflow: hidden; }
 .agent-work-head { padding: 0.5rem 0.625rem; }
+.docs-suggestion.docs-suggestion-refresh { color: var(--color-txtsecondary); border-style: dashed; }
 .agent-work-spin {
   width: 0.75rem; height: 0.75rem; margin-left: auto; flex-shrink: 0;
   border: 2px solid var(--color-txtsecondary); border-top-color: transparent;
