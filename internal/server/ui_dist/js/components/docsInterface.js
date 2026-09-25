@@ -18,7 +18,7 @@ import { AgentWork } from "./agentWork.js";
 import { renderMarkdown } from "../markdown.js";
 
 const TEMPERATURE = 0;
-const MAX_TOKENS = 4096;
+const MAX_TOKENS = 65536;
 
 const SUGGESTIONS = [
   "How do I unload a model after 5 minutes of inactivity?",
