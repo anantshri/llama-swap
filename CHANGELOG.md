@@ -27,6 +27,12 @@ Long-form entries with full context live in
   defaults without clobbering clients. Works on model and peer filters;
   stripped parameters count as undefined and a hard spelling of the same key
   wins over the `?` form. Backward compatible (fixes upstream #1052).
+- Global concurrency limit: a top-level `globalConcurrencyLimit` caps
+  inference requests served at once across all models combined, independent
+  of per-model limits. Default 0 (no limit); once the cap is reached requests
+  are rejected with HTTP 429 rather than queued. Implemented as middleware at
+  the top of the inference chain, only wired when the limit is > 0
+  (upstream #1086/#1110, commit `41ec321`).
 - Approximate token-cost estimates on the Stats page. A new top-level
   `pricing:` config section sets the display currency (USD, or INR with a
   configurable `usdToINR` rate, default 95) and default per-million-token

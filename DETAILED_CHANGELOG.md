@@ -5,6 +5,62 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-24 — Port upstream global concurrency semaphore (#1110)
+
+### Goal
+
+Third batch of the upstream survey, per the agreed order (CORS → concurrency
+semaphore → capcompat → jq config → kubeswap): `globalConcurrencyLimit`, a
+top-level cap on concurrent inference requests across all models
+(upstream `41ec321`, fixes upstream #1086).
+
+### How
+
+- `internal/server/concurrency.go` (added clean): token semaphore built on
+  `golang.org/x/sync/semaphore`; `CreateConcurrencyLimitMiddleware(limit)`
+  rejects with HTTP 429 (Retry-After honoured) once the limit is reached —
+  requests are never queued.
+- `internal/server/server.go`: the middleware joins `modelMWs` (top of the
+  inference chain, right after auth) only when the limit is > 0, so a default
+  config pays nothing.
+- `internal/config`: `GlobalConcurrencyLimit int` field (fork's struct kept
+  as-is otherwise), load-time validation `>= 0`, config test + schema +
+  `docs/config.example.yaml` + capacity-and-queues guide landed from upstream
+  automatically.
+
+### Conflicts / adaptations
+
+- `AGENTS.md`: upstream rewrote it for its own workflow — kept the fork's
+  version in full.
+- `go.mod`/`go.sum`: kept the fork's dependency set; promoted
+  `golang.org/x/sync` to a direct dependency at upstream's `v0.22.0`
+  (fork had v0.21.0 indirect) and ran `go mod tidy`. Upstream's x/sys bump
+  was not taken.
+- `internal/config/config.go`: fork's Config struct kept; only the new field
+  added (upstream also regrouped fields and carries tailcat runtime state).
+- `internal/docagent/golden_test.go`: expected config-example sections now
+  include `globalConcurrencyLimit` alongside the fork's `security`/`pricing`.
+
+### Verification
+
+```
+go test -short -count=1 ./internal/...   # all ok, incl.
+                                         # TestServer_GlobalConcurrencyLimit
+make test-dev                            # ok; staticcheck: same 4 pre-existing
+make gosec                               # 0 issues
+aidc-scan                                # gitleaks clean (tree committed)
+```
+
+### Notes
+
+- The fork's `experimental-concurrency-refactor` branch predates this; the
+  upstream semaphore is now the supported global cap. That branch should be
+  reassessed (likely rebased or retired) rather than merged as-is.
+- Interaction to know: the semaphore guards the inference chain only —
+  /api, UI, health endpoints are not counted against the limit.
+
+---
+
 ## 2026-09-24 — Port upstream CORS controls (#1133); browser self-test green
 
 ### Goal
