@@ -243,6 +243,7 @@ async function loadPlaygroundModels(request) {
           playgroundType,
           aliases: [...(aliasesByModel.get(record.id) ?? [])],
           capabilities: record.capabilities,
+          architecture: record.architecture,
           context_length: record.context_length,
           strategy: metadata?.strategy,
           targets: metadata?.targets ?? [],

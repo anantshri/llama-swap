@@ -46,6 +46,9 @@
       import {
         startTracking, trackChunk, markCancelled, currentStats, formatStatsLine,
       } from "/ui/js/util/generationStats.js";
+      import {
+        buildModelOptions, filterModelOptions,
+      } from "/ui/js/util/modelUtils.js";
 
       // ---- tiny test harness ----
       const groups = [];
@@ -360,6 +363,34 @@
       });
 
       // ===== chat SSE parsers (canned chunks) =====
+      group("model picker options (#1153)");
+      const pickerModels = [
+        { id: "qwen3", unlisted: false, peerID: "", aliases: ["qw"], name: "Qwen 3", capabilities: { reranker: true }, architecture: { input_modalities: ["text"] } },
+        { id: "whisper", unlisted: false, peerID: "", aliases: [], name: "Whisper", capabilities: { audio_transcriptions: true }, architecture: { input_modalities: ["audio"] } },
+        { id: "peer-x/m8", unlisted: false, peerID: "peer-x", aliases: [], name: "", capabilities: {}, architecture: {} },
+        { id: "hidden", unlisted: true, peerID: "", aliases: [], name: "", capabilities: {}, architecture: {} },
+      ];
+      test("options cover local, aliases and peers, skipping unlisted", () => {
+        const opts = buildModelOptions(pickerModels);
+        expect(opts.map((o) => o.value)).toEqual(["qwen3", "qw", "whisper", "peer-x/m8"]);
+        expect(opts[1].aliasOf).toBe("qwen3");
+        expect(opts[3].group).toBe("Peer: peer-x");
+      });
+      test("filter matches value, parent model and name", () => {
+        const opts = buildModelOptions(pickerModels);
+        expect(filterModelOptions(opts, "QW").map((o) => o.value)).toEqual(["qwen3", "qw"]);
+        expect(filterModelOptions(opts, "whisper").map((o) => o.value)).toEqual(["whisper"]);
+        expect(filterModelOptions(opts, "peer-x").map((o) => o.value)).toEqual(["peer-x/m8"]);
+        expect(filterModelOptions(opts, "zzz")).toEqual([]);
+      });
+      test("matching tab needs sort first", () => {
+        const opts = buildModelOptions(pickerModels);
+        const audio = (m) => (m.architecture?.input_modalities ?? []).includes("audio") || !!m.capabilities?.audio_transcriptions;
+        expect(filterModelOptions(opts, "", audio).map((o) => o.value)).toEqual(["whisper", "qwen3", "qw", "peer-x/m8"]);
+        const rerank = (m) => !!m.capabilities?.reranker;
+        expect(filterModelOptions(opts, "", rerank)[0].value).toBe("qwen3");
+      });
+
       const enc = new TextEncoder();
 
       // ===== live generation stats (#1099) =====
