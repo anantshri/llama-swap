@@ -7,6 +7,7 @@ import { observable, persistent } from "../store.js";
 import { models } from "../api.js";
 import { playgroundStores } from "../playgroundActivity.js";
 import { streamChatCompletion } from "../api/chat.js";
+import { startTracking, trackChunk, markCancelled, currentStats, formatStatsLine } from "../util/generationStats.js";
 import { ChatMessage } from "./chatMessage.js";
 import { ModelSelector } from "./modelSelector.js";
 import { ExpandableTextarea } from "./expandableTextarea.js";
@@ -41,6 +42,9 @@ export function ChatInterface() {
   let isReasoning = false;
   let reasoningStartTime = 0;
   let abortController = null;
+  // Accumulates per-turn prompt/decode stats for the live line and the final
+  // block under the answer.
+  let genTracker = null;
   let showSettings = false;
   let attachedImages = [];
   let imageError = null;
@@ -106,11 +110,18 @@ export function ChatInterface() {
   function propsFor(i) {
     const m = messages[i];
     const last = i === messages.length - 1;
+    // Live line while this message is streaming; the frozen per-turn line
+    // afterwards.
+    const statsText =
+      isStreaming && last && m.role === "assistant" && genTracker
+        ? formatStatsLine(currentStats(genTracker, Date.now(), true))
+        : formatStatsLine(m.genStats);
     return {
       role: m.role,
       content: m.content,
       reasoning_content: m.reasoning_content || "",
       reasoningTimeMs: m.reasoningTimeMs || 0,
+      statsText,
       isStreaming: isStreaming && last && m.role === "assistant",
       isReasoning: isReasoning && last && m.role === "assistant",
       onEdit: m.role === "user" ? (nc) => editMessage(i, nc) : undefined,
@@ -206,6 +217,7 @@ export function ChatInterface() {
   }
 
   function cancelStreaming() {
+    if (genTracker) markCancelled(genTracker);
     abortController?.abort();
   }
 
@@ -248,8 +260,12 @@ export function ChatInterface() {
       });
 
       const lastIdx = messages.length - 1;
+      genTracker = startTracking(Date.now());
+      let lastLiveStats = "";
       for await (const chunk of stream) {
         if (chunk.done) break;
+
+        trackChunk(genTracker, chunk, Date.now());
 
         if (chunk.reasoning_content) {
           if (!isReasoning) {
@@ -271,11 +287,20 @@ export function ChatInterface() {
         if (chunk.reasoning_content || chunk.content) {
           updateLast();
           saveMessages();
+        } else if (chunk.usage) {
+          // Usage/timings-only chunk (final usage report or per-token
+          // timings): refresh the live stats line without touching content.
+          const live = formatStatsLine(currentStats(genTracker, Date.now(), true));
+          if (live !== lastLiveStats) {
+            lastLiveStats = live;
+            updateLast();
+          }
         }
       }
     } catch (error) {
       const lastIdx = messages.length - 1;
       if (error && error.name === "AbortError") {
+        markCancelled(genTracker);
         if (isReasoning && reasoningStartTime > 0) {
           messages[lastIdx].reasoningTimeMs = Date.now() - reasoningStartTime;
         }
@@ -284,6 +309,15 @@ export function ChatInterface() {
         messages[lastIdx].content = messages[lastIdx].content + `\n\n**Error:** ${msg}`;
       }
     } finally {
+      // Freeze whatever the turn measured — real usage when the backend
+      // reported it, chunk-count estimates otherwise — onto the message.
+      if (genTracker) {
+        const lastIdx = messages.length - 1;
+        if (lastIdx >= 0 && messages[lastIdx].role === "assistant") {
+          messages[lastIdx].genStats = currentStats(genTracker, Date.now(), false);
+        }
+        genTracker = null;
+      }
       isStreaming = false;
       isReasoning = false;
       abortController = null;

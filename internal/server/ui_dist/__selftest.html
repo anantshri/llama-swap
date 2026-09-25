@@ -40,6 +40,12 @@
         countWords, estimateTokens, splitRequestParts, requestPartsHTML, requestPartsText,
         prettyIfJson,
       } from "/ui/js/components/captureDialog.js";
+      import {
+        normalizeUsage, normalizeTimings, parseChatCompletionsLine,
+      } from "/ui/js/api/chat.js";
+      import {
+        startTracking, trackChunk, markCancelled, currentStats, formatStatsLine,
+      } from "/ui/js/util/generationStats.js";
 
       // ---- tiny test harness ----
       const groups = [];
@@ -355,6 +361,96 @@
 
       // ===== chat SSE parsers (canned chunks) =====
       const enc = new TextEncoder();
+
+      // ===== live generation stats (#1099) =====
+      group("usage normalization");
+      test("openai spelling", () => {
+        expect(normalizeUsage({ prompt_tokens: 10, completion_tokens: 5 })).toEqual({ prompt_tokens: 10, completion_tokens: 5 });
+      });
+      test("anthropic spelling and cached tokens", () => {
+        expect(normalizeUsage({ input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 4 })).toEqual({ prompt_tokens: 10, completion_tokens: 5, cached_tokens: 4 });
+        expect(normalizeUsage({ prompt_tokens: 10, prompt_tokens_details: { cached_tokens: 7 } })).toEqual({ prompt_tokens: 10, cached_tokens: 7 });
+      });
+      test("no token counts yields undefined", () => {
+        expect(normalizeUsage(null)).toBe(undefined);
+        expect(normalizeUsage({ model: "m" })).toBe(undefined);
+      });
+      test("llama.cpp timings count the whole prompt", () => {
+        expect(normalizeTimings({ prompt_n: 8, cache_n: 100, predicted_n: 20, prompt_ms: 40, predicted_ms: 500, draft_n: 6, draft_n_accepted: 5 })).toEqual({
+          prompt_tokens: 108, cached_tokens: 100, completion_tokens: 20, prompt_ms: 40, completion_ms: 500, draft_tokens: 6, draft_accepted: 5,
+        });
+        expect(normalizeTimings({})).toBe(undefined);
+      });
+      test("usage chunk with empty choices parses", () => {
+        const line = 'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":7}}';
+        expect(parseChatCompletionsLine(line).usage).toEqual({ prompt_tokens: 12, completion_tokens: 7 });
+      });
+      test("timings ride along content chunks", () => {
+        const line = 'data: {"choices":[{"delta":{"content":"Hi"}}],"timings":{"prompt_n":8,"predicted_n":1,"predicted_ms":20}}';
+        const chunk = parseChatCompletionsLine(line);
+        expect(chunk.content).toBe("Hi");
+        expect(chunk.usage).toEqual({ prompt_tokens: 8, completion_tokens: 1, completion_ms: 20 });
+      });
+
+      group("generation tracker");
+      test("counts reasoning and answer chunks separately", () => {
+        const t = startTracking(0);
+        trackChunk(t, { reasoning_content: "th" }, 100);
+        trackChunk(t, { reasoning_content: "in" }, 150);
+        trackChunk(t, { content: "Hi" }, 200);
+        trackChunk(t, { content: "!" }, 300);
+        expect(t.reasoningChunks).toBe(2);
+        expect(t.answerChunks).toBe(2);
+        expect(t.firstTokenAt).toBe(100);
+        expect(t.answerStartedAt).toBe(200);
+      });
+      test("merges usage field by field across reports", () => {
+        const t = startTracking(0);
+        trackChunk(t, { usage: { prompt_tokens: 10 } }, 10);
+        trackChunk(t, { usage: { completion_tokens: 4, prompt_tokens: 10 } }, 20);
+        expect(t.usage).toEqual({ prompt_tokens: 10, completion_tokens: 4 });
+      });
+      test("live stats estimate tokens from chunks until usage arrives", () => {
+        const t = startTracking(0);
+        trackChunk(t, { content: "a" }, 1000);
+        trackChunk(t, { content: "b" }, 1500);
+        const s = currentStats(t, 1600, true);
+        expect(s.generation.tokens).toBe(2);
+        expect(s.generation.approxTokens).toBe(true);
+        expect(s.generation.ms).toBe(500);
+        expect(s.generation.perSecond).toBeCloseTo(4, 2);
+      });
+      test("real usage replaces estimates when it arrives", () => {
+        const t = startTracking(0);
+        trackChunk(t, { content: "a" }, 1000);
+        trackChunk(t, { usage: { prompt_tokens: 10, completion_tokens: 30, prompt_ms: 100, completion_ms: 1500 } }, 2600);
+        const s = currentStats(t, 2600, false);
+        expect(s.prompt.tokens).toBe(10);
+        expect(s.prompt.approxTokens).toBe(false);
+        expect(s.generation.tokens).toBe(30);
+        expect(s.generation.perSecond).toBeCloseTo(20, 2);
+      });
+      test("cancelled turns are marked", () => {
+        const t = startTracking(0);
+        markCancelled(t);
+        expect(currentStats(t, 10, true).cancelled).toBe(true);
+      });
+      test("formatStatsLine renders both phases", () => {
+        const t = startTracking(0);
+        trackChunk(t, { usage: { prompt_tokens: 128, cached_tokens: 12, prompt_ms: 210, completion_tokens: 45, completion_ms: 1200 } }, 10);
+        const line = formatStatsLine(currentStats(t, 10, false));
+        expect(line).toContain("prompt 128 tk (12 cached) in 210ms @ 552 tok/s");
+        expect(line).toContain("gen 45 tk in 1.20s @ 37.5 tok/s");
+      });
+      test("formatStatsLine marks approximate tokens and stopped turns", () => {
+        const t = startTracking(0);
+        trackChunk(t, { content: "x" }, 500);
+        markCancelled(t);
+        const line = formatStatsLine(currentStats(t, 2500, true));
+        expect(line).toContain("gen ~1 tk");
+        expect(line).toContain("stopped");
+      });
+
       function readerFrom(chunks) {
         let i = 0;
         return { read: async () => (i < chunks.length ? { done: false, value: enc.encode(chunks[i++]) } : { done: true }), releaseLock() {} };
