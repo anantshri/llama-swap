@@ -5,6 +5,58 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-24 — Parts view: Responses-API function items and CJK-aware token estimates
+
+### Goal
+
+Follow-ups from the code review of PR #25 (parts view):
+
+- **M1** — Responses-API `input[]` items of type `function_call` and
+  `function_call_output` carry neither `role` nor `content`, so
+  `splitRequestParts()` silently dropped them, despite responses-API support
+  being a headline claim.
+- **L2** — the token estimate charged every character at chars ÷ 4, which
+  under-counts CJK text roughly 4x (CJK tokenizes at close to one token per
+  character).
+
+### How
+
+`internal/server/ui_dist/js/components/captureDialog.js`:
+
+- The message loop gained two early-return branches before the role-based
+  handling: `msg.type === "function_call"` pushes a `tool_call` part with the
+  decoded arguments (`prettyArgs(msg.arguments)`, label carrying the call
+  name); `msg.type === "function_call_output"` pushes a `tool`-role message
+  part from `contentText(msg.output)` with the `call_id` in the label. Content
+  arrays (`[{type:"output_text",...}]`) flatten via the existing `contentText`.
+- `estimateTokens()` now counts CJK characters (Han, Hiragana, Katakana,
+  Hangul via a `\p{Script=...}` regex) at one token each and applies chars ÷ 4
+  to the remainder; empty text stays 0 and any non-empty text stays ≥ 1. The
+  totals note now reads "≈1 per CJK char, other chars ÷ 4".
+
+### Verification
+
+- No Node/Chromium available in this environment, so the changed algorithms
+  were verified via a faithful Python transliteration of `estimateTokens` /
+  `splitRequestParts` run against the new self-test assertions — all passed
+  (CJK rates, mixed CJK/latin, both function-item branches, content-array
+  output, request-order preservation, plus regressions for the pre-existing
+  request shapes and `null` returns).
+- `internal/server/ui_dist/__selftest.html` gained 6 tests (2 CJK estimate,
+  4 function-item) — to be exercised by the next headless browser run of the
+  self-test harness.
+- `make test` passes (UI assets embedded and served unchanged; no Go code
+  changed).
+
+### Notes
+
+- `estimateTokens` iterates by code point, so astral-plane characters count as
+  one CJK/non-CJK unit while `s.length` counts UTF-16 units — the estimate
+  slightly over-counts emoji-heavy text, which is acceptable for a labelled
+  approximation.
+
+---
+
 ## 2026-09-21 — Activity capture dialog: request-body parts view
 
 ### Goal

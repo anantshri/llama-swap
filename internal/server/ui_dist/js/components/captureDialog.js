@@ -31,18 +31,28 @@ function parseJsonObject(str) {
 
 // countWords / estimateTokens back the request-body parts view. There is no
 // tokenizer in the proxy, so token counts are an approximation: ~4 characters
-// per token for the English text and JSON that dominates chat requests. Every
-// surface that shows a token number labels it as an estimate.
+// per token for the English text and JSON that dominates chat requests, while
+// CJK characters cost roughly one token each. Every surface that shows a token
+// number labels it as an estimate.
 export function countWords(text) {
   const trimmed = String(text ?? "").trim();
   return trimmed ? trimmed.split(/\s+/).length : 0;
 }
 
+// CJK scripts (Han, kana, Hangul) tokenize at close to one token per character,
+// so counting them at chars ÷ 4 would under-count such text roughly 4x.
+const CJK_CHAR_RE = /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}/u;
+
 export function estimateTokens(text) {
-  const len = String(text ?? "").length;
+  const s = String(text ?? "");
+  if (!s) return 0;
+  let cjk = 0;
+  for (const ch of s) {
+    if (CJK_CHAR_RE.test(ch)) cjk++;
+  }
   // Any non-empty text costs at least one token, so rounding never reports a
   // populated part as free.
-  return len === 0 ? 0 : Math.max(1, Math.round(len / 4));
+  return Math.max(1, cjk + Math.round((s.length - cjk) / 4));
 }
 
 // contentText flattens one `content` value — a string, an array of typed
@@ -129,6 +139,17 @@ export function splitRequestParts(body) {
       pushPart(parts, "unknown", "message", `${listName}[${i}]`, contentText(msg));
       return;
     }
+    // Responses-API input items that carry neither `role` nor `content`: a
+    // bare function call and its output would otherwise be dropped entirely.
+    if (msg.type === "function_call") {
+      const name = msg.name || "";
+      pushPart(parts, "tool", "tool_call", `${listName}[${i}] · function_call${name ? ` ${name}` : ""}`, prettyArgs(msg.arguments));
+      return;
+    }
+    if (msg.type === "function_call_output") {
+      pushPart(parts, "tool", "message", `${listName}[${i}] · tool · result${msg.call_id ? ` for ${msg.call_id}` : ""}`, contentText(msg.output));
+      return;
+    }
     const role = typeof msg.role === "string" && msg.role ? msg.role : "unknown";
     const where = `${listName}[${i}] · ${role}${msg.tool_call_id ? ` · result for ${msg.tool_call_id}` : ""}`;
     pushPart(parts, role, "message", where, contentText(msg.content));
@@ -197,7 +218,7 @@ export function requestPartsHTML(requestParts) {
     <div class="capture-parts">
       <div class="capture-parts-totals">
         ${totals.parts} parts · ${totals.chars.toLocaleString()} chars · ${totals.words.toLocaleString()} words · ≈${totals.tokens.toLocaleString()} tokens
-        <span class="capture-parts-note">token counts are approximate (chars ÷ 4)</span>
+        <span class="capture-parts-note">token counts are approximate (≈1 per CJK char, other chars ÷ 4)</span>
       </div>
       ${blocks}
     </div>`;

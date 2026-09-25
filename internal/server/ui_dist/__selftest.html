@@ -185,6 +185,8 @@
       test("word count splits on runs of whitespace", () => expect(countWords("one  two\nthree\tfour")).toBe(4));
       test("token estimate is ~4 chars per token", () => { expect(estimateTokens("abcd")).toBe(1); expect(estimateTokens("a".repeat(400))).toBe(100); });
       test("sub-token text never reports zero", () => expect(estimateTokens("a")).toBe(1));
+      test("CJK text is charged ~1 token per char", () => { expect(estimateTokens("你好")).toBe(2); expect(estimateTokens("こんにちは")).toBe(5); expect(estimateTokens("한국어")).toBe(3); });
+      test("mixed CJK and latin text sums both rates", () => expect(estimateTokens("你好 abcd")).toBe(3));
 
       const chatBody = {
         model: "qwen3",
@@ -251,6 +253,31 @@
       test("responses API: input items as messages", () => {
         const { parts } = splitRequestParts({ input: [{ role: "user", content: "ping" }] });
         expect(parts.map((p) => p.label)).toEqual(["input[0] · user"]);
+      });
+      test("responses API: bare function_call input item becomes a tool part", () => {
+        const { parts } = splitRequestParts({ input: [{ type: "function_call", call_id: "c1", name: "get_weather", arguments: '{"city":"tokyo"}' }] });
+        expect(parts.map((p) => p.label)).toEqual(["input[0] · function_call get_weather"]);
+        expect(parts[0].role).toBe("tool");
+        expect(parts[0].kind).toBe("tool_call");
+        expect(parts[0].text).toContain('"city": "tokyo"');
+      });
+      test("responses API: function_call_output input item becomes a tool result part", () => {
+        const { parts } = splitRequestParts({ input: [{ type: "function_call_output", call_id: "c1", output: "sunny" }] });
+        expect(parts.map((p) => p.label)).toEqual(["input[0] · tool · result for c1"]);
+        expect(parts[0].role).toBe("tool");
+        expect(parts[0].text).toBe("sunny");
+      });
+      test("responses API: function_call_output with content-array output flattens", () => {
+        const { parts } = splitRequestParts({ input: [{ type: "function_call_output", call_id: "c1", output: [{ type: "output_text", text: "raining" }] }] });
+        expect(parts[0].text).toBe("raining");
+      });
+      test("responses API: function items keep request order among messages", () => {
+        const { parts } = splitRequestParts({ input: [
+          { type: "function_call", call_id: "c1", name: "f", arguments: "{}" },
+          { type: "function_call_output", call_id: "c1", output: "ok" },
+          { role: "assistant", content: "done" },
+        ] });
+        expect(parts.map((p) => p.label)).toEqual(["input[0] · function_call f", "input[1] · tool · result for c1", "input[2] · assistant"]);
       });
       test("completions API: prompt string and legacy function_call", () => {
         const { parts } = splitRequestParts({ prompt: "once upon", messages: [{ role: "assistant", function_call: { name: "f", arguments: '{"k":1}' } }] });
