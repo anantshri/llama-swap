@@ -33,6 +33,15 @@ Long-form entries with full context live in
   are rejected with HTTP 429 rather than queued. Implemented as middleware at
   the top of the inference chain, only wired when the limit is > 0
   (upstream #1086/#1110, commit `41ec321`).
+- Automatic capability discovery (new `internal/capcompat`): when a model
+  becomes ready, llama-swap asks the upstream what it supports — context
+  length, input/output modalities, tools — and caches the result in the
+  sqlite store (new `cache` table), so an unloaded model still advertises its
+  real capabilities in `/v1/models`. Configured `capabilities` always win
+  field-by-field; `capabilities.disableAuto: true` opts a model out.
+  Probes support llama-server, vLLM, and halogen (Strix Halo) upstreams. The
+  activity store gains a general-purpose key/value cache API (upstream
+  #1083/#1105, commit `eeac3e6`).
 - Approximate token-cost estimates on the Stats page. A new top-level
   `pricing:` config section sets the display currency (USD, or INR with a
   configurable `usdToINR` rate, default 95) and default per-million-token

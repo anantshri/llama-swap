@@ -5,6 +5,71 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-24 — Port upstream capcompat: automatic capability discovery (#1083/#1105)
+
+### Goal
+
+Fourth batch of the upstream survey: `internal/capcompat` (upstream `eeac3e6`,
+the largest port at ~3.8k lines / 43 files) — automatic context and modality
+discovery from upstream servers, cached across restarts.
+
+### How it works (upstream design, adapted)
+
+- On process `Ready`, the server probes the model's own proxy address
+  (`capcompat.NewClient`) — never through the router, so TTL windows and
+  concurrency slots are untouched — on its own goroutine.
+- Adapters parse llama-server `/props` + `/v1/models`, vLLM `/v1/models`
+  (incl. LoRA), and halogen `/health` + `/v1/models`.
+- Results are stored via the store's new generic key/value cache
+  (`cache` table) and survive model unload / proxy restart.
+- `/v1/models`, the dashboard listing, and aliases resolve capabilities as
+  `config.Merge(auto)`: configured values win field-by-field; a model with
+  `capabilities.disableAuto: true` is never probed.
+- A `ModelCapabilitiesChangedEvent` is emitted when a probe learns something
+  new, so UI clients re-pull the listing.
+
+### Adaptations for the fork
+
+- Upstream's store is split (`internal/store` + `internal/store/sqlite`);
+  the fork keeps its single-file store. The `CacheRepository` interface
+  (`internal/store/cache.go`) landed as-is; the sqlite implementation was
+  folded into `internal/store/store.go` as methods on `*Store`
+  (`Cache()` returns the store itself), cache rows are pruned on start, and
+  upstream's cache tests were moved into `package store`.
+- Upstream's `00003_create_cache.sql` was renumbered to
+  `00004_create_cache.sql` (the fork already has its own
+  `00003_activity_src.sql` from the forwarded-headers port); the partial
+  `internal/store/sqlite/` package was deleted.
+- `ModelCapConfig` kept the fork's #915 fields (`max_output_tokens`,
+  `reasoning`) and gained upstream's json tags, `disableAuto`, and `Merge`.
+- `apigroup.go` keeps the fork's 10-value `renderCapabilities` signature but
+  now renders the *resolved* capabilities.
+- gosec G104 in `capcompat.go` (unhandled drain on the error path) fixed with
+  `_, _ =` + comment.
+
+### Verification
+
+```
+go test -short -count=1 ./internal/...   # all ok, incl. capcompat 517-line
+                                         # test suite + store cache tests
+make test-dev                            # ok; staticcheck: same 4 pre-existing
+make gosec                               # 0 issues (after G104 fix)
+aidc-scan                                # semgrep/gitleaks/gosec clean
+__selftest.html (headless Chromium)      # 113/113, no page errors
+```
+
+### Notes
+
+- `store.New` now runs `Cache().Prune(ctx)` at startup — in-memory stores
+  start empty, file stores drop rows that expired while the process was down.
+- The `cache` table is a general-purpose key/value API (callers own the key
+  namespace); capcompat is its first user.
+- Migration numbering: this fork's migrations diverge from upstream's
+  (fork: `00003_activity_src`, `00004_create_cache`). Future ports touching
+  migrations must renumber accordingly.
+
+---
+
 ## 2026-09-24 — Port upstream global concurrency semaphore (#1110)
 
 ### Goal
