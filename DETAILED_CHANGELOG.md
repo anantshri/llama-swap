@@ -5,6 +5,53 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-25 — Parts view: collapse/expand controls and pretty-printed tool payloads
+
+### Goal
+
+Operator feedback on the merged parts view:
+
+1. Long contexts produce dozens of part blocks, all open — a scroll marathon.
+   Add `Collapse all` / `Expand all` next to Copy.
+2. Tool results arrive as one-line JSON blobs inside the boxes; render them
+   pretty-printed.
+
+### How
+
+`internal/server/ui_dist/js/components/captureDialog.js`:
+
+- `prettyIfJson(text)` (exported): when text parses as JSON it is re-rendered
+  with 2-space indent; anything not JSON-shaped passes through untouched.
+  Applied to `role:"tool"` message content, Responses-API
+  `function_call_output.output`, and `tool_use` content-part inputs (the
+  latter via the existing `prettyArgs`). Char/word/token counts are computed
+  from the rendered text, so they track the pretty form.
+- `requestPartsHTML(parts, {open})` — `open: false` renders every
+  `<details>` block without the `open` attribute (default unchanged: open).
+- Dialog state gains `partsOpen` (`undefined` = expanded default, reset per
+  capture in `open()`); the request tab row shows `Collapse all` /
+  `Expand all` buttons only while the Parts tab is active; clicking sets
+  `partsOpen` and re-renders, so the choice survives the Copy button's
+  "Copied!" re-render. Copy still copies the full text regardless of
+  collapse state.
+
+### Verification
+
+```
+__selftest.html (headless Chromium)   # 119/119 — 6 new tests:
+                                      #   open option, prettyIfJson (JSON /
+                                      #   non-JSON / empty / null), tool
+                                      #   result pretty, plain-text result
+                                      #   untouched, function_call_output
+                                      #   pretty, tool_use input pretty
+headless dialog drive                 # buttons render; 3/3 open → Collapse
+                                      # all → 0 open → Expand all → 3 open;
+                                      # tool result pre carries the indented
+                                      # JSON; no page errors
+```
+
+---
+
 ## 2026-09-25 — Port upstream small-fix batch 2 (#1165, #1090, #1145, #1089)
 
 ### Goal

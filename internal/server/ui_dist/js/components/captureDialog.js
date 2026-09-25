@@ -74,7 +74,7 @@ function contentText(content) {
           return `[image${url ? `: ${url}` : ""}]`;
         }
         if (item.type === "input_audio" || item.type === "audio") return "[audio]";
-        if (item.type === "tool_use") return `${item.name || "tool"} ${JSON.stringify(item.input ?? {})}`;
+        if (item.type === "tool_use") return `${item.name || "tool"} ${prettyArgs(item.input ?? {})}`;
         if (item.content !== undefined) return contentText(item.content);
         return JSON.stringify(item);
       })
@@ -94,6 +94,20 @@ function prettyArgs(args) {
     return JSON.stringify(JSON.parse(args), null, 2);
   } catch {
     return args;
+  }
+}
+
+// prettyIfJson re-renders text as indented JSON when it parses as one, so
+// tool results that carry JSON payloads stay readable instead of arriving as
+// one long line. Anything that is not JSON-shaped is returned unchanged.
+export function prettyIfJson(text) {
+  if (typeof text !== "string") return text;
+  const trimmed = text.trim();
+  if (!trimmed || (trimmed[0] !== "{" && trimmed[0] !== "[")) return text;
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2);
+  } catch {
+    return text;
   }
 }
 
@@ -147,12 +161,13 @@ export function splitRequestParts(body) {
       return;
     }
     if (msg.type === "function_call_output") {
-      pushPart(parts, "tool", "message", `${listName}[${i}] · tool · result${msg.call_id ? ` for ${msg.call_id}` : ""}`, contentText(msg.output));
+      pushPart(parts, "tool", "message", `${listName}[${i}] · tool · result${msg.call_id ? ` for ${msg.call_id}` : ""}`, prettyIfJson(contentText(msg.output)));
       return;
     }
     const role = typeof msg.role === "string" && msg.role ? msg.role : "unknown";
     const where = `${listName}[${i}] · ${role}${msg.tool_call_id ? ` · result for ${msg.tool_call_id}` : ""}`;
-    pushPart(parts, role, "message", where, contentText(msg.content));
+    const text = contentText(msg.content);
+    pushPart(parts, role, "message", where, role === "tool" ? prettyIfJson(text) : text);
     for (const call of Array.isArray(msg.tool_calls) ? msg.tool_calls : []) {
       const name = call?.function?.name || call?.name || "";
       pushPart(parts, "tool", "tool_call", `${listName}[${i}] · tool_call${name ? ` ${name}` : ""}`, prettyArgs(call?.function?.arguments ?? call?.arguments));
@@ -196,15 +211,17 @@ function statsText(p) {
 }
 
 // requestPartsHTML renders the parts view: one collapsible block per part with
-// its own char/word/token counts, plus a totals line.
-export function requestPartsHTML(requestParts) {
+// its own char/word/token counts, plus a totals line. options.open === false
+// renders every block collapsed (the dialog's "Collapse all").
+export function requestPartsHTML(requestParts, options = {}) {
   if (!requestParts) return "";
   const { parts, totals } = requestParts;
+  const openAttr = options.open === false ? "" : " open";
   const blocks = parts
     .map((p) => {
       const roleClass = ROLE_CLASSES[p.role] || "other";
       return `
-        <details class="capture-part" open>
+        <details class="capture-part"${openAttr}>
           <summary class="capture-part-head">
             <span class="capture-part-role capture-part-role--${roleClass}">${escapeHtml(p.role)}</span>
             <span class="capture-part-label">${escapeHtml(p.label)}</span>
@@ -367,15 +384,24 @@ export function CaptureDialogController() {
       }
       const tabOptions = ["parts", "pretty", "raw"];
       if (!reqParts) tabOptions.shift();
+      // Collapse/expand controls only make sense while the parts view is
+      // showing; long contexts render dozens of blocks and all-open is a
+      // scroll marathon.
+      const partsControls =
+        reqTab === "parts" && reqParts
+          ? `<button class="capture-tab" data-parts="collapse">Collapse all</button>
+             <button class="capture-tab" data-parts="expand">Expand all</button>`
+          : "";
       const tabsHTML = isReqJson
         ? `<div class="capture-tab-row">
              <div class="capture-tab-group">${bodyTabsHTML(reqTab, tabOptions)}</div>
+             ${partsControls}
              <button class="capture-tab" data-copy="req">${state.copiedReq ? "Copied!" : "Copy"}</button>
            </div>`
         : `<div class="capture-tab-row"><span></span><button class="capture-tab" data-copy="req">${state.copiedReq ? "Copied!" : "Copy"}</button></div>`;
       const body =
         reqTab === "parts" && reqParts
-          ? requestPartsHTML(reqParts)
+          ? requestPartsHTML(reqParts, { open: state.partsOpen !== false })
           : `<pre class="capture-pre">${escapeHtml(reqDisplay)}</pre>`;
       return `${tabsHTML}${body}`;
     }
@@ -461,6 +487,12 @@ export function CaptureDialogController() {
         render();
       });
     });
+    dlg.querySelectorAll("[data-parts]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.partsOpen = btn.getAttribute("data-parts") === "expand";
+        render();
+      });
+    });
     dlg.querySelectorAll("[data-copy]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const which = btn.getAttribute("data-copy");
@@ -519,6 +551,9 @@ export function CaptureDialogController() {
         : "raw";
       state.copiedReq = false;
       state.copiedResp = false;
+      // A fresh capture starts with every part expanded; collapse state is
+      // per-capture, not carried across dialogs.
+      state.partsOpen = undefined;
     }
     render();
     if (!dlg.open) dlg.showModal();

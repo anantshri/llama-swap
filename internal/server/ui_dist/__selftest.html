@@ -38,6 +38,7 @@
       import { parseStream } from "/ui/js/api/chat.js";
       import {
         countWords, estimateTokens, splitRequestParts, requestPartsHTML, requestPartsText,
+        prettyIfJson,
       } from "/ui/js/components/captureDialog.js";
 
       // ---- tiny test harness ----
@@ -306,6 +307,44 @@
         expect(html).toContain("6 parts ·");
         expect(html).toMatch(/≈\d+ tokens/);
         expect(html).toContain("chars ÷ 4");
+      });
+      test("open option collapses every part block", () => {
+        const parts = splitRequestParts(chatBody);
+        expect(requestPartsHTML(parts)).toContain('<details class="capture-part" open>');
+        if (requestPartsHTML(parts, { open: false }).includes('capture-part" open')) {
+          fail("collapsed render still contains open blocks");
+        }
+      });
+      group("prettyIfJson");
+      test("formats JSON-shaped text and leaves other text alone", () => {
+        expect(prettyIfJson('{"a":1}')).toBe('{\n  "a": 1\n}');
+        expect(prettyIfJson("[1, 2]")).toBe('[\n  1,\n  2\n]');
+        expect(prettyIfJson("sunny")).toBe("sunny");
+        expect(prettyIfJson("{not json")).toBe("{not json");
+        expect(prettyIfJson("")).toBe("");
+        expect(prettyIfJson(null)).toBe(null);
+      });
+      test("tool result parts carry pretty-printed JSON", () => {
+        const { parts } = splitRequestParts({ messages: [
+          { role: "tool", tool_call_id: "c1", content: '{"temp":4,"unit":"C"}' },
+        ] });
+        expect(parts[0].text).toBe('{\n  "temp": 4,\n  "unit": "C"\n}');
+      });
+      test("plain-text tool results are not reformatted", () => {
+        const { parts } = splitRequestParts({ messages: [{ role: "tool", tool_call_id: "c1", content: "sunny" }] });
+        expect(parts[0].text).toBe("sunny");
+      });
+      test("function_call_output JSON output is pretty-printed", () => {
+        const { parts } = splitRequestParts({ input: [
+          { type: "function_call_output", call_id: "c1", output: '{"forecast":"rain"}' },
+        ] });
+        expect(parts[0].text).toContain('\n  "forecast": "rain"\n}');
+      });
+      test("tool_use content items pretty-print their input", () => {
+        const { parts } = splitRequestParts({ messages: [
+          { role: "assistant", content: [{ type: "tool_use", name: "f", input: { city: "oslo" } }] },
+        ] });
+        expect(parts[0].text).toContain('{\n  "city": "oslo"\n}');
       });
       test("null parts render nothing", () => { expect(requestPartsHTML(null)).toBe(""); expect(requestPartsText(null)).toBe(""); });
       test("text form lists every part with its counts", () => {

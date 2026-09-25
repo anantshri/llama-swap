@@ -20,7 +20,9 @@ Long-form entries with full context live in
   character, word and approximate token counts (≈1 token per CJK character,
   other text chars ÷ 4; the proxy ships no tokenizer, so the number is
   labelled an estimate). Multi-part requests open on the parts view;
-  single-part bodies keep the pretty JSON view.
+  single-part bodies keep the pretty JSON view. `Collapse all` / `Expand all`
+  controls sit next to Copy for long contexts, and tool results, tool-call
+  inputs and function outputs that carry JSON are rendered pretty-printed.
 - Port of upstream PR #1075: a `setParams`/`setParamsByID` key ending in `?`
   (e.g. `max_tokens?: 4096`) is set-if-undefined — the value applies only when
   the request does not already carry that parameter, so configs can supply
