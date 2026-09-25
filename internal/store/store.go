@@ -308,11 +308,13 @@ func (s *Store) ActivityStats(ctx context.Context, query ActivityStatsQuery) (Ac
 		filter.Models = []string{model}
 	}
 	where, args := activityWhere(filter)
+	// TotalRequests is MAX(id), not COUNT(*): pruning deletes old rows, and
+	// the monotonic id keeps the all-time request total stable across prunes.
 	// #nosec G202 -- `where` uses ? placeholders bound via args; no user input
 	// is concatenated into the SQL text.
 	row := s.db.QueryRowContext(ctx, `
 		SELECT
-			COUNT(*),
+			COALESCE(MAX(id), 0),
 			COALESCE(SUM(input_tokens), 0),
 			COALESCE(SUM(output_tokens), 0),
 			COALESCE(SUM(CASE WHEN cache_tokens > 0 THEN cache_tokens ELSE 0 END), 0)
