@@ -5,6 +5,73 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-24 — Upstream ports: forwarded headers, totals-after-prune, TTL, zstd, tabbyAPI
+
+### Goal
+
+Pull five small, high-value upstream fixes into the fork (all Go-side, no UI
+impact), per the 2026-09-24 upstream survey (fork main was 37 commits behind
+`mostlygeek/llama-swap`).
+
+### What was picked
+
+| Upstream commit | PR | Change |
+|---|---|---|
+| `8fa8589` | #1104 | tabbyAPI usage extraction (`prompt_tokens_per_sec`, `completion_tokens_per_sec`, `total_time`) |
+| `0e1f797` | #1123 | single bounded shared zstd encoder replaces per-core sync.Pool |
+| `21bc145` | #1095 | TTL idle window starts when the model is ready, with regression test |
+| `2edad4a` | #1130 | `X-Forwarded-For`/`X-Real-IP` support; activity `src` source attribution |
+| `96e6f94` | #1136 | stats `TotalRequests` = `MAX(id)` so totals survive pruning |
+
+### Adaptations (upstream base differed)
+
+- `2edad4a` assumed upstream's tailcat and store-split (`internal/store/sqlite/
+  activity.go`) work, which the fork has not picked. Adaptations:
+  - `activitySource()` in `internal/server/metrics.go` was added **without**
+    the `tailcat.SourceFromContext` preference (fork has no tailcat); the
+    forwarded-header fallback and `ip:` fallback are verbatim upstream.
+  - `forwardedIP()` + `clientIP()` refactor landed cleanly in
+    `internal/server/log.go` from the same commit.
+  - Persistence was added for the fork's single-file store: `ActivityLogEntry.Src`
+    (`json:"src"`), `src` in the activity INSERT/SELECT and sort whitelist
+    (`internal/store/store.go`), plus new goose migration
+    `00003_activity_src.sql` (`ALTER TABLE activity ADD COLUMN src TEXT NOT
+    NULL DEFAULT ''`). Upstream's optional `idx_activity_src_created_id`
+    index was skipped — the fork has no src-filtered queries yet.
+- `96e6f94` only existed as a diff against upstream's split store; the
+  one-line change (`COUNT(*)` → `COALESCE(MAX(id), 0)`) and its regression
+  assertions were applied by hand to `ActivityStats` and
+  `TestStore_PruneActivity` in the fork's layout, with a comment explaining
+  the MAX(id) rationale.
+
+### Verification
+
+```
+go test -short -count=1 ./internal/...   # all packages ok
+make test-dev                            # go test + staticcheck
+make gosec                               # 0 issues (GOOS linux/darwin/windows)
+aidc-scan                                # gitleaks clean; semgrep clean on the UI half earlier
+```
+
+- staticcheck reports 5 findings, all verified pre-existing on `main`
+  (`internal/perf`, `internal/server/server.go:283`, `internal/swaputil`):
+  none are in files touched by this session.
+- `2edad4a`'s `activitySource`/forwarded-header tests pass unmodified against
+  the no-tailcat adaptation.
+- The fork's `src` persistence is covered by existing store round-trip tests
+  via `InsertActivity`/`ListActivity` and by `TestStore_PruneActivity` for the
+  totals change.
+
+### Notes
+
+- `src` values are not yet displayed in the Activity UI; the column is in the
+  API payload (`src` JSON key) and sortable. UI display can ride along with
+  the upcoming UI-porting round.
+- `aidc-scan` scoped run found nothing after commits; it scopes to a dirty
+  tree, so the Go half was verified by `make gosec` + gitleaks instead.
+
+---
+
 ## 2026-09-24 — Parts view: Responses-API function items and CJK-aware token estimates
 
 ### Goal

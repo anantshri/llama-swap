@@ -56,6 +56,23 @@ Long-form entries with full context live in
   bounded by a 2s timeout so an unresponsive upstream cannot stall startup.
 - Matrix `+undefined` reference: a set can include every model not named by
   any other set expression (upstream PR #1026).
+- Proxy forwarded headers: activity records now carry the client source —
+  `xff:`-prefixed when taken from `X-Forwarded-For`/`X-Real-IP`, otherwise
+  `ip:` + connection address — persisted as `ActivityLogEntry.Src` via a new
+  sqlite migration and accepted as an activity sort key (upstream #1130,
+  commit `2edad4a`).
+- Request totals survive activity pruning: stats `TotalRequests` uses
+  `MAX(id)` instead of `COUNT(*)` so the all-time total stays stable
+  (upstream #1136, commit `96e6f94`).
+- A model's TTL idle window now starts when the process becomes ready, so a
+  positive-TTL model gets its full idle window even before the first request
+  (upstream #1095, commit `21bc145`).
+- The zstd encoder pool is replaced by a single bounded shared encoder,
+  cutting retained memory from ~20 MiB per core to one bounded instance
+  (upstream #1123, commit `0e1f797`).
+- tabbyAPI `usage` extensions (`prompt_tokens_per_sec`,
+  `completion_tokens_per_sec`, `total_time`) are extracted into activity
+  metrics (upstream #1104, commit `8fa8589`).
 
 ### Changed
 

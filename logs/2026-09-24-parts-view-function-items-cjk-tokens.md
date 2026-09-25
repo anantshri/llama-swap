@@ -1,4 +1,4 @@
-# 2026-09-24 — Parts view follow-ups (PR #25 review M1 + L2)
+# 2026-09-24 — Parts view follow-ups (PR #25 review M1 + L2) and upstream small-fix ports
 
 ## Symptom / goal
 
@@ -56,3 +56,45 @@ make test                                  # go test -short -count=1 ./internal/
   the algorithm-level check above covers the same assertions.
 - Follow-up idea (not implemented): apply the same CJK-aware rate to the
   Stats-page cost estimator if it still uses flat chars ÷ 4.
+
+---
+
+# 2026-09-24 — Upstream small-fix ports (same session)
+
+## Goal
+
+Cherry-pick the five small high-value upstream fixes onto
+`updates-25-sep-26`: `8fa8589` (tabbyAPI usage), `0e1f797` (zstd pool),
+`21bc145` (TTL from ready), `2edad4a` (forwarded headers), `96e6f94`
+(totals after prune).
+
+## Conflicts / adaptations
+
+- `2edad4a`: conflicts in `internal/server/metrics.go`/`metrics_test.go` —
+  upstream's base has tailcat and a pre-existing `activitySource()`; the fork
+  has neither. Resolved by adding `activitySource()` without the
+  `tailcat.SourceFromContext` line. Persistence for the new `Src` field was
+  added to the fork's single-file store (`ActivityLogEntry.Src`, INSERT/
+  SELECT/sort whitelist) plus goose migration `00003_activity_src.sql`.
+- `96e6f94`: upstream-only paths (`internal/store/sqlite/activity.go`) →
+  hand-ported `COUNT(*)` → `COALESCE(MAX(id), 0)` into `ActivityStats` and
+  extended `TestStore_PruneActivity`.
+- The other three picks applied cleanly.
+
+## Commands / verification
+
+```
+go test -short -count=1 ./internal/...   # all ok
+make test-dev                            # ok; staticcheck: 5 findings, all
+                                         # pre-existing on main, none in
+                                         # touched files
+make gosec                               # 0 issues
+aidc-scan                                # gitleaks clean
+```
+
+## Notes
+
+- `src` is exposed in the activity API and sortable; Activity-UI display is
+  deferred to the upcoming UI-porting round.
+- staticcheck was installed during the session (`go install ... staticcheck`);
+  `make test-dev` still expects it on PATH for future runs.
