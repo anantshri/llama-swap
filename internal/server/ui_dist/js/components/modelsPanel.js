@@ -147,17 +147,30 @@ export function ModelsPanel() {
     } else if (mappings.length === 0) {
       bodyHtml = `<div class="models-empty muted">No mappings</div>`;
     } else {
+      // Resolve each target against the model list so the row can show the
+      // live status dot, link to the model's detail page, and offer
+      // load/unload controls for local targets (upstream #1170).
+      const all = models.get();
+      const resolveTarget = (target) =>
+        all.find((m) => m.id === target) ?? all.find((m) => (m.aliases ?? []).includes(target));
+      const targetHtml = (target) => {
+        const m = resolveTarget(target);
+        if (!m) return `<span class="profile-mapping-target">${escapeHtml(target)}</span>`;
+        const link = `<a class="profile-mapping-target profile-mapping-link" href="#/models/${encodeURIComponent(m.id)}">${escapeHtml(target)}</a>`;
+        if (m.peerID) return link;
+        const action =
+          m.state === "stopped"
+            ? `<button class="btn btn--sm" data-load="${escapeHtml(m.id)}">Load</button>`
+            : `<button class="btn btn--sm" data-unload="${escapeHtml(m.id)}" ${m.state !== "ready" ? "disabled" : ""}>Unload</button>`;
+        return `<span class="${statusDotClass(m)}" title="${escapeHtml(m.state)}"></span>${link}${action}`;
+      };
       bodyHtml = `<div class="profile-mappings">${mappings
         .map(
           ([modelID, target]) => `
           <div class="profile-mapping">
             <span class="profile-mapping-model">${escapeHtml(modelID)}</span>
             <span class="profile-mapping-arrow" aria-hidden="true">→</span>
-            ${
-              target
-                ? `<span class="profile-mapping-target">${escapeHtml(target)}</span>`
-                : `<span class="model-tag model-tag--unlisted">disabled</span>`
-            }
+            ${target ? targetHtml(target) : `<span class="model-tag model-tag--unlisted">disabled</span>`}
           </div>`
         )
         .join("")}</div>`;

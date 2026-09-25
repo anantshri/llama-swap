@@ -170,6 +170,9 @@
 .profile-mapping-model { max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .profile-mapping-arrow { color: var(--color-txtsecondary); }
 .profile-mapping-target { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-mapping-link { flex: 1 1 auto; color: var(--color-txtmain); text-decoration: none; }
+.profile-mapping-link:hover { color: var(--color-primary); text-decoration: underline; }
+.profile-mapping .btn { margin-left: auto; flex-shrink: 0; }
 .models-selector { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--color-card-border-inner); }
 .models-selector:last-child { border-bottom: none; }
 .models-selector-name { font-size: 0.875rem; font-weight: 500; }
