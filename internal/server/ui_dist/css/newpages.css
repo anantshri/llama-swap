@@ -463,6 +463,15 @@
 
 /* agent work items (reasoning + tool cards) */
 .agent-work { display: flex; flex-direction: column; gap: 0.375rem; }
+.agent-work-section { border: 1px solid var(--color-card-border); border-radius: 8px; overflow: hidden; }
+.agent-work-head { padding: 0.5rem 0.625rem; }
+.agent-work-spin {
+  width: 0.75rem; height: 0.75rem; margin-left: auto; flex-shrink: 0;
+  border: 2px solid var(--color-txtsecondary); border-top-color: transparent;
+  border-radius: 50%; animation: agent-work-spin 0.8s linear infinite;
+}
+@keyframes agent-work-spin { to { transform: rotate(360deg); } }
+.agent-work-items { display: flex; flex-direction: column; gap: 0.375rem; padding: 0.375rem 0.5rem 0.5rem; }
 .agent-work-item { border: 1px solid var(--color-card-border); border-radius: 8px; overflow: hidden; }
 .agent-work-summary {
   display: flex; align-items: center; gap: 0.375rem; padding: 0.3125rem 0.625rem;

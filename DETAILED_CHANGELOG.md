@@ -52,6 +52,44 @@ headless dialog drive                 # buttons render; 3/3 open → Collapse
 
 ---
 
+## 2026-09-25 — UI ports: searchable model picker (#1153) and stable Work header (#1101)
+
+### Model picker combobox (#1153)
+
+`internal/server/ui_dist/js/components/modelSelector.js` rewritten from the
+`<select>` dropdown into a search combobox: click or typing opens the list,
+the query filters local models/aliases/peers in real time, ArrowUp/Down +
+Enter + Escape navigate, outside pointerdown closes. Optional per-tab `match`
+predicate floats models that fit the tab's needs to the top (marked ◆):
+audio (audio input / transcriptions / speech), image (image output /
+generation / image-to-image), speech, rerank. Model records in `api.js` now
+carry `architecture` modalities for those checks. Pure helpers
+`buildModelOptions` / `filterModelOptions` live in `util/modelUtils.js`.
+
+### Stable Work header (#1101)
+
+`internal/server/ui_dist/js/components/agentWork.js` now renders one
+collapsible **Work** section per assistant response instead of a flat item
+list. The collapsed header shows stable counters — reasoning characters ·
+duration · tool-call count — with a spinner only while work runs; the label
+never switches with the current item, so nothing flickers. Expansion state is
+tracked across the frequent re-renders while streaming (click-driven, since
+the `toggle` event fires after the default action and would restore stale
+state).
+
+### Verification
+
+```
+__selftest.html (headless Chromium)   # 135/135 — +3 picker option/filter tests
+headless drive: combobox              # type "whi" filters to whisper; Enter
+                                      # selects; input shows the selection
+headless drive: agent work            # counters identical working vs done;
+                                      # spinner toggles; expansion survives
+                                      # re-renders; no page errors
+```
+
+---
+
 ## 2026-09-25 — Port upstream small-fix batch 2 (#1165, #1090, #1145, #1089)
 
 ### Goal
