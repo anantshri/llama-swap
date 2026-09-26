@@ -88,16 +88,15 @@ func newTestServer(local router.LocalRouter, peer router.Router) *Server {
 // tests that exercise config-driven middleware wiring in routes().
 func newTestServerWithConfig(cfg config.Config, local router.LocalRouter, peer router.Router) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
-	proxylog := logmon.NewWriter(io.Discard)
+	logs := logmon.NewGroup(io.Discard, true, true, true)
+	proxylog := logs.ProxyLogs
 	st, err := store.New("")
 	if err != nil {
 		panic(err)
 	}
 	s := &Server{
 		cfg:         cfg,
-		muxlog:      logmon.NewWriter(io.Discard),
-		proxylog:    proxylog,
-		upstreamlog: logmon.NewWriter(io.Discard),
+		logs:        logs,
 		inflight:    newInflightTracker(),
 		metrics:     newMetricsMonitor(proxylog, 0, 0, st),
 		store:       st,
@@ -174,7 +173,7 @@ func audioTaskRequest(model string) *http.Request {
 }
 
 func TestServer_New_GroupConfig(t *testing.T) {
-	discard := logmon.NewWriter(io.Discard)
+	discard := logmon.NewGroup(io.Discard, true, true, true)
 	cfg := config.Config{HealthCheckTimeout: 15}
 	cfg.Routing.Router.Use = "group"
 	st, err := store.New("")
@@ -182,7 +181,7 @@ func TestServer_New_GroupConfig(t *testing.T) {
 		t.Fatalf("store.New: %v", err)
 	}
 	defer st.Close()
-	s, err := New(cfg, discard, discard, discard, nil, st, BuildInfo{}, nil, nil)
+	s, err := New(cfg, discard, nil, st, BuildInfo{}, nil, nil)
 	if err != nil {
 		t.Fatalf("New (group): %v", err)
 	}
@@ -195,7 +194,7 @@ func TestServer_New_GroupConfig(t *testing.T) {
 }
 
 func TestServer_New_MatrixConfig(t *testing.T) {
-	discard := logmon.NewWriter(io.Discard)
+	discard := logmon.NewGroup(io.Discard, true, true, true)
 	cfg := config.Config{HealthCheckTimeout: 15}
 	cfg.Models = map[string]config.ModelConfig{
 		"model": {
@@ -212,7 +211,7 @@ func TestServer_New_MatrixConfig(t *testing.T) {
 		t.Fatalf("store.New: %v", err)
 	}
 	defer st.Close()
-	s, err := New(cfg, discard, discard, discard, nil, st, BuildInfo{}, nil, nil)
+	s, err := New(cfg, discard, nil, st, BuildInfo{}, nil, nil)
 	if err != nil {
 		t.Fatalf("New (matrix): %v", err)
 	}
@@ -508,7 +507,7 @@ func TestServer_Preload(t *testing.T) {
 
 // TestServer_New_OnStartupProfile verifies New activates the configured startup profile.
 func TestServer_New_OnStartupProfile(t *testing.T) {
-	discard := logmon.NewWriter(io.Discard)
+	discard := logmon.NewGroup(io.Discard, true, true, true)
 	cfg := config.Config{HealthCheckTimeout: 15}
 	cfg.Profiles = map[string]config.ProfileConfig{
 		"coding": {Pins: map[string]string{"llm-code": "model"}},
@@ -519,7 +518,7 @@ func TestServer_New_OnStartupProfile(t *testing.T) {
 		t.Fatalf("store.New: %v", err)
 	}
 	defer st.Close()
-	s, err := New(cfg, discard, discard, discard, nil, st, BuildInfo{}, nil, nil)
+	s, err := New(cfg, discard, nil, st, BuildInfo{}, nil, nil)
 	if err != nil {
 		t.Fatalf("New (startup profile): %v", err)
 	}

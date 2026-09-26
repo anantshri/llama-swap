@@ -81,7 +81,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 	}
 	translated, terr := apiconv.OpenAIToAnthropicResponse(bw.CapturedBody(), requestedModel)
 	if terr != nil {
-		s.proxylog.Errorf("error translating Anthropic response for model %s: %s", requestedModel, terr.Error())
+		s.logs.ProxyLogs.Errorf("error translating Anthropic response for model %s: %s", requestedModel, terr.Error())
 		bw.CommitPassThrough()
 		return
 	}

@@ -15,7 +15,7 @@ type Matrix struct {
 	*baseRouter
 }
 
-func NewMatrix(conf config.Config, proxylog, upstreamlog *logmon.Monitor) (*Matrix, error) {
+func NewMatrix(conf config.Config, logs *logmon.Group) (*Matrix, error) {
 	mtx := conf.Routing.Router.Settings.Matrix
 	if mtx == nil {
 		return nil, fmt.Errorf("matrix router requires a matrix configuration")
@@ -28,29 +28,29 @@ func NewMatrix(conf config.Config, proxylog, upstreamlog *logmon.Monitor) (*Matr
 	models, mode := mtx.Program().SynthesizedOrphans()
 	switch mode {
 	case "synthesized":
-		proxylog.Infof("matrix: synthesized set %q = (%s)", matrix.OrphanSetName, strings.Join(models, " | "))
+		logs.ProxyLogs.Infof("matrix: synthesized set %q = (%s)", matrix.OrphanSetName, strings.Join(models, " | "))
 	case "empty":
-		proxylog.Infof("matrix: synthesized set %q is empty; +%s terms dropped", matrix.OrphanSetName, matrix.OrphanSetName)
+		logs.ProxyLogs.Infof("matrix: synthesized set %q is empty; +%s terms dropped", matrix.OrphanSetName, matrix.OrphanSetName)
 	case "user-defined":
-		proxylog.Infof("matrix: set %q is user-defined; orphan synthesis disabled", matrix.OrphanSetName)
+		logs.ProxyLogs.Infof("matrix: set %q is user-defined; orphan synthesis disabled", matrix.OrphanSetName)
 	}
 
 	swapper := &matrixSwapper{
 		solver: newMatrixSolver(mtx.Program(), mtx.ResolvedEvictCosts()),
-		logger: proxylog,
+		logger: logs.ProxyLogs,
 	}
 
 	// Build a process for every model in the config. Any model can run alone
 	// even if it is not part of a set; this mirrors proxy.NewMatrix.
 	processes := make(map[string]process.Process, len(conf.Models))
-	base, err := newBaseRouter("matrix", conf, processes, proxylog, swapper)
+	base, err := newBaseRouter("matrix", conf, processes, logs.ProxyLogs, swapper)
 	if err != nil {
 		return nil, fmt.Errorf("creating base router: %w", err)
 	}
 
 	for mid, modelCfg := range conf.Models {
-		procLog := logmon.NewWriter(upstreamlog)
-		p, err := process.New(base.procCtx, mid, modelCfg, procLog, proxylog)
+		procLog := logmon.NewWriter(logs.UpstreamLogs)
+		p, err := process.New(base.procCtx, mid, modelCfg, procLog, logs.ProxyLogs)
 		if err != nil {
 			base.shutdownFn()
 			base.procCancel()

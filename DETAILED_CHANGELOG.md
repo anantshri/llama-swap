@@ -7,6 +7,59 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+---
+
+## 2026-10-12 — Hand-merge batch 3: multi-stream logging (#1172 / bbdb55d)
+
+### What / why
+
+The logging rework the earlier batches deferred: log data leaves
+`/api/events` for its own SSE endpoint, the server carries one
+`logmon.Group`, and configs gain `logs.toStdout` stream selection.
+
+### Resolutions
+
+- `router/matrix.go` + `llama-swap.go` (logmon.Group wiring) applied clean;
+  matrix.go needed the predicted `proxylog` → `logs.ProxyLogs` fix in the
+  orphan-synthesis logging.
+- `server.go`: one conflict on the `New()` signature — kept upstream's
+  `logs *logmon.Group` with our concrete `*store.Store` parameter; six
+  fork-side `s.{proxylog,upstreamlog,muxlog}` references renamed to
+  `s.logs.*` (anthropic.go, apigroup.go).
+- `log.go`: kept the error-handling convention + nosemgrep marker on the
+  combined-history write. `server_test.go`/`translate_test.go` helpers:
+  upstream's `logmon.NewGroup(io.Discard, true, true, true)` with our
+  `store.New`.
+- README conflicts: the recurring upstream-content-vs-fork-notice class —
+  kept ours both times. KB doc: took upstream's updated date.
+- Svelte stores (`logs.ts`/`logs.test.ts`) came along dead; the vanilla
+  adaptation is in `api.js`: a second EventSource
+  (`/api/events/logs?stream=proxy&stream=upstream`) with its own backoff,
+  the same message envelope, and the `logData` case removed from the main
+  `/api/events` handler; log-store resets moved into the log stream's
+  onopen so replayed history is never cleared by the other stream.
+
+### Test restore + race fix
+
+The three `TestServer_APILogEvents_*` tests + `serveLogEvents` helper
+trimmed during the #1215 port arrived with this commit and applied clean,
+as predicted. `TestServer_APILogEvents_NoHistory` flaked under package
+load: monitor delivery is asynchronous (`Write` → buffered channel →
+publish goroutine), so a write made before subscribing could still be
+published after it and arrive as a live event, defeating the no-history
+assertion. Fixed deterministically: a probe subscriber drains the history
+write's broadcast before the handler subscribes.
+
+### Verification
+
+- `go test -short ./...` → 1968 passed, 32 packages; `APILogEvents` ×6
+  consecutive runs green; browser selftest 152/152.
+- Runtime smoke: `/api/events/logs?stream=proxy` serves SSE with history;
+  a 5s `/api/events` sample carries zero `logData`; `/logs/stream/proxy`
+  tails; the vanilla logs page renders history live with no page errors
+  (playwright against a rebuilt binary).
+- gosec 0 ×3 GOOS; aidc-scan --all clean (semgrep/gitleaks/gosec/shellcheck).
+
 ## 2026-10-12 — Hand-merge batch 2: vllm-wrapper build, sm_70 docker, auto:orphans
 
 ### What / why

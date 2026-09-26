@@ -134,10 +134,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Loggers are wired per cfg.LogToStdout: proxy/upstream feed muxLog, which
-	// owns the combined history served by /logs. They outlive config reloads,
-	// so a LogToStdout change requires a restart to take effect.
-	muxLog, proxyLog, upstreamLog := server.NewLoggers(cfg.LogToStdout)
+	// Loggers are wired per cfg.LogToStdout: the selected streams feed
+	// logs.MuxLogs, which owns the combined history served by /logs. They
+	// outlive config reloads, so a LogToStdout change requires a restart to
+	// take effect.
+	logs, err := server.NewLoggers(cfg.LogToStdout)
+	if err != nil {
+		slog.Error("failed to create loggers", "error", err)
+		os.Exit(1)
+	}
+	proxyLog := logs.ProxyLogs
 
 	applyLogSettings := func(cfg config.Config) {
 		level := logmon.LevelInfo
@@ -150,10 +156,8 @@ func main() {
 			level = logmon.LevelError
 		}
 		timeFormat := logTimeFormats[strings.ToLower(strings.TrimSpace(cfg.LogTimeFormat))]
-		for _, lg := range []*logmon.Monitor{proxyLog, upstreamLog} {
-			lg.SetLogLevel(level)
-			lg.SetLogTimeFormat(timeFormat)
-		}
+		logs.SetLogLevel(level)
+		logs.SetLogTimeFormat(timeFormat)
 	}
 
 	applyLogSettings(cfg)
@@ -206,7 +210,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	initialSrv, err := server.New(cfg, muxLog, proxyLog, upstreamLog, perfMon, initialStore, buildInfo, hardwareSnapshot, referenceDocs)
+	initialSrv, err := server.New(cfg, logs, perfMon, initialStore, buildInfo, hardwareSnapshot, referenceDocs)
 	if err != nil {
 		slog.Error("failed to create server", "error", err)
 		_ = initialStore.Close()
@@ -279,7 +283,7 @@ func main() {
 			}
 		}
 
-		newSrv, err := server.New(newCfg, muxLog, proxyLog, upstreamLog, perfMon, newStore, buildInfo, hardwareSnapshot, referenceDocs)
+		newSrv, err := server.New(newCfg, logs, perfMon, newStore, buildInfo, hardwareSnapshot, referenceDocs)
 		if err != nil {
 			proxyLog.Warnf("failed to build new server during reload: %v", err)
 			if storeChanged {

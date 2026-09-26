@@ -23,19 +23,17 @@ func newTranslateServer(t *testing.T, cfg config.Config, local *stubRouter) *Ser
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	proxylog := logmon.NewWriter(io.Discard)
 	st, err := store.New("")
 	if err != nil {
 		t.Fatalf("store.New: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
+	logs := logmon.NewGroup(io.Discard, true, true, true)
 	s := &Server{
 		cfg:         cfg,
-		muxlog:      logmon.NewWriter(io.Discard),
-		proxylog:    proxylog,
-		upstreamlog: logmon.NewWriter(io.Discard),
+		logs:        logs,
 		inflight:    newInflightTracker(),
-		metrics:     newMetricsMonitor(proxylog, 0, 0, st),
+		metrics:     newMetricsMonitor(logs.ProxyLogs, 0, 0, st),
 		store:       st,
 		local:       local,
 		peer:        newStubRouter(nil, ""),

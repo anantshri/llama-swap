@@ -224,6 +224,21 @@ Long-form entries with full context live in
   drop-on-full publish lost the exact stat a test awaited (an upstream test
   race that surfaced here under parallel-suite timing) — and the new tests'
   wait deadlines carry load headroom.
+- Hand-merge batch 3:
+  - Logging rework (upstream #1172, commit `bbdb55d`): log data moves off
+    `/api/events` onto its own `GET /api/events/logs?stream=proxy&stream=…`
+    SSE endpoint, so a chatty model can no longer backpressure model-status
+    updates. `Server` carries a single `logmon.Group` (proxy/upstream/http
+    streams) instead of three monitors; `logs.toStdout` copies selected
+    streams to stdout; per-stream and per-model `/logs/stream/{id}` tails
+    are unchanged. The vanilla UI opens a second EventSource for the log
+    stream with the same envelope — logs page behavior is identical.
+    Restores the three `APILogEvents` tests trimmed during the #1215 port
+    (they arrived with this commit, as predicted), plus a fix for an
+    upstream race in the no-history test: monitor delivery is asynchronous
+    (Write → channel → publish goroutine), so a pre-subscription write
+    could arrive as a live event; the test now probe-drains the broadcast
+    before subscribing.
 - Hand-merge batch 2:
   - docker/unified: vllm-wrapper builds correctly on untagged commits via the
     new shared `lib-release.sh` revision resolver (upstream #1156, commit

@@ -29,6 +29,7 @@ export const versionInfo = observable({
 });
 
 let apiEventSource = null;
+let logEventSource = null;
 
 // Build metadata is static for the process lifetime; fetched once at boot so
 // the settings page and header tooltip can display it.
@@ -58,6 +59,8 @@ export function enableAPIEvents(enabled) {
   if (!enabled) {
     apiEventSource?.close();
     apiEventSource = null;
+    logEventSource?.close();
+    logEventSource = null;
     activityRevision.set(0);
     inFlightRequests.set(0);
     inflightRequestEntries.set([]);
@@ -77,8 +80,6 @@ export function enableAPIEvents(enabled) {
     connectionState.set("connecting");
 
     apiEventSource.onopen = () => {
-      proxyLogs.set("");
-      upstreamLogs.set("");
       models.set([]);
       playgroundModels.set([]);
       activityRevision.update((n) => n + 1);
@@ -106,6 +107,40 @@ export function enableAPIEvents(enabled) {
       connectionState.set("disconnected");
       setTimeout(connect, delay);
     };
+
+    connectLogs();
+  };
+
+  // Log data moved off /api/events onto its own stream so a chatty model
+  // cannot backpressure model-status updates (upstream #1172). The message
+  // envelope is unchanged, and the server replays each stream's history on
+  // connect.
+  let logRetryCount = 0;
+  const connectLogs = () => {
+    logEventSource?.close();
+    logEventSource = new EventSource("/api/events/logs?stream=proxy&stream=upstream");
+    logEventSource.onopen = () => {
+      proxyLogs.set("");
+      upstreamLogs.set("");
+      logRetryCount = 0;
+    };
+    logEventSource.onmessage = (e) => {
+      try {
+        const message = JSON.parse(e.data);
+        if (message.type !== "logData") return;
+        const logData = JSON.parse(message.data);
+        if (logData.source === "proxy") appendLog(logData.data, proxyLogs);
+        else if (logData.source === "upstream") appendLog(logData.data, upstreamLogs);
+      } catch (err) {
+        console.error(e.data, err);
+      }
+    };
+    logEventSource.onerror = () => {
+      logEventSource?.close();
+      logRetryCount++;
+      const delay = Math.min(initialDelay * Math.pow(2, logRetryCount - 1), 5000);
+      setTimeout(connectLogs, delay);
+    };
   };
 
   connect();
@@ -120,12 +155,6 @@ export function handleAPIEventMessage(data) {
         (a.name + a.id).localeCompare(b.name + b.id, undefined, { numeric: true })
       );
       models.set(newModels);
-      break;
-    }
-    case "logData": {
-      const logData = JSON.parse(message.data);
-      if (logData.source === "proxy") appendLog(logData.data, proxyLogs);
-      else if (logData.source === "upstream") appendLog(logData.data, upstreamLogs);
       break;
     }
     case "activity": {
