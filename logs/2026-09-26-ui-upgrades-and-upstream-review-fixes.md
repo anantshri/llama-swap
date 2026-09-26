@@ -1,5 +1,17 @@
 # 2026-09-26 — UI upgrades (models/search, capability pickers, stats split, log concerns) and upstream-review fixes (hw + perf)
 
+## Addendum: GPU/VRAM temp + power saw-tooth on dumbo
+
+Live `/api/performance` from dumbo showed `temp/vram_temp/fan/power` at 0
+in ~every other sample during generation while util/mem (fdinfo-sourced)
+stayed healthy. Root cause: hwmon passes fail entirely when the xe card is
+runtime-suspended mid-wake; the poller published raw zeros. Fix in
+`internal/perf/monitor_sysfs.go`: one 100ms retry per failed pass, 30s
+carry-forward of last-known values (power only while active), and
+`lastHwmonAt` advancing only on success. Tests:
+`TestSysfs_HwmonThrottledWhileActive` (reworked), `...HwmonFailureCarriesLastKnown`,
+`...TelemetryHoldExpiry`. Requires rebuild + redeploy on dumbo.
+
 ## Goal
 
 1. Models tab: collapse model descriptions (expandable) and add a search box.

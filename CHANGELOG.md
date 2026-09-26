@@ -87,6 +87,16 @@ Long-form entries with full context live in
 
 ### Fixed
 
+- perf sysfs GPU provider (Linux): GPU/VRAM temperature, fan and power
+  charts no longer saw-tooth to zero while a model is busy. On cards that
+  runtime-suspend between generation bursts (observed on Intel Arc B70 /
+  xe) an hwmon pass can fail entirely while the device wakes up, and the
+  poller published the zeroed sample as-is — the live feed alternated
+  `temp 70 / 0 / 70 / 0` mid-generation. Failed passes are now retried once
+  after 100ms (the first read kick-starts the resume), last-known values
+  are carried forward for up to 30s (power only while the card is busy),
+  and the throttle clock advances only on successful passes so failures
+  are retried next tick.
 - perf sysfs GPU provider (Linux): fdinfo records without `drm-pdev`
   (kernels before ~6.8) were counted on every discovered GPU — on multi-GPU
   hosts this inflated VRAM/utilisation and marked idle cards active (which

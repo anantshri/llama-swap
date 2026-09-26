@@ -7,6 +7,25 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ## 2026-09-26 — UI upgrades (models/search, capability pickers, stats split, log concerns) and upstream-review fixes (hw + perf)
 
+### Addendum (same day): GPU telemetry saw-tooth fix
+
+Live diagnosis on dumbo (`/api/performance`): while generating
+(util 94–98%), `temp_c`/`vram_temp_c`/`fan`/`power_draw_w` hit 0 in
+roughly every other 5s sample — e.g. `temp 70, power 261 → all 0 → temp
+70, power 260` — while `gpu_util_pct`/`mem_used_mb` stayed healthy. Root
+cause: the healthy numbers come from DRM fdinfo (`/proc`, never touches
+the device), while hwmon passes fail entirely when the xe card is
+runtime-suspended mid-wake; `poll()` published the zeroed sample as-is.
+Fix in `internal/perf/monitor_sysfs.go`: `readHwmon` returns success and
+retries once after 100ms (the first read kick-starts the resume),
+last-known values are carried forward for up to `telemetryHold` (30s,
+power only while active), and `lastHwmonAt` advances only on success so a
+failed pass is retried next tick. Tests: `TestSysfs_HwmonThrottledWhileActive`
+reworked to prove carried values vs re-read (sensor value changed under
+the throttle window), plus `TestSysfs_HwmonFailureCarriesLastKnown` and
+`TestSysfs_TelemetryHoldExpiry`. Deploying the fix requires rebuilding and
+restarting the binary on the affected host.
+
 ### Goal
 
 Four UI requests plus a review pass over two upstream PRs (#1158 hardware
