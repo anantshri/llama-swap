@@ -1,10 +1,14 @@
 // Stats page: per-model aggregated metrics served by the backend from
 // /api/metrics/stats. Aggregation happens in SQL over the entire activity
-// log, so no request-count limit applies.
+// log, so no request-count limit applies. Rows for models still present in
+// the running configuration are listed under "Active Models"; history for
+// models that have since been removed (or renamed) moves to "Inactive
+// Models" below.
 import { el, cleanupAll } from "../dom.js";
 import { compactNumbers, currencyPref, defaultRatesPref, inrPerUsdPref, showCost } from "../preferences.js";
 import { formatCompactNumber } from "../util/format.js";
 import { estimateCostUSD, formatCost, resolveRates } from "../util/pricing.js";
+import { models } from "../api.js";
 
 const nf = new Intl.NumberFormat();
 
@@ -33,6 +37,21 @@ function formatRelativeTime(timestamp) {
 }
 
 export function StatsPage() {
+  const theadHtml = `
+    <thead>
+      <tr>
+        <th class="stats-th stats-th-model stats-th-sortable" data-sort="model">Model<span class="stats-sort-ind"></span></th>
+        <th class="stats-th stats-th-num stats-th-sortable" data-sort="requests">Requests<span class="stats-sort-ind"></span></th>
+        <th class="stats-th stats-th-num stats-th-sortable" data-sort="inputTokens">Input Tokens<span class="stats-sort-ind"></span></th>
+        <th class="stats-th stats-th-num stats-th-sortable" data-sort="outputTokens">Output Tokens<span class="stats-sort-ind"></span></th>
+        <th class="stats-th stats-th-num stats-th-sortable" data-sort="cachedTokens">Cached Tokens<span class="stats-sort-ind"></span></th>
+        <th class="stats-th stats-th-num stats-th-sortable" data-sort="avgPromptSpeed">Avg Prompt Speed<span class="stats-sort-ind"></span></th>
+        <th class="stats-th stats-th-num stats-th-sortable" data-sort="avgGenSpeed">Avg Gen Speed<span class="stats-sort-ind"></span></th>
+        <th class="stats-th stats-th-num stats-th-sortable" data-sort="avgDuration">Avg Duration<span class="stats-sort-ind"></span></th>
+        <th class="stats-th stats-th-num stats-th-sortable" data-sort="lastTimestamp">Last Used<span class="stats-sort-ind"></span></th>
+      </tr>
+    </thead>`;
+
   const root = el(`
     <div class="page page-stats">
       <h2 class="stats-heading">Model Usage Stats</h2>
@@ -43,23 +62,22 @@ export function StatsPage() {
       <!-- Time range info -->
       <p class="stats-timespan" data-timespan></p>
 
-      <!-- Per-model table -->
-      <div class="card stats-table-wrap">
+      <!-- Models still in the configuration -->
+      <div class="card stats-table-wrap" data-active-wrap>
+        <h3 class="stats-table-title">Active Models<span class="muted stats-table-count" data-active-count></span></h3>
         <table class="stats-table">
-          <thead>
-            <tr>
-              <th class="stats-th stats-th-model stats-th-sortable" data-sort="model">Model<span class="stats-sort-ind"></span></th>
-              <th class="stats-th stats-th-num stats-th-sortable" data-sort="requests">Requests<span class="stats-sort-ind"></span></th>
-              <th class="stats-th stats-th-num stats-th-sortable" data-sort="inputTokens">Input Tokens<span class="stats-sort-ind"></span></th>
-              <th class="stats-th stats-th-num stats-th-sortable" data-sort="outputTokens">Output Tokens<span class="stats-sort-ind"></span></th>
-              <th class="stats-th stats-th-num stats-th-sortable" data-sort="cachedTokens">Cached Tokens<span class="stats-sort-ind"></span></th>
-              <th class="stats-th stats-th-num stats-th-sortable" data-sort="avgPromptSpeed">Avg Prompt Speed<span class="stats-sort-ind"></span></th>
-              <th class="stats-th stats-th-num stats-th-sortable" data-sort="avgGenSpeed">Avg Gen Speed<span class="stats-sort-ind"></span></th>
-              <th class="stats-th stats-th-num stats-th-sortable" data-sort="avgDuration">Avg Duration<span class="stats-sort-ind"></span></th>
-              <th class="stats-th stats-th-num stats-th-sortable" data-sort="lastTimestamp">Last Used<span class="stats-sort-ind"></span></th>
-            </tr>
-          </thead>
-          <tbody data-body></tbody>
+          ${theadHtml}
+          <tbody data-active-body></tbody>
+        </table>
+      </div>
+
+      <!-- Usage history for models no longer configured -->
+      <div class="card stats-table-wrap" data-inactive-wrap>
+        <h3 class="stats-table-title">Inactive Models<span class="muted stats-table-count" data-inactive-count></span></h3>
+        <p class="muted stats-table-hint">Usage history for models no longer in the configuration.</p>
+        <table class="stats-table">
+          ${theadHtml}
+          <tbody data-inactive-body></tbody>
         </table>
       </div>
     </div>
@@ -67,12 +85,21 @@ export function StatsPage() {
 
   const summaryEl = root.querySelector("[data-summary]");
   const timespanEl = root.querySelector("[data-timespan]");
-  const thead = root.querySelector("thead");
-  const body = root.querySelector("[data-body]");
+  const theads = [...root.querySelectorAll("thead")];
+  const activeWrap = root.querySelector("[data-active-wrap]");
+  const activeBody = root.querySelector("[data-active-body]");
+  const activeCountEl = root.querySelector("[data-active-count]");
+  const inactiveWrap = root.querySelector("[data-inactive-wrap]");
+  const inactiveBody = root.querySelector("[data-inactive-body]");
+  const inactiveCountEl = root.querySelector("[data-inactive-count]");
 
   let sortKey = "requests";
   let sortOrder = "desc";
+  let loaded = false;
   let stats = { totalRequests: 0, totalInput: 0, totalOutput: 0, totalCached: 0, firstTime: null, lastTime: null, models: [], pricing: null };
+  // Model ids (plus aliases) present in the running configuration. Empty
+  // when the listing is unavailable — then every row counts as active.
+  let activeIds = new Set();
 
   // Display currency and conversion rate: UI settings override the server
   // config snapshot that arrives with the stats payload.
@@ -123,6 +150,36 @@ export function StatsPage() {
       console.error("Failed to fetch stats:", err);
       return { totalRequests: 0, totalInput: 0, totalOutput: 0, totalCached: 0, firstTime: null, lastTime: null, models: [], pricing: null };
     }
+  }
+
+  /** Current model ids + aliases. The /v1/models listing is fetched once;
+   *  the live SSE store (which also covers unlisted models the listing
+   *  omits) is unioned in on every recompute. */
+  let listedIds = new Set();
+
+  function recomputeActiveIds() {
+    activeIds = new Set(listedIds);
+    for (const m of models.get()) {
+      activeIds.add(m.id);
+      for (const a of m.aliases ?? []) activeIds.add(a);
+    }
+  }
+
+  async function fetchActiveIds() {
+    try {
+      const resp = await fetch("/v1/models");
+      if (resp.ok) {
+        const body = await resp.json();
+        listedIds = new Set();
+        for (const m of body.data ?? []) {
+          listedIds.add(m.id);
+          for (const a of m.meta?.llamaswap?.aliases ?? []) listedIds.add(a);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch model list:", err);
+    }
+    recomputeActiveIds();
   }
 
   function renderSummary(stats) {
@@ -225,60 +282,78 @@ export function StatsPage() {
     });
   }
 
+  function rowHtml(s, cur, ratio, cost) {
+    const costCell = cost
+      ? `<td class="stats-td stats-td-num">${formatCost(modelCost(s), cur, ratio)}</td>`
+      : "";
+    return `<tr class="stats-tr">
+      <td class="stats-td stats-td-model">${escapeHtml(s.model)}</td>
+      <td class="stats-td stats-td-num"${countTitle(s.requests)}>${formatCount(s.requests)}</td>
+      <td class="stats-td stats-td-num"${countTitle(s.input_tokens)}>${formatCount(s.input_tokens)}</td>
+      <td class="stats-td stats-td-num"${countTitle(s.output_tokens)}>${formatCount(s.output_tokens)}</td>
+      <td class="stats-td stats-td-num"${countTitle(s.cached_tokens)}>${s.cached_tokens > 0 ? formatCount(s.cached_tokens) : "—"}</td>
+      <td class="stats-td stats-td-num">${formatSpeed(s.avg_prompt_speed)}</td>
+      <td class="stats-td stats-td-num">${formatSpeed(s.avg_gen_speed)}</td>
+      <td class="stats-td stats-td-num">${formatDuration(s.total_duration_ms, s.requests)}</td>
+      <td class="stats-td stats-td-num">${s.last_used ? formatRelativeTime(s.last_used) : "—"}</td>${costCell}
+    </tr>`;
+  }
+
   function renderTable(stats) {
     const cost = showCost.get();
     const cols = cost ? 10 : 9;
 
     if (stats.totalRequests === 0) {
-      body.innerHTML = `<tr><td class="stats-empty" colspan="${cols}">No activity recorded</td></tr>`;
+      activeBody.innerHTML = `<tr><td class="stats-empty" colspan="${cols}">No activity recorded</td></tr>`;
+      inactiveWrap.style.display = "none";
+      activeCountEl.textContent = "";
+      inactiveCountEl.textContent = "";
       renderHeader(cost);
       renderSortIndicator();
       return;
     }
 
-    const sorted = [...stats.models].sort(compareRows);
     const cur = effectiveCurrency();
     const ratio = effectiveInrPerUsd();
+    const sorted = [...stats.models].sort(compareRows);
+    const isActive = (s) => activeIds.size === 0 || activeIds.has(s.model);
+    const active = sorted.filter(isActive);
+    const inactive = sorted.filter((s) => !isActive(s));
 
-    body.innerHTML = sorted
-      .map((s) => {
-        const totalDuration = s.total_duration_ms;
-        const costCell = cost
-          ? `<td class="stats-td stats-td-num">${formatCost(modelCost(s), cur, ratio)}</td>`
-          : "";
+    activeBody.innerHTML = active.length
+      ? active.map((s) => rowHtml(s, cur, ratio, cost)).join("")
+      : `<tr><td class="stats-empty" colspan="${cols}">No activity recorded</td></tr>`;
+    activeCountEl.textContent = ` (${active.length})`;
 
-        return `<tr class="stats-tr">
-          <td class="stats-td stats-td-model">${escapeHtml(s.model)}</td>
-          <td class="stats-td stats-td-num"${countTitle(s.requests)}>${formatCount(s.requests)}</td>
-          <td class="stats-td stats-td-num"${countTitle(s.input_tokens)}>${formatCount(s.input_tokens)}</td>
-          <td class="stats-td stats-td-num"${countTitle(s.output_tokens)}>${formatCount(s.output_tokens)}</td>
-          <td class="stats-td stats-td-num"${countTitle(s.cached_tokens)}>${s.cached_tokens > 0 ? formatCount(s.cached_tokens) : "—"}</td>
-          <td class="stats-td stats-td-num">${formatSpeed(s.avg_prompt_speed)}</td>
-          <td class="stats-td stats-td-num">${formatSpeed(s.avg_gen_speed)}</td>
-          <td class="stats-td stats-td-num">${formatDuration(totalDuration, s.requests)}</td>
-          <td class="stats-td stats-td-num">${s.last_used ? formatRelativeTime(s.last_used) : "—"}</td>${costCell}
-        </tr>`;
-      })
-      .join("");
+    if (inactive.length) {
+      inactiveWrap.style.display = "";
+      inactiveBody.innerHTML = inactive.map((s) => rowHtml(s, cur, ratio, cost)).join("");
+      inactiveCountEl.textContent = ` (${inactive.length})`;
+    } else {
+      inactiveWrap.style.display = "none";
+      inactiveCountEl.textContent = "";
+    }
     renderHeader(cost);
     renderSortIndicator();
   }
 
   // renderHeader keeps the Est. Cost column in sync with the showCost
-  // preference without rebuilding the table element itself.
+  // preference in both tables without rebuilding the table elements.
   function renderHeader(cost) {
-    const existing = thead.querySelector('th[data-sort="cost"]');
-    if (cost && !existing) {
-      const th = document.createElement("th");
-      th.className = "stats-th stats-th-num stats-th-sortable";
-      th.dataset.sort = "cost";
-      th.innerHTML = `Est. Cost<span class="stats-sort-ind"></span>`;
-      thead.querySelector("tr").appendChild(th);
-    } else if (!cost && existing) {
-      existing.remove();
-      if (sortKey === "cost") {
-        sortKey = "requests";
-        sortOrder = "desc";
+    for (const thead of theads) {
+      const existing = thead.querySelector('th[data-sort="cost"]');
+      if (cost && !existing) {
+        const th = document.createElement("th");
+        th.className = "stats-th stats-th-num stats-th-sortable";
+        th.dataset.sort = "cost";
+        th.innerHTML = `Est. Cost<span class="stats-sort-ind"></span>`;
+        thead.querySelector("tr").appendChild(th);
+      } else if (!cost && existing) {
+        existing.remove();
+        if (sortKey === "cost") {
+          sortKey = "requests";
+          sortOrder = "desc";
+        }
       }
     }
   }
@@ -292,8 +367,9 @@ export function StatsPage() {
       .replace(/'/g, "&#39;");
   }
 
-  // Initial load
-  root.querySelector("thead").addEventListener("click", (e) => {
+  // Sorting works on both tables: either header row drives the shared sort
+  // state, so matching rows stay aligned across the two lists.
+  root.addEventListener("click", (e) => {
     const th = e.target.closest("th[data-sort]");
     if (!th) return;
     const key = th.dataset.sort;
@@ -309,12 +385,23 @@ export function StatsPage() {
   // Placeholder during load
   summaryEl.innerHTML = `<div class="stats-summary-empty">Loading...</div>`;
 
-  fetchStats().then((fetched) => {
+  Promise.all([fetchStats(), fetchActiveIds()]).then(([fetched]) => {
     stats = fetched;
+    loaded = true;
     renderSummary(stats);
     renderTimespan(stats.firstTime, stats.lastTime, stats.totalRequests, stats.models.length);
     renderTable(stats);
   });
+
+  // Re-render live when the configured model set changes (SSE modelStatus),
+  // so a model removed mid-session moves to Inactive without a reload. The
+  // /v1/models listing is not refetched — the SSE ids are merged into the
+  // cached set.
+  function refresh() {
+    if (!loaded) return;
+    recomputeActiveIds();
+    renderTable(stats);
+  }
 
   // Re-render live when display preferences change (edited on the Settings
   // page or toggled while this page is open in another tab).
@@ -327,6 +414,7 @@ export function StatsPage() {
       renderSummary(stats);
       renderTable(stats);
     }),
+    models.subscribe(refresh),
   ];
 
   return {

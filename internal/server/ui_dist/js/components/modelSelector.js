@@ -3,6 +3,11 @@
 // models + aliases + peer groups in a searchable dropdown: typing filters in
 // real time, keyboard navigates, and models matching the tab's `match`
 // predicate sort to the top. Hidden when no models are available.
+//
+// When a `match` predicate is given (image/audio/speech/rerank tabs), the
+// list shows only models that fit the tab by default — a text-generation
+// model is useless in the Images tab. A footer toggle reveals every model
+// for the rare cases the capability tags are wrong or missing.
 import { el, cleanupAll } from "../dom.js";
 import { models } from "../api.js";
 import { buildModelOptions, filterModelOptions } from "../util/modelUtils.js";
@@ -23,6 +28,9 @@ export function ModelSelector({ value, placeholder = "Select a model...", disabl
   let highlight = 0;
   let visible = [];
   let isUpdatingFromState = false;
+  // Tabs with capability needs start filtered to fitting models; the footer
+  // toggle flips this per picker instance.
+  let fitsOnly = !!match;
 
   const input = el(`<input class="pg-model-select pg-model-input" data-input type="text" autocomplete="off" spellcheck="false" />`);
   const panel = el(`<div class="pg-model-panel" data-panel style="display:none"></div>`);
@@ -30,6 +38,7 @@ export function ModelSelector({ value, placeholder = "Select a model...", disabl
 
   function computeVisible() {
     visible = filterModelOptions(buildModelOptions(models.get()), query, match);
+    if (fitsOnly && match) visible = visible.filter((o) => match(o.model, o.value));
     if (highlight >= visible.length) highlight = Math.max(0, visible.length - 1);
   }
 
@@ -72,7 +81,23 @@ export function ModelSelector({ value, placeholder = "Select a model...", disabl
           `</button>`
       );
     });
-    panel.innerHTML = parts.join("") || `<div class="pg-model-empty">No models match</div>`;
+    if (!parts.length) {
+      const total = buildModelOptions(models.get()).length;
+      parts.push(`<div class="pg-model-empty">${fitsOnly && total > 0 ? "No models fit this tab" : "No models match"}</div>`);
+    }
+    // Footer toggle between fitting models and the full list; only shown
+    // when it can change something.
+    if (match) {
+      const total = buildModelOptions(models.get()).length;
+      const fits = buildModelOptions(models.get()).filter((o) => match(o.model, o.value)).length;
+      if (fitsOnly ? fits < total : true) {
+        parts.push(
+          `<button type="button" class="pg-model-all" data-cap-toggle>` +
+            `${fitsOnly ? `Show all models (${total - fits} hidden)` : "Show fitting models only"}</button>`
+        );
+      }
+    }
+    panel.innerHTML = parts.join("");
   }
 
   function render() {
@@ -132,6 +157,13 @@ export function ModelSelector({ value, placeholder = "Select a model...", disabl
     e.preventDefault();
     const option = visible[Number(btn.getAttribute("data-i"))];
     if (option) select(option);
+  });
+  panel.addEventListener("click", (e) => {
+    const t = e.target.closest("[data-cap-toggle]");
+    if (!t) return;
+    fitsOnly = !fitsOnly;
+    highlight = 0;
+    renderPanel();
   });
   document.addEventListener("pointerdown", (e) => {
     if (open && !root.contains(e.target)) setOpen(false);

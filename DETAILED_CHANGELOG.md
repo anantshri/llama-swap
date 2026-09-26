@@ -5,6 +5,104 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-26 — UI upgrades (models/search, capability pickers, stats split, log concerns) and upstream-review fixes (hw + perf)
+
+### Goal
+
+Four UI requests plus a review pass over two upstream PRs (#1158 hardware
+detection, #1159 sysfs GPU stats) that carry this fork's code: apply
+everything the bot reviewers found that is real in our tree.
+
+### UI changes (all in `internal/server/ui_dist/`, hand-authored)
+
+- **Models dashboard** (`js/components/modelsPanel.js`, `css/app.css`):
+  descriptions render collapsed (single line, ellipsis) behind a chevron
+  button; expanded state lives in a per-panel `Set` so the SSE-driven
+  re-renders (one per modelStatus event) don't collapse it again. A filter
+  box under the header matches id/name/alias/description case-insensitively;
+  peer groups whose name matches show all their models; Profiles/Selectors
+  cards hide while filtering; empty state names the query.
+- **Playground pickers** (`js/components/modelSelector.js`): tabs that pass
+  a capability `match` (image/audio/speech/rerank) now start with
+  `fitsOnly = true` — the dropdown lists only capable models, with a footer
+  toggle "Show all models (N hidden)" / "Show fitting models only". Empty
+  state says "No models fit this tab" when appropriate.
+- **Stats page** (`js/pages/stats.js`): two tables — Active Models (ids from
+  `/v1/models` incl. `meta.llamaswap.aliases`, unioned with the SSE models
+  store so unlisted models count) and Inactive Models (usage history for
+  removed/renamed models). Shared sort state across both headers; inactive
+  table hides when empty; SSE modelStatus triggers a local recompute (the
+  `/v1/models` listing is fetched once, guarded by a `loaded` flag so the
+  subscribe-time immediate fire doesn't race the boot render).
+- **Log panels** (`js/components/logPanel.js`): persistent `concerns` toggle
+  filtering lines via a combined regex — bracketed levels, severity words,
+  and `" 4xx "/" 5xx "` access-log statuses; composes with the text regex.
+
+### Review-driven fixes from upstream PRs #1158 / #1159
+
+Both PRs contain code that already lives in this fork; the Greptile/CodeRaby
+findings were verified line-by-line against our copies and the real ones
+fixed:
+
+- `internal/perf/monitor_sysfs.go` — (P1) fdinfo records without
+  `drm-pdev` matched every GPU: now attributed via the render node's sysfs
+  device link (cached per node), and skipped on multi-GPU hosts
+  (`ambiguous` flag set by discovery) when unresolvable. (P1) duplicated
+  fds sharing a `drm-client-id` double-counted VRAM: count once per client
+  per poll. (P2) tests renamed to `TestSysfs_<case>`.
+- `internal/hw/intel_linux.go` — detail response with empty BDF no longer
+  errors before the listing-BDF fallback; integrated GPUs keep
+  `CapacityBytes` nil (borrowed system RAM was published as VRAM); generic
+  `Intel(R) Graphics [0x…]` names yield to the PCI-table model.
+- `internal/hw/intel.go` — Battlemage G21 gains `0xE215` (per
+  intel/compute-runtime). The reviewer's claim that `0xE209` maps to
+  "Arc B580" was NOT applied: sources conflict and the table's documented
+  policy is unambiguous models only.
+- `internal/hw/intel_linux_test.go` — `TestHardware_IntelXPUSMIAbsent` now
+  pins `PATH` to an empty temp dir instead of assuming the host lacks
+  xpu-smi; dead `xpusmiListing` const removed (staticcheck U1000).
+- `internal/perf/monitor_unix.go` — removed the dead `readSysfs` stub
+  (superseded by `trySysfs` in monitor_sysfs.go).
+
+### Verification environment
+
+No browser existed in the container; `pip install --break-system-packages
+playwright` + `python3 -m playwright install chromium` + the needed apt
+packages (`libglib2.0-0t64 libnss3 … libxkbcommon0 libasound2t64
+fontconfig fonts-liberation` — skia FATAL-crashes without fontconfig)
+gave a working headless Chromium. The selftest runs against a real server
+(`go build -o build/llama-swap . && setsid nohup build/llama-swap …`) since
+`/ui/...` module paths are absolute; `setsid` is required — plain `&`
+background jobs get reaped when the tool shell command exits.
+
+### Verification
+
+```
+__selftest.html (headless Chromium)   # 146/146 — +11: models panel ×7,
+                                      # picker capability ×2, log concerns ×1,
+                                      # stats split ×1
+go test ./internal/perf/ ./internal/hw/ -count=1   # ok (3 new perf tests:
+                                                   # dup-client VRAM, pdev-less
+                                                   # via sysfs, multi-GPU skip)
+make test-dev                         # all packages ok; staticcheck clean in
+                                      # touched files (remaining U1000s are
+                                      # pre-existing in d3dkmt/apple, untouched)
+make gosec                            # 0 issues
+aidc-scan                             # semgrep + gitleaks + gosec clean
+go test -cover                        # perf 61.9%, hw 67.3%
+```
+
+### Notes
+
+- The review comments should also be answered upstream: #1159's two P1s are
+  real and fixed here; #1158's findings are fixed except the `0xE209`
+  model-name claim (intentionally skipped, see above).
+- The stats "active" set treats a model as active only if `/v1/models` or
+  the SSE store knows it; if BOTH are unavailable the page falls back to the
+  old single-table behaviour (everything active) rather than hiding rows.
+
+---
+
 ## 2026-09-25 — Parts view: collapse/expand controls and pretty-printed tool payloads
 
 ### Goal
@@ -110,6 +208,9 @@ timings_per_token, top_k/top_p/min_p; no page errors
   docker images).
 
 ---
+
+
+
 
 ## 2026-09-25 — UI ports: searchable model picker (#1153) and stable Work header (#1101)
 

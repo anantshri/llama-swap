@@ -49,6 +49,12 @@
       import {
         buildModelOptions, filterModelOptions,
       } from "/ui/js/util/modelUtils.js";
+      import { ModelsPanel } from "/ui/js/components/modelsPanel.js";
+      import { ModelSelector } from "/ui/js/components/modelSelector.js";
+      import { LogPanel } from "/ui/js/components/logPanel.js";
+      import { StatsPage } from "/ui/js/pages/stats.js";
+      import { observable } from "/ui/js/store.js";
+      import { models as modelsStore } from "/ui/js/api.js";
 
       // ---- tiny test harness ----
       const groups = [];
@@ -64,6 +70,7 @@
           toBe: (e) => { if (actual !== e) fail(`expected ${JSON.stringify(actual)} === ${JSON.stringify(e)}`); },
           toEqual: (e) => { if (JSON.stringify(actual) !== JSON.stringify(e)) fail(`expected ${JSON.stringify(actual)} deep-eq ${JSON.stringify(e)}`); },
           toContain: (e) => { if (!String(actual).includes(e)) fail(`expected output to contain ${JSON.stringify(e)}`); },
+          notToContain: (e) => { if (String(actual).includes(e)) fail(`expected output not to contain ${JSON.stringify(e)}`); },
           toMatch: (re) => { if (!re.test(String(actual))) fail(`expected ${JSON.stringify(actual)} to match ${re}`); },
           toBeNull: () => { if (actual !== null) fail(`expected null, got ${JSON.stringify(actual)}`); },
           toBeTruthy: () => { if (!actual) fail(`expected truthy, got ${JSON.stringify(actual)}`); },
@@ -497,6 +504,160 @@
       }
 
       async function runAsync() {
+        group("models panel — collapsed descriptions + search");
+        modelsStore.set([
+          { id: "qwen3", name: "Qwen 3", description: "A large model\nsecond line", state: "stopped", unlisted: false, peerID: "", aliases: ["qw"] },
+          { id: "whisper", name: "Whisper", description: "", state: "ready", unlisted: false, peerID: "", aliases: [] },
+          { id: "peer-x/m8", name: "", description: "", state: "stopped", unlisted: false, peerID: "peer-x", aliases: [] },
+        ]);
+        const panel = ModelsPanel();
+        document.body.appendChild(panel.el);
+        const rows = () => panel.el.querySelectorAll("tbody .models-row").length;
+        const descP = () => panel.el.querySelector(".model-desc");
+        await atest("description renders collapsed by default", () => {
+          expect(panel.el.querySelectorAll(".model-desc").length).toBe(1);
+          expect(descP().classList.contains("model-desc--open")).toBe(false);
+          expect(descP().querySelector(".model-desc-toggle").getAttribute("aria-expanded")).toBe("false");
+        });
+        await atest("chevron click expands in place", () => {
+          descP().querySelector(".model-desc-toggle").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+          expect(descP().classList.contains("model-desc--open")).toBe(true);
+          expect(descP().querySelector(".model-desc-toggle").getAttribute("aria-expanded")).toBe("true");
+        });
+        await atest("expansion survives a modelStatus re-render", () => {
+          modelsStore.set(modelsStore.get().slice());
+          expect(descP().classList.contains("model-desc--open")).toBe(true);
+        });
+        await atest("search box filters by id", () => {
+          const input = panel.el.querySelector("[data-search]");
+          input.value = "whis";
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          expect(rows()).toBe(1);
+          expect(panel.el.querySelector(".models-link").textContent).toBe("whisper");
+        });
+        await atest("search box matches alias and description text", () => {
+          const input = panel.el.querySelector("[data-search]");
+          input.value = "qw";
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          expect(panel.el.querySelector(".models-link").textContent).toBe("qwen3");
+          input.value = "second line";
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          expect(panel.el.querySelector(".models-link").textContent).toBe("qwen3");
+        });
+        await atest("no match shows empty message with query", () => {
+          const input = panel.el.querySelector("[data-search]");
+          input.value = "zzz";
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          expect(panel.el.querySelector(".models-empty").textContent).toContain("No models match");
+          expect(panel.el.querySelector(".models-empty").textContent).toContain("zzz");
+        });
+        await atest("clearing search restores full list", () => {
+          const input = panel.el.querySelector("[data-search]");
+          input.value = "";
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          expect(rows()).toBe(2);
+          expect(panel.el.querySelector(".peer-group")).toBeTruthy();
+        });
+        modelsStore.set([]);
+        panel.destroy();
+        panel.el.remove();
+
+        group("model picker — capability default");
+        modelsStore.set([
+          { id: "qwen3", name: "Qwen 3", state: "stopped", unlisted: false, peerID: "", aliases: [], capabilities: {}, architecture: { input_modalities: ["text"], output_modalities: ["text"] } },
+          { id: "flux", name: "Flux", state: "stopped", unlisted: false, peerID: "", aliases: [], capabilities: { image_generation: true }, architecture: { input_modalities: ["text"], output_modalities: ["image"] } },
+          { id: "sdxl", name: "SDXL", state: "stopped", unlisted: false, peerID: "", aliases: [], capabilities: { image_to_image: true }, architecture: {} },
+        ]);
+        {
+          const value = observable("flux");
+          const imageMatch = (m) => (m.architecture?.output_modalities ?? []).includes("image") || !!(m.capabilities?.image_generation ?? m.capabilities?.image_to_image);
+          const picker = ModelSelector({ value, placeholder: "Select an image model...", match: imageMatch });
+          document.body.appendChild(picker.el);
+          const input = picker.el.querySelector("[data-input]");
+          input.dispatchEvent(new Event("focus"));
+          const optionValues = () => [...picker.el.querySelectorAll("[data-i] .pg-model-option-value")].map((s) => s.textContent);
+          await atest("image tab lists only image-capable models by default", () => {
+            expect(optionValues()).toEqual(["flux", "sdxl"]);
+            expect(picker.el.querySelector("[data-cap-toggle]").textContent).toContain("1 hidden");
+          });
+          await atest("footer toggle reveals every model", () => {
+            picker.el.querySelector("[data-cap-toggle]").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+            expect(optionValues()).toEqual(["flux", "sdxl", "qwen3"]);
+            expect(picker.el.querySelector("[data-cap-toggle]").textContent).toContain("fitting");
+          });
+          picker.destroy();
+          picker.el.remove();
+        }
+        modelsStore.set([]);
+
+        group("log panel — concerns filter");
+        {
+          const logs = observable(
+            "2026/01/01 00:00:00 [INFO] server started\n" +
+            "127.0.0.1 \"POST /v1/chat/completions HTTP/1.1\" 200 12 \"ua\" 1ms\n" +
+            "2026/01/01 00:01:00 [WARN] model slow\n" +
+            "2026/01/01 00:02:00 [ERROR] upstream failed\n" +
+            "127.0.0.1 \"POST /v1/models HTTP/1.1\" 500 3 \"ua\" 1ms\n"
+          );
+          const panel = LogPanel({ id: "selftest-concerns-" + Date.now(), title: "T", logData: logs });
+          document.body.appendChild(panel.el);
+          const bodyText = () => panel.el.querySelector(".logpanel-pre").textContent;
+          await atest("concerns toggle keeps only warning/error lines", () => {
+            expect(bodyText()).toContain("[INFO] server started");
+            panel.el.querySelector('[data-act="concerns"]').dispatchEvent(new MouseEvent("click", { bubbles: true }));
+            expect(bodyText()).notToContain("[INFO] server started");
+            expect(bodyText()).toContain("[WARN] model slow");
+            expect(bodyText()).toContain("[ERROR] upstream failed");
+            expect(bodyText()).toContain('" 500 '); // 5xx access-log lines count as concerns
+            expect(bodyText()).notToContain('" 200 ');
+          });
+          panel.destroy();
+          panel.el.remove();
+        }
+
+        group("stats page — active/inactive split");
+        {
+          const realFetch = window.fetch;
+          window.fetch = function (url) {
+            if (String(url).includes("/api/metrics/stats")) {
+              return Promise.resolve(new Response(JSON.stringify({
+                total_requests: 15, total_input_tokens: 1, total_output_tokens: 2, total_cache_tokens: 0,
+                first_timestamp: "2026-01-01T00:00:00Z", last_timestamp: "2026-01-01T01:00:00Z",
+                models: [
+                  { model: "qwen3", requests: 10, input_tokens: 1, output_tokens: 1, cached_tokens: 0 },
+                  { model: "removed-model", requests: 5, input_tokens: 0, output_tokens: 1, cached_tokens: 0 },
+                ],
+              }), { status: 200 }));
+            }
+            if (String(url).includes("/v1/models")) {
+              return Promise.resolve(new Response(JSON.stringify({
+                data: [{ id: "qwen3", meta: { llamaswap: { aliases: ["qw"] } } }],
+              }), { status: 200 }));
+            }
+            return realFetch.apply(this, arguments);
+          };
+          const page = StatsPage();
+          document.body.appendChild(page.el);
+          const settle = async () => {
+            for (let i = 0; i < 50 && !page.el.querySelector("[data-active-body] .stats-tr"); i++) {
+              await new Promise((r) => setTimeout(r, 20));
+            }
+          };
+          await settle();
+          await atest("configured models land in Active, removed ones in Inactive", () => {
+            const activeModels = [...page.el.querySelectorAll("[data-active-body] .stats-td-model")].map((td) => td.textContent);
+            const inactiveModels = [...page.el.querySelectorAll("[data-inactive-body] .stats-td-model")].map((td) => td.textContent);
+            expect(activeModels).toEqual(["qwen3"]);
+            expect(inactiveModels).toEqual(["removed-model"]);
+            expect(page.el.querySelector("[data-active-count]").textContent).toContain("(1)");
+            expect(page.el.querySelector("[data-inactive-count]").textContent).toContain("(1)");
+            expect(page.el.querySelector("[data-inactive-wrap]").style.display).toBe("");
+          });
+          page.destroy();
+          page.el.remove();
+          window.fetch = realFetch;
+        }
+
         group("chat SSE — OpenAI chat/completions");
         await atest("basic content + reasoning + done", async () => expect(await collect("v1/chat/completions", [
           'data: {"choices":[{"delta":{"content":"Hel"}}]}\n',

@@ -12,6 +12,28 @@ Long-form entries with full context live in
 
 ### Added
 
+- Models dashboard: model descriptions now start collapsed to a single line
+  with an expandable chevron (expanded state survives the frequent SSE
+  re-renders), and a filter box matches model id, name, alias, and
+  description text — including peer models; a matching peer group name shows
+  the whole group. While filtering, the Profiles/Selectors cards yield the
+  screen to the matches and a no-match empty state names the query.
+- Playground model pickers on capability-bound tabs (Images, Audio, Speech,
+  Rerank) now list only models that fit the tab by default — a
+  text-generation model no longer clutters the Images tab. A footer toggle
+  shows the full list (with the hidden count) and flips back; tabs without a
+  capability constraint (Chat, Docs) are unchanged.
+- Stats page: usage is now split into two tables — **Active Models** (still
+  present in the running configuration, matched via `/v1/models` plus the
+  live SSE store including aliases) and **Inactive Models** (usage history
+  for models removed or renamed since). Both share sort state; a model
+  removed mid-session moves to Inactive without a reload.
+- Logs page: each log panel gained a persistent "concerns" filter (warning
+  triangle button) that keeps only lines worth escalating — `[WARN]`/
+  `[ERROR]`/`[FATAL]`/`[PANIC]` level tokens, severity words in upstream
+  output (warn/error/fatal/panic/crash/critical/failed/exception/traceback/
+  SIGSEGV/SIGABRT/SIGTERM), and 4xx/5xx access-log statuses. Composes with
+  the existing regex filter.
 - Activity captures: the capture dialog's Request Body gained a **Parts** view
   that splits a JSON request into separately readable pieces — top-level
   `system`/`instructions`, every `messages[]` entry by role (including bare
@@ -59,9 +81,27 @@ Long-form entries with full context live in
   `/api/metrics/stats`; the Stats page shows an "Est. Cost" summary tile and a
   sortable per-model column. Cached tokens are deducted from billable input
   and charged at their own rate (the input rate when unset). The UI's Settings
-  page adds per-browser overrides (cost on/off, currency, INR rate, default
-  rates) plus a "Compact large numbers" toggle that compresses Stats-page
-  token/request counts to M/B/T suffixes with exact values on hover.
+   page adds per-browser overrides (cost on/off, currency, INR rate, default
+   rates) plus a "Compact large numbers" toggle that compresses Stats-page
+   token/request counts to M/B/T suffixes with exact values on hover.
+
+### Fixed
+
+- perf sysfs GPU provider (Linux): fdinfo records without `drm-pdev`
+  (kernels before ~6.8) were counted on every discovered GPU — on multi-GPU
+  hosts this inflated VRAM/utilisation and marked idle cards active (which
+  then woke them for hwmon reads). Records are now attributed through the
+  render node's sysfs device link, and unattributable records are skipped
+  when more than one GPU is present. Duplicated or fork-inherited DRM fds
+  sharing one `drm-client-id` no longer double-count VRAM. Test suite moved
+  to the repo's `TestSysfs_<case>` naming convention.
+- hw Intel detection: an xpu-smi detail response with an empty BDF no longer
+  discards the device before the listing's BDF fallback can apply;
+  integrated GPUs no longer publish borrowed system RAM as memory capacity;
+  a generic `Intel(R) Graphics [0x…]` device name is replaced by the mapped
+  marketing name from the PCI table (e.g. Arc Pro B60); Battlemage table
+  gains device ID `0xE215`; the absent-tool test no longer depends on the
+  host's installed binaries.
 
 ### Added (selective upstream-PR ports)
 
