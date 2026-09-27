@@ -35,7 +35,7 @@ fi
 
 if available llama-swap; then
     status "Removing llama-swap binary..."
-    $SUDO rm $(which llama-swap)
+    $SUDO rm "$(command -v llama-swap)"
 fi
 
 if [ -f "/usr/share/llama-swap/config.yaml" ]; then

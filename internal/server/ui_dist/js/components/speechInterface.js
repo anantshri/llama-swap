@@ -55,7 +55,7 @@ export function SpeechInterface() {
   const stageEl = root.querySelector("[data-stage]");
   const inputEl = root.querySelector("[data-input]");
 
-  const modelSel = ModelSelector({ value: selectedModel, placeholder: "Select a speech model..." });
+  const modelSel = ModelSelector({ value: selectedModel, placeholder: "Select a speech model...", match: (m) => !!m.capabilities?.audio_speech || (m.architecture?.output_modalities ?? []).includes("audio") });
   toolbar.appendChild(modelSel.el);
 
   const voiceWrap = el(`<div class="pg-speech-voice-wrap"></div>`);

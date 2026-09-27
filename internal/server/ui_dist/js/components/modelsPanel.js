@@ -33,6 +33,10 @@ export function ModelsPanel() {
   const showCapTags = persistent("showCapabilityTags", true);
   let isUnloading = false;
   let menuOpen = false;
+  let searchQuery = "";
+  // Model ids whose description is expanded; the list re-renders on every
+  // modelStatus SSE event, so expanded state lives outside the DOM.
+  const expandedDescriptions = new Set();
 
   const root = el(`
     <div class="card models-panel">
@@ -41,6 +45,8 @@ export function ModelsPanel() {
           <h2 class="models-title">Models</h2>
           <div class="models-actions" data-actions></div>
         </div>
+        <input class="models-search" data-search type="search" placeholder="Filter by id, name, alias, or description…"
+          autocomplete="off" spellcheck="false" aria-label="Filter models" />
       </div>
       <div class="models-body" data-list></div>
     </div>
@@ -48,6 +54,7 @@ export function ModelsPanel() {
 
   const actionsEl = root.querySelector("[data-actions]");
   const listEl = root.querySelector("[data-list]");
+  const searchEl = root.querySelector("[data-search]");
 
   function getDisplay(m) {
     return showIdOrName.get() === "id" ? m.id : m.name || m.id;
@@ -77,8 +84,19 @@ export function ModelsPanel() {
 
   function filtered() {
     const all = mergedModels();
-    const filteredAll = all.filter((m) => showUnlisted.get() || !m.unlisted);
-    const peers = filteredAll.filter((m) => m.peerID);
+    const q = searchQuery.trim().toLowerCase();
+    const matches = (m) =>
+      !q ||
+      m.id.toLowerCase().includes(q) ||
+      (m.name && m.name.toLowerCase().includes(q)) ||
+      (m.description && m.description.toLowerCase().includes(q)) ||
+      (m.aliases ?? []).some((a) => a.toLowerCase().includes(q));
+    const visibleAll = all.filter((m) => showUnlisted.get() || !m.unlisted);
+    const filteredAll = visibleAll.filter(matches);
+    // A peer group whose name matches shows all of its models.
+    const peers = visibleAll
+      .filter((m) => m.peerID)
+      .filter((m) => matches(m) || m.peerID.toLowerCase().includes(q));
     const grouped = peers.reduce((acc, m) => {
       const k = m.peerID || "unknown";
       (acc[k] = acc[k] || []).push(m);
@@ -93,12 +111,24 @@ export function ModelsPanel() {
     return {
       regularModels,
       peerModelsByPeerId: grouped,
+      query: q,
     };
   }
 
   function rowHtml(m) {
     const display = escapeHtml(getDisplay(m));
-    const desc = m.description ? `<p class="model-desc"><em>${escapeHtml(m.description)}</em></p>` : "";
+    // Descriptions start collapsed (single line with ellipsis); the chevron
+    // expands to the full pre-formatted text.
+    const descOpen = expandedDescriptions.has(m.id);
+    const desc = m.description
+      ? `<p class="model-desc${descOpen ? " model-desc--open" : ""}" title="${descOpen ? "Click the arrow to collapse" : "Click to show the full description"}">
+          <button type="button" class="model-desc-toggle" data-desc-toggle="${escapeHtml(m.id)}"
+            aria-expanded="${descOpen}" title="Toggle description">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="icon-3"><path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5"/></svg>
+          </button>
+          <em class="model-desc-text">${escapeHtml(m.description)}</em>
+        </p>`
+      : "";
     const aliases =
       m.aliases && m.aliases.length
         ? `<p class="model-aliases">Aliases: ${escapeHtml(m.aliases.join(", "))}</p>`
@@ -147,17 +177,30 @@ export function ModelsPanel() {
     } else if (mappings.length === 0) {
       bodyHtml = `<div class="models-empty muted">No mappings</div>`;
     } else {
+      // Resolve each target against the model list so the row can show the
+      // live status dot, link to the model's detail page, and offer
+      // load/unload controls for local targets (upstream #1170).
+      const all = models.get();
+      const resolveTarget = (target) =>
+        all.find((m) => m.id === target) ?? all.find((m) => (m.aliases ?? []).includes(target));
+      const targetHtml = (target) => {
+        const m = resolveTarget(target);
+        if (!m) return `<span class="profile-mapping-target">${escapeHtml(target)}</span>`;
+        const link = `<a class="profile-mapping-target profile-mapping-link" href="#/models/${encodeURIComponent(m.id)}">${escapeHtml(target)}</a>`;
+        if (m.peerID) return link;
+        const action =
+          m.state === "stopped"
+            ? `<button class="btn btn--sm" data-load="${escapeHtml(m.id)}">Load</button>`
+            : `<button class="btn btn--sm" data-unload="${escapeHtml(m.id)}" ${m.state !== "ready" ? "disabled" : ""}>Unload</button>`;
+        return `<span class="${statusDotClass(m)}" title="${escapeHtml(m.state)}"></span>${link}${action}`;
+      };
       bodyHtml = `<div class="profile-mappings">${mappings
         .map(
           ([modelID, target]) => `
           <div class="profile-mapping">
             <span class="profile-mapping-model">${escapeHtml(modelID)}</span>
             <span class="profile-mapping-arrow" aria-hidden="true">→</span>
-            ${
-              target
-                ? `<span class="profile-mapping-target">${escapeHtml(target)}</span>`
-                : `<span class="model-tag model-tag--unlisted">disabled</span>`
-            }
+            ${target ? targetHtml(target) : `<span class="model-tag model-tag--unlisted">disabled</span>`}
           </div>`
         )
         .join("")}</div>`;
@@ -240,12 +283,16 @@ export function ModelsPanel() {
       : "";
 
     if (!regularHtml && !peerHtml) {
-      listEl.innerHTML = `<div class="models-empty muted">No models configured.</div>`;
+      listEl.innerHTML = f.query
+        ? `<div class="models-empty muted">No models match &ldquo;${escapeHtml(f.query)}&rdquo;.</div>`
+        : `<div class="models-empty muted">No models configured.</div>`;
       return;
     }
+    // While filtering, show only the matches — the profiles/selectors cards
+    // are noise when hunting for a specific model.
+    const cardsHtml = f.query ? "" : `${profilesCardHtml()}${selectorsCardHtml()}`;
     listEl.innerHTML = `
-      ${profilesCardHtml()}
-      ${selectorsCardHtml()}
+      ${cardsHtml}
       <table class="models-table">
         <thead class="models-thead">
           <tr>
@@ -337,8 +384,25 @@ export function ModelsPanel() {
     }
   });
 
-  // Delegated handlers on list (load/unload per row; profile switch)
+  // Delegated handlers on list (desc expand, load/unload per row; profile switch)
   listEl.addEventListener("click", (e) => {
+    // Clicking anywhere on a collapsed description expands it; an expanded
+    // one collapses only via its chevron, so text stays selectable.
+    const descArea = e.target.closest(".model-desc");
+    if (descArea) {
+      const btn = descArea.querySelector("[data-desc-toggle]");
+      const clickedBtn = e.target.closest("[data-desc-toggle]");
+      if (descArea.classList.contains("model-desc--open") && !clickedBtn) return;
+      // Toggle in place (no re-render) and remember the choice across the
+      // re-renders triggered by modelStatus SSE events.
+      const id = btn.getAttribute("data-desc-toggle");
+      const open = !expandedDescriptions.has(id);
+      if (open) expandedDescriptions.add(id);
+      else expandedDescriptions.delete(id);
+      descArea.classList.toggle("model-desc--open", open);
+      btn.setAttribute("aria-expanded", String(open));
+      return;
+    }
     const loadBtn = e.target.closest("[data-load]");
     const unloadBtn = e.target.closest("[data-unload]");
     if (loadBtn) {
@@ -359,6 +423,13 @@ export function ModelsPanel() {
     } catch (err) {
       console.error(err);
     }
+  });
+
+  // The search input lives in the header (outside the re-rendered list), so
+  // its value survives modelStatus SSE re-renders.
+  searchEl.addEventListener("input", () => {
+    searchQuery = searchEl.value;
+    renderList();
   });
 
   const subs = [

@@ -49,7 +49,18 @@ function buildChatCompletionsBody(model, messages, options) {
     model,
     messages: mapped,
     stream: true,
+    // Asks for a final chunk carrying token usage so the playground can show
+    // per-turn stats. Standard OpenAI; backends that predate it ignore it.
+    stream_options: { include_usage: true },
+    // llama.cpp extension: repeat the `timings` block on every chunk. Without
+    // it the exact numbers only arrive in the final chunk, which a cancelled
+    // stream never delivers.
+    timings_per_token: true,
     temperature: options?.temperature,
+    // Sampling hyper params; undefined keys are dropped by JSON.stringify.
+    top_k: options?.top_k,
+    top_p: options?.top_p,
+    min_p: options?.min_p,
     ...(options?.max_tokens ? { max_tokens: options.max_tokens } : {}),
     // Tools are only supported on the chat-completions endpoint.
     ...(options?.tools?.length
@@ -90,6 +101,9 @@ function buildMessagesBody(model, messages, options) {
     messages: mapped,
     stream: true,
     max_tokens: options?.max_tokens ?? 4096,
+    // Anthropic understands top_p/top_k; min_p is not part of that API.
+    top_p: options?.top_p,
+    top_k: options?.top_k,
   };
   if (system) body.system = system;
   if (options?.temperature !== undefined) body.temperature = options.temperature;
@@ -117,6 +131,8 @@ function buildResponsesBody(model, messages, options) {
     model,
     input,
     stream: true,
+    // The responses API has top_p only.
+    top_p: options?.top_p,
   };
   if (system) body.instructions = system;
   if (options?.temperature !== undefined) body.temperature = options.temperature;
@@ -141,6 +157,52 @@ function buildRequest(endpoint, model, messages, options) {
   }
 }
 
+function asNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+// Reads a usage object in either the OpenAI (`prompt_tokens`) or Anthropic
+// (`input_tokens`) spelling, with the cached-token count from whichever of
+// the places the endpoints put it. Returns undefined when neither token count
+// is present.
+export function normalizeUsage(usage) {
+  if (!usage || typeof usage !== "object") return undefined;
+  const out = {};
+  const prompt = asNumber(usage.prompt_tokens) ?? asNumber(usage.input_tokens);
+  const completion = asNumber(usage.completion_tokens) ?? asNumber(usage.output_tokens);
+  if (prompt !== undefined) out.prompt_tokens = prompt;
+  if (completion !== undefined) out.completion_tokens = completion;
+  if (prompt === undefined && completion === undefined) return undefined;
+  const cached =
+    asNumber(usage.prompt_tokens_details?.cached_tokens) ??
+    asNumber(usage.input_tokens_details?.cached_tokens) ??
+    asNumber(usage.cache_read_input_tokens);
+  if (cached !== undefined) out.cached_tokens = cached;
+  return out;
+}
+
+// Reads llama.cpp's `timings` object. Its `prompt_n` counts only the tokens
+// actually processed, so the whole prompt is that plus `cache_n`.
+export function normalizeTimings(timings) {
+  if (!timings || typeof timings !== "object") return undefined;
+  const out = {};
+  const promptN = asNumber(timings.prompt_n);
+  const cacheN = asNumber(timings.cache_n);
+  const predictedN = asNumber(timings.predicted_n);
+  const promptMs = asNumber(timings.prompt_ms);
+  const predictedMs = asNumber(timings.predicted_ms);
+  const draftN = asNumber(timings.draft_n);
+  const draftAccepted = asNumber(timings.draft_n_accepted);
+  if (promptN !== undefined) out.prompt_tokens = promptN + (cacheN ?? 0);
+  if (cacheN !== undefined) out.cached_tokens = cacheN;
+  if (predictedN !== undefined) out.completion_tokens = predictedN;
+  if (promptMs !== undefined) out.prompt_ms = promptMs;
+  if (predictedMs !== undefined) out.completion_ms = predictedMs;
+  if (draftN !== undefined) out.draft_tokens = draftN;
+  if (draftAccepted !== undefined) out.draft_accepted = draftAccepted;
+  return Object.keys(out).length ? out : undefined;
+}
+
 export function parseChatCompletionsLine(line) {
   const trimmed = line.trim();
   if (!trimmed || !trimmed.startsWith("data: ")) {
@@ -160,9 +222,13 @@ export function parseChatCompletionsLine(line) {
     const reasoning_content = delta?.reasoning_content || delta?.reasoning || "";
     const tool_calls = Array.isArray(delta?.tool_calls) ? delta.tool_calls : undefined;
     const finish_reason = choice?.finish_reason || undefined;
+    // `timings_per_token` puts llama.cpp timings on every chunk; OpenAI's
+    // include_usage sends one usage-only final chunk (empty choices).
+    const usage = { ...normalizeTimings(parsed.timings), ...normalizeUsage(parsed.usage) };
+    const hasUsage = Object.keys(usage).length > 0;
 
-    if (content || reasoning_content || tool_calls || finish_reason) {
-      return { content, reasoning_content, tool_calls, finish_reason, done: false };
+    if (content || reasoning_content || tool_calls || finish_reason || hasUsage) {
+      return { content, reasoning_content, tool_calls, finish_reason, usage: hasUsage ? usage : undefined, done: false };
     }
     return null;
   } catch {
@@ -235,6 +301,17 @@ async function* parseMessagesStream(reader) {
         yield { content: "", done: true };
         return;
       }
+      // Usage arrives split across events: input tokens on message_start,
+      // output tokens on message_delta. Later tracker reports merge.
+      if ((parsed.event === "message_start" || parsed.event === "message_delta") && parsed.data) {
+        try {
+          const json = JSON.parse(parsed.data);
+          const usage = normalizeUsage(parsed.event === "message_start" ? json?.message?.usage : json?.usage);
+          if (usage) yield { content: "", usage, done: false };
+        } catch {
+          // ignore malformed event
+        }
+      }
       if (parsed.event !== "content_block_delta" || !parsed.data) continue;
       try {
         const json = JSON.parse(parsed.data);
@@ -268,6 +345,12 @@ async function* parseResponsesStream(reader) {
       const parsed = parseSSEEventBlock(block);
       if (!parsed) continue;
       if (parsed.event === "response.completed") {
+        try {
+          const usage = normalizeUsage(JSON.parse(parsed.data || "{}")?.response?.usage);
+          if (usage) yield { content: "", usage, done: false };
+        } catch {
+          // ignore malformed event
+        }
         yield { content: "", done: true };
         return;
       }

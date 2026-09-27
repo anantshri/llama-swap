@@ -36,6 +36,25 @@
       } from "/ui/js/markdown.js";
       import { calculateHistogramData } from "/ui/js/util/histogram.js";
       import { parseStream } from "/ui/js/api/chat.js";
+      import {
+        countWords, estimateTokens, splitRequestParts, requestPartsHTML, requestPartsText,
+        prettyIfJson,
+      } from "/ui/js/components/captureDialog.js";
+      import {
+        normalizeUsage, normalizeTimings, parseChatCompletionsLine,
+      } from "/ui/js/api/chat.js";
+      import {
+        startTracking, trackChunk, markCancelled, currentStats, formatStatsLine,
+      } from "/ui/js/util/generationStats.js";
+      import {
+        buildModelOptions, filterModelOptions,
+      } from "/ui/js/util/modelUtils.js";
+      import { ModelsPanel } from "/ui/js/components/modelsPanel.js";
+      import { ModelSelector } from "/ui/js/components/modelSelector.js";
+      import { LogPanel } from "/ui/js/components/logPanel.js";
+      import { StatsPage } from "/ui/js/pages/stats.js";
+      import { observable } from "/ui/js/store.js";
+      import { models as modelsStore } from "/ui/js/api.js";
 
       // ---- tiny test harness ----
       const groups = [];
@@ -51,6 +70,7 @@
           toBe: (e) => { if (actual !== e) fail(`expected ${JSON.stringify(actual)} === ${JSON.stringify(e)}`); },
           toEqual: (e) => { if (JSON.stringify(actual) !== JSON.stringify(e)) fail(`expected ${JSON.stringify(actual)} deep-eq ${JSON.stringify(e)}`); },
           toContain: (e) => { if (!String(actual).includes(e)) fail(`expected output to contain ${JSON.stringify(e)}`); },
+          notToContain: (e) => { if (String(actual).includes(e)) fail(`expected output not to contain ${JSON.stringify(e)}`); },
           toMatch: (re) => { if (!re.test(String(actual))) fail(`expected ${JSON.stringify(actual)} to match ${re}`); },
           toBeNull: () => { if (actual !== null) fail(`expected null, got ${JSON.stringify(actual)}`); },
           toBeTruthy: () => { if (!actual) fail(`expected truthy, got ${JSON.stringify(actual)}`); },
@@ -176,8 +196,299 @@
       test("negative values", () => { const r = calculateHistogramData([-10, -5, 0, 5, 10]); expect(r.min).toBe(-10); expect(r.max).toBe(10); });
       test("floating point values", () => { const r = calculateHistogramData([1.5, 2.7, 3.14, 0.5, 4.99]); expect(r.min).toBe(0.5); expect(r.max).toBe(4.99); });
 
+      // ===== request-body parts (capture dialog) =====
+      group("countWords / estimateTokens");
+      test("empty and whitespace-only text", () => { expect(countWords("")).toBe(0); expect(countWords("   \n ")).toBe(0); expect(estimateTokens("")).toBe(0); });
+      test("word count splits on runs of whitespace", () => expect(countWords("one  two\nthree\tfour")).toBe(4));
+      test("token estimate is ~4 chars per token", () => { expect(estimateTokens("abcd")).toBe(1); expect(estimateTokens("a".repeat(400))).toBe(100); });
+      test("sub-token text never reports zero", () => expect(estimateTokens("a")).toBe(1));
+      test("CJK text is charged ~1 token per char", () => { expect(estimateTokens("你好")).toBe(2); expect(estimateTokens("こんにちは")).toBe(5); expect(estimateTokens("한국어")).toBe(3); });
+      test("mixed CJK and latin text sums both rates", () => expect(estimateTokens("你好 abcd")).toBe(3));
+
+      const chatBody = {
+        model: "qwen3",
+        system: "You are terse.",
+        messages: [
+          { role: "user", content: "What is 2+2?" },
+          { role: "assistant", content: "", tool_calls: [{ id: "call_1", type: "function", function: { name: "add", arguments: '{"a":2,"b":2}' } }] },
+          { role: "tool", tool_call_id: "call_1", content: "4" },
+          { role: "assistant", content: [{ type: "text", text: "Four." }, { type: "image_url", image_url: { url: "https://x/y.png" } }] },
+        ],
+        tools: [{ type: "function", function: { name: "add", parameters: { type: "object" } } }],
+      };
+
+      group("splitRequestParts — chat/completions body");
+      test("one part per prompt piece, in request order", () => {
+        const { parts } = splitRequestParts(chatBody);
+        expect(parts.map((p) => p.label)).toEqual([
+          "system (top-level)",
+          "messages[0] · user",
+          "messages[1] · tool_call add",
+          "messages[2] · tool · result for call_1",
+          "messages[3] · assistant",
+          "tools (1)",
+        ]);
+      });
+      test("tool call arguments are their own decoded part", () => {
+        const { parts } = splitRequestParts(chatBody);
+        const call = parts.find((p) => p.kind === "tool_call");
+        expect(call.label).toBe("messages[1] · tool_call add");
+        expect(call.role).toBe("tool");
+        expect(call.text).toContain('"a": 2');
+        expect(call.words).toBeGreaterThanOrEqual(1);
+      });
+      test("content arrays flatten text, images and tool results", () => {
+        const { parts } = splitRequestParts(chatBody);
+        const assistant = parts.find((p) => p.label === "messages[3] · assistant");
+        expect(assistant.text).toBe("Four.\n[image: https://x/y.png]");
+        expect(parts.find((p) => p.label === "messages[2] · tool · result for call_1").text).toBe("4");
+      });
+      test("content-less messages yield no phantom part", () => {
+        // A body whose only content is empty carries nothing to show, so the
+        // parts view stays off and the dialog keeps the JSON view.
+        expect(splitRequestParts({ messages: [{ role: "assistant", content: "" }] })).toBeNull();
+        expect(splitRequestParts({ messages: [{ role: "assistant", content: "", tool_calls: [] }] })).toBeNull();
+        expect(splitRequestParts({ messages: [] })).toBeNull();
+      });
+      test("totals sum the parts", () => {
+        const { parts, totals } = splitRequestParts(chatBody);
+        expect(totals.parts).toBe(parts.length);
+        expect(totals.chars).toBe(parts.reduce((n, p) => n + p.chars, 0));
+        expect(totals.tokens).toBe(parts.reduce((n, p) => n + p.tokens, 0));
+      });
+      test("no recognizable prompt returns null", () => {
+        expect(splitRequestParts({ model: "m", temperature: 0.7 })).toBeNull();
+        expect(splitRequestParts(null)).toBeNull();
+        expect(splitRequestParts([])).toBeNull();
+      });
+
+      group("splitRequestParts — other request shapes");
+      test("responses API: instructions + string input", () => {
+        const { parts } = splitRequestParts({ instructions: "Be brief.", input: "hi there" });
+        expect(parts.map((p) => p.label)).toEqual(["instructions (top-level)", "input"]);
+      });
+      test("responses API: input items as messages", () => {
+        const { parts } = splitRequestParts({ input: [{ role: "user", content: "ping" }] });
+        expect(parts.map((p) => p.label)).toEqual(["input[0] · user"]);
+      });
+      test("responses API: bare function_call input item becomes a tool part", () => {
+        const { parts } = splitRequestParts({ input: [{ type: "function_call", call_id: "c1", name: "get_weather", arguments: '{"city":"tokyo"}' }] });
+        expect(parts.map((p) => p.label)).toEqual(["input[0] · function_call get_weather"]);
+        expect(parts[0].role).toBe("tool");
+        expect(parts[0].kind).toBe("tool_call");
+        expect(parts[0].text).toContain('"city": "tokyo"');
+      });
+      test("responses API: function_call_output input item becomes a tool result part", () => {
+        const { parts } = splitRequestParts({ input: [{ type: "function_call_output", call_id: "c1", output: "sunny" }] });
+        expect(parts.map((p) => p.label)).toEqual(["input[0] · tool · result for c1"]);
+        expect(parts[0].role).toBe("tool");
+        expect(parts[0].text).toBe("sunny");
+      });
+      test("responses API: function_call_output with content-array output flattens", () => {
+        const { parts } = splitRequestParts({ input: [{ type: "function_call_output", call_id: "c1", output: [{ type: "output_text", text: "raining" }] }] });
+        expect(parts[0].text).toBe("raining");
+      });
+      test("responses API: function items keep request order among messages", () => {
+        const { parts } = splitRequestParts({ input: [
+          { type: "function_call", call_id: "c1", name: "f", arguments: "{}" },
+          { type: "function_call_output", call_id: "c1", output: "ok" },
+          { role: "assistant", content: "done" },
+        ] });
+        expect(parts.map((p) => p.label)).toEqual(["input[0] · function_call f", "input[1] · tool · result for c1", "input[2] · assistant"]);
+      });
+      test("completions API: prompt string and legacy function_call", () => {
+        const { parts } = splitRequestParts({ prompt: "once upon", messages: [{ role: "assistant", function_call: { name: "f", arguments: '{"k":1}' } }] });
+        expect(parts.map((p) => p.label)).toEqual(["messages[0] · function_call f", "prompt"]);
+        expect(parts[0].text).toContain('"k": 1');
+      });
+      test("legacy functions list is labelled functions", () => {
+        const { parts } = splitRequestParts({ functions: [{ name: "f" }], messages: [{ role: "user", content: "x" }] });
+        expect(parts.find((p) => p.kind === "tools").label).toBe("functions (1)");
+      });
+
+      group("requestPartsHTML / requestPartsText");
+      test("html escapes model-supplied prompt text", () => {
+        // The literal tags are split so the HTML parser does not end the
+        // script block early.
+        const open = "<scr" + "ipt>";
+        const close = "</scr" + "ipt>";
+        const html = requestPartsHTML(splitRequestParts({ messages: [{ role: "user", content: open + "alert(1)" + close }] }));
+        expect(html).toContain("&lt;script&gt;");
+        if (html.includes(open)) fail("raw <script> leaked into parts HTML");
+      });
+      test("html carries role classes, per-part stats and totals", () => {
+        const html = requestPartsHTML(splitRequestParts(chatBody));
+        expect(html).toContain("capture-part-role--user");
+        expect(html).toContain("capture-part-role--system");
+        expect(html).toContain("6 parts ·");
+        expect(html).toMatch(/≈\d+ tokens/);
+        expect(html).toContain("chars ÷ 4");
+      });
+      test("open option collapses every part block", () => {
+        const parts = splitRequestParts(chatBody);
+        expect(requestPartsHTML(parts)).toContain('<details class="capture-part" open>');
+        if (requestPartsHTML(parts, { open: false }).includes('capture-part" open')) {
+          fail("collapsed render still contains open blocks");
+        }
+      });
+      group("prettyIfJson");
+      test("formats JSON-shaped text and leaves other text alone", () => {
+        expect(prettyIfJson('{"a":1}')).toBe('{\n  "a": 1\n}');
+        expect(prettyIfJson("[1, 2]")).toBe('[\n  1,\n  2\n]');
+        expect(prettyIfJson("sunny")).toBe("sunny");
+        expect(prettyIfJson("{not json")).toBe("{not json");
+        expect(prettyIfJson("")).toBe("");
+        expect(prettyIfJson(null)).toBe(null);
+      });
+      test("tool result parts carry pretty-printed JSON", () => {
+        const { parts } = splitRequestParts({ messages: [
+          { role: "tool", tool_call_id: "c1", content: '{"temp":4,"unit":"C"}' },
+        ] });
+        expect(parts[0].text).toBe('{\n  "temp": 4,\n  "unit": "C"\n}');
+      });
+      test("plain-text tool results are not reformatted", () => {
+        const { parts } = splitRequestParts({ messages: [{ role: "tool", tool_call_id: "c1", content: "sunny" }] });
+        expect(parts[0].text).toBe("sunny");
+      });
+      test("function_call_output JSON output is pretty-printed", () => {
+        const { parts } = splitRequestParts({ input: [
+          { type: "function_call_output", call_id: "c1", output: '{"forecast":"rain"}' },
+        ] });
+        expect(parts[0].text).toContain('\n  "forecast": "rain"\n}');
+      });
+      test("tool_use content items pretty-print their input", () => {
+        const { parts } = splitRequestParts({ messages: [
+          { role: "assistant", content: [{ type: "tool_use", name: "f", input: { city: "oslo" } }] },
+        ] });
+        expect(parts[0].text).toContain('{\n  "city": "oslo"\n}');
+      });
+      test("null parts render nothing", () => { expect(requestPartsHTML(null)).toBe(""); expect(requestPartsText(null)).toBe(""); });
+      test("text form lists every part with its counts", () => {
+        const text = requestPartsText(splitRequestParts(chatBody));
+        expect(text).toContain("### messages[0] · user");
+        expect(text).toMatch(/### tools \(1\) \[\d+ chars · \d+ words · ≈\d+ tokens\]/);
+      });
+
       // ===== chat SSE parsers (canned chunks) =====
+      group("model picker options (#1153)");
+      const pickerModels = [
+        { id: "qwen3", unlisted: false, peerID: "", aliases: ["qw"], name: "Qwen 3", capabilities: { reranker: true }, architecture: { input_modalities: ["text"] } },
+        { id: "whisper", unlisted: false, peerID: "", aliases: [], name: "Whisper", capabilities: { audio_transcriptions: true }, architecture: { input_modalities: ["audio"] } },
+        { id: "peer-x/m8", unlisted: false, peerID: "peer-x", aliases: [], name: "", capabilities: {}, architecture: {} },
+        { id: "hidden", unlisted: true, peerID: "", aliases: [], name: "", capabilities: {}, architecture: {} },
+      ];
+      test("options cover local, aliases and peers, skipping unlisted", () => {
+        const opts = buildModelOptions(pickerModels);
+        expect(opts.map((o) => o.value)).toEqual(["qwen3", "qw", "whisper", "peer-x/m8"]);
+        expect(opts[1].aliasOf).toBe("qwen3");
+        expect(opts[3].group).toBe("Peer: peer-x");
+      });
+      test("filter matches value, parent model and name", () => {
+        const opts = buildModelOptions(pickerModels);
+        expect(filterModelOptions(opts, "QW").map((o) => o.value)).toEqual(["qwen3", "qw"]);
+        expect(filterModelOptions(opts, "whisper").map((o) => o.value)).toEqual(["whisper"]);
+        expect(filterModelOptions(opts, "peer-x").map((o) => o.value)).toEqual(["peer-x/m8"]);
+        expect(filterModelOptions(opts, "zzz")).toEqual([]);
+      });
+      test("matching tab needs sort first", () => {
+        const opts = buildModelOptions(pickerModels);
+        const audio = (m) => (m.architecture?.input_modalities ?? []).includes("audio") || !!m.capabilities?.audio_transcriptions;
+        expect(filterModelOptions(opts, "", audio).map((o) => o.value)).toEqual(["whisper", "qwen3", "qw", "peer-x/m8"]);
+        const rerank = (m) => !!m.capabilities?.reranker;
+        expect(filterModelOptions(opts, "", rerank)[0].value).toBe("qwen3");
+      });
+
       const enc = new TextEncoder();
+
+      // ===== live generation stats (#1099) =====
+      group("usage normalization");
+      test("openai spelling", () => {
+        expect(normalizeUsage({ prompt_tokens: 10, completion_tokens: 5 })).toEqual({ prompt_tokens: 10, completion_tokens: 5 });
+      });
+      test("anthropic spelling and cached tokens", () => {
+        expect(normalizeUsage({ input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 4 })).toEqual({ prompt_tokens: 10, completion_tokens: 5, cached_tokens: 4 });
+        expect(normalizeUsage({ prompt_tokens: 10, prompt_tokens_details: { cached_tokens: 7 } })).toEqual({ prompt_tokens: 10, cached_tokens: 7 });
+      });
+      test("no token counts yields undefined", () => {
+        expect(normalizeUsage(null)).toBe(undefined);
+        expect(normalizeUsage({ model: "m" })).toBe(undefined);
+      });
+      test("llama.cpp timings count the whole prompt", () => {
+        expect(normalizeTimings({ prompt_n: 8, cache_n: 100, predicted_n: 20, prompt_ms: 40, predicted_ms: 500, draft_n: 6, draft_n_accepted: 5 })).toEqual({
+          prompt_tokens: 108, cached_tokens: 100, completion_tokens: 20, prompt_ms: 40, completion_ms: 500, draft_tokens: 6, draft_accepted: 5,
+        });
+        expect(normalizeTimings({})).toBe(undefined);
+      });
+      test("usage chunk with empty choices parses", () => {
+        const line = 'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":7}}';
+        expect(parseChatCompletionsLine(line).usage).toEqual({ prompt_tokens: 12, completion_tokens: 7 });
+      });
+      test("timings ride along content chunks", () => {
+        const line = 'data: {"choices":[{"delta":{"content":"Hi"}}],"timings":{"prompt_n":8,"predicted_n":1,"predicted_ms":20}}';
+        const chunk = parseChatCompletionsLine(line);
+        expect(chunk.content).toBe("Hi");
+        expect(chunk.usage).toEqual({ prompt_tokens: 8, completion_tokens: 1, completion_ms: 20 });
+      });
+
+      group("generation tracker");
+      test("counts reasoning and answer chunks separately", () => {
+        const t = startTracking(0);
+        trackChunk(t, { reasoning_content: "th" }, 100);
+        trackChunk(t, { reasoning_content: "in" }, 150);
+        trackChunk(t, { content: "Hi" }, 200);
+        trackChunk(t, { content: "!" }, 300);
+        expect(t.reasoningChunks).toBe(2);
+        expect(t.answerChunks).toBe(2);
+        expect(t.firstTokenAt).toBe(100);
+        expect(t.answerStartedAt).toBe(200);
+      });
+      test("merges usage field by field across reports", () => {
+        const t = startTracking(0);
+        trackChunk(t, { usage: { prompt_tokens: 10 } }, 10);
+        trackChunk(t, { usage: { completion_tokens: 4, prompt_tokens: 10 } }, 20);
+        expect(t.usage).toEqual({ prompt_tokens: 10, completion_tokens: 4 });
+      });
+      test("live stats estimate tokens from chunks until usage arrives", () => {
+        const t = startTracking(0);
+        trackChunk(t, { content: "a" }, 1000);
+        trackChunk(t, { content: "b" }, 1500);
+        const s = currentStats(t, 1600, true);
+        expect(s.generation.tokens).toBe(2);
+        expect(s.generation.approxTokens).toBe(true);
+        expect(s.generation.ms).toBe(500);
+        expect(s.generation.perSecond).toBeCloseTo(4, 2);
+      });
+      test("real usage replaces estimates when it arrives", () => {
+        const t = startTracking(0);
+        trackChunk(t, { content: "a" }, 1000);
+        trackChunk(t, { usage: { prompt_tokens: 10, completion_tokens: 30, prompt_ms: 100, completion_ms: 1500 } }, 2600);
+        const s = currentStats(t, 2600, false);
+        expect(s.prompt.tokens).toBe(10);
+        expect(s.prompt.approxTokens).toBe(false);
+        expect(s.generation.tokens).toBe(30);
+        expect(s.generation.perSecond).toBeCloseTo(20, 2);
+      });
+      test("cancelled turns are marked", () => {
+        const t = startTracking(0);
+        markCancelled(t);
+        expect(currentStats(t, 10, true).cancelled).toBe(true);
+      });
+      test("formatStatsLine renders both phases", () => {
+        const t = startTracking(0);
+        trackChunk(t, { usage: { prompt_tokens: 128, cached_tokens: 12, prompt_ms: 210, completion_tokens: 45, completion_ms: 1200 } }, 10);
+        const line = formatStatsLine(currentStats(t, 10, false));
+        expect(line).toContain("prompt 128 tk (12 cached) in 210ms @ 552 tok/s");
+        expect(line).toContain("gen 45 tk in 1.20s @ 37.5 tok/s");
+      });
+      test("formatStatsLine marks approximate tokens and stopped turns", () => {
+        const t = startTracking(0);
+        trackChunk(t, { content: "x" }, 500);
+        markCancelled(t);
+        const line = formatStatsLine(currentStats(t, 2500, true));
+        expect(line).toContain("gen ~1 tk");
+        expect(line).toContain("stopped");
+      });
+
       function readerFrom(chunks) {
         let i = 0;
         return { read: async () => (i < chunks.length ? { done: false, value: enc.encode(chunks[i++]) } : { done: true }), releaseLock() {} };
@@ -193,6 +504,160 @@
       }
 
       async function runAsync() {
+        group("models panel — collapsed descriptions + search");
+        modelsStore.set([
+          { id: "qwen3", name: "Qwen 3", description: "A large model\nsecond line", state: "stopped", unlisted: false, peerID: "", aliases: ["qw"] },
+          { id: "whisper", name: "Whisper", description: "", state: "ready", unlisted: false, peerID: "", aliases: [] },
+          { id: "peer-x/m8", name: "", description: "", state: "stopped", unlisted: false, peerID: "peer-x", aliases: [] },
+        ]);
+        const panel = ModelsPanel();
+        document.body.appendChild(panel.el);
+        const rows = () => panel.el.querySelectorAll("tbody .models-row").length;
+        const descP = () => panel.el.querySelector(".model-desc");
+        await atest("description renders collapsed by default", () => {
+          expect(panel.el.querySelectorAll(".model-desc").length).toBe(1);
+          expect(descP().classList.contains("model-desc--open")).toBe(false);
+          expect(descP().querySelector(".model-desc-toggle").getAttribute("aria-expanded")).toBe("false");
+        });
+        await atest("chevron click expands in place", () => {
+          descP().querySelector(".model-desc-toggle").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+          expect(descP().classList.contains("model-desc--open")).toBe(true);
+          expect(descP().querySelector(".model-desc-toggle").getAttribute("aria-expanded")).toBe("true");
+        });
+        await atest("expansion survives a modelStatus re-render", () => {
+          modelsStore.set(modelsStore.get().slice());
+          expect(descP().classList.contains("model-desc--open")).toBe(true);
+        });
+        await atest("search box filters by id", () => {
+          const input = panel.el.querySelector("[data-search]");
+          input.value = "whis";
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          expect(rows()).toBe(1);
+          expect(panel.el.querySelector(".models-link").textContent).toBe("whisper");
+        });
+        await atest("search box matches alias and description text", () => {
+          const input = panel.el.querySelector("[data-search]");
+          input.value = "qw";
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          expect(panel.el.querySelector(".models-link").textContent).toBe("qwen3");
+          input.value = "second line";
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          expect(panel.el.querySelector(".models-link").textContent).toBe("qwen3");
+        });
+        await atest("no match shows empty message with query", () => {
+          const input = panel.el.querySelector("[data-search]");
+          input.value = "zzz";
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          expect(panel.el.querySelector(".models-empty").textContent).toContain("No models match");
+          expect(panel.el.querySelector(".models-empty").textContent).toContain("zzz");
+        });
+        await atest("clearing search restores full list", () => {
+          const input = panel.el.querySelector("[data-search]");
+          input.value = "";
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          expect(rows()).toBe(2);
+          expect(panel.el.querySelector(".peer-group")).toBeTruthy();
+        });
+        modelsStore.set([]);
+        panel.destroy();
+        panel.el.remove();
+
+        group("model picker — capability default");
+        modelsStore.set([
+          { id: "qwen3", name: "Qwen 3", state: "stopped", unlisted: false, peerID: "", aliases: [], capabilities: {}, architecture: { input_modalities: ["text"], output_modalities: ["text"] } },
+          { id: "flux", name: "Flux", state: "stopped", unlisted: false, peerID: "", aliases: [], capabilities: { image_generation: true }, architecture: { input_modalities: ["text"], output_modalities: ["image"] } },
+          { id: "sdxl", name: "SDXL", state: "stopped", unlisted: false, peerID: "", aliases: [], capabilities: { image_to_image: true }, architecture: {} },
+        ]);
+        {
+          const value = observable("flux");
+          const imageMatch = (m) => (m.architecture?.output_modalities ?? []).includes("image") || !!(m.capabilities?.image_generation ?? m.capabilities?.image_to_image);
+          const picker = ModelSelector({ value, placeholder: "Select an image model...", match: imageMatch });
+          document.body.appendChild(picker.el);
+          const input = picker.el.querySelector("[data-input]");
+          input.dispatchEvent(new Event("focus"));
+          const optionValues = () => [...picker.el.querySelectorAll("[data-i] .pg-model-option-value")].map((s) => s.textContent);
+          await atest("image tab lists only image-capable models by default", () => {
+            expect(optionValues()).toEqual(["flux", "sdxl"]);
+            expect(picker.el.querySelector("[data-cap-toggle]").textContent).toContain("1 hidden");
+          });
+          await atest("footer toggle reveals every model", () => {
+            picker.el.querySelector("[data-cap-toggle]").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+            expect(optionValues()).toEqual(["flux", "sdxl", "qwen3"]);
+            expect(picker.el.querySelector("[data-cap-toggle]").textContent).toContain("fitting");
+          });
+          picker.destroy();
+          picker.el.remove();
+        }
+        modelsStore.set([]);
+
+        group("log panel — concerns filter");
+        {
+          const logs = observable(
+            "2026/01/01 00:00:00 [INFO] server started\n" +
+            "127.0.0.1 \"POST /v1/chat/completions HTTP/1.1\" 200 12 \"ua\" 1ms\n" +
+            "2026/01/01 00:01:00 [WARN] model slow\n" +
+            "2026/01/01 00:02:00 [ERROR] upstream failed\n" +
+            "127.0.0.1 \"POST /v1/models HTTP/1.1\" 500 3 \"ua\" 1ms\n"
+          );
+          const panel = LogPanel({ id: "selftest-concerns-" + Date.now(), title: "T", logData: logs });
+          document.body.appendChild(panel.el);
+          const bodyText = () => panel.el.querySelector(".logpanel-pre").textContent;
+          await atest("concerns toggle keeps only warning/error lines", () => {
+            expect(bodyText()).toContain("[INFO] server started");
+            panel.el.querySelector('[data-act="concerns"]').dispatchEvent(new MouseEvent("click", { bubbles: true }));
+            expect(bodyText()).notToContain("[INFO] server started");
+            expect(bodyText()).toContain("[WARN] model slow");
+            expect(bodyText()).toContain("[ERROR] upstream failed");
+            expect(bodyText()).toContain('" 500 '); // 5xx access-log lines count as concerns
+            expect(bodyText()).notToContain('" 200 ');
+          });
+          panel.destroy();
+          panel.el.remove();
+        }
+
+        group("stats page — active/inactive split");
+        {
+          const realFetch = window.fetch;
+          window.fetch = function (url) {
+            if (String(url).includes("/api/metrics/stats")) {
+              return Promise.resolve(new Response(JSON.stringify({
+                total_requests: 15, total_input_tokens: 1, total_output_tokens: 2, total_cache_tokens: 0,
+                first_timestamp: "2026-01-01T00:00:00Z", last_timestamp: "2026-01-01T01:00:00Z",
+                models: [
+                  { model: "qwen3", requests: 10, input_tokens: 1, output_tokens: 1, cached_tokens: 0 },
+                  { model: "removed-model", requests: 5, input_tokens: 0, output_tokens: 1, cached_tokens: 0 },
+                ],
+              }), { status: 200 }));
+            }
+            if (String(url).includes("/v1/models")) {
+              return Promise.resolve(new Response(JSON.stringify({
+                data: [{ id: "qwen3", meta: { llamaswap: { aliases: ["qw"] } } }],
+              }), { status: 200 }));
+            }
+            return realFetch.apply(this, arguments);
+          };
+          const page = StatsPage();
+          document.body.appendChild(page.el);
+          const settle = async () => {
+            for (let i = 0; i < 50 && !page.el.querySelector("[data-active-body] .stats-tr"); i++) {
+              await new Promise((r) => setTimeout(r, 20));
+            }
+          };
+          await settle();
+          await atest("configured models land in Active, removed ones in Inactive", () => {
+            const activeModels = [...page.el.querySelectorAll("[data-active-body] .stats-td-model")].map((td) => td.textContent);
+            const inactiveModels = [...page.el.querySelectorAll("[data-inactive-body] .stats-td-model")].map((td) => td.textContent);
+            expect(activeModels).toEqual(["qwen3"]);
+            expect(inactiveModels).toEqual(["removed-model"]);
+            expect(page.el.querySelector("[data-active-count]").textContent).toContain("(1)");
+            expect(page.el.querySelector("[data-inactive-count]").textContent).toContain("(1)");
+            expect(page.el.querySelector("[data-inactive-wrap]").style.display).toBe("");
+          });
+          page.destroy();
+          page.el.remove();
+          window.fetch = realFetch;
+        }
+
         group("chat SSE — OpenAI chat/completions");
         await atest("basic content + reasoning + done", async () => expect(await collect("v1/chat/completions", [
           'data: {"choices":[{"delta":{"content":"Hel"}}]}\n',

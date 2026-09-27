@@ -39,7 +39,7 @@ export function AudioInterface() {
   const stage = root.querySelector("[data-stage]");
   const actions = root.querySelector("[data-actions]");
 
-  const modelSel = ModelSelector({ value: selectedModel, placeholder: "Select an audio model..." });
+  const modelSel = ModelSelector({ value: selectedModel, placeholder: "Select an audio model...", match: (m) => (m.architecture?.input_modalities ?? []).includes("audio") || !!(m.capabilities?.audio_transcriptions ?? m.capabilities?.audio_speech) });
   toolbar.appendChild(modelSel.el);
 
   // hidden file input

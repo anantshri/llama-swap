@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -126,23 +125,9 @@ func serveCmd(args []string) {
 	}
 	proxy := httputil.NewSingleHostReverseProxy(proxyURL)
 
-	// Create a custom transport to set timeouts.
-	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 300 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   10,
-		IdleConnTimeout:       90 * time.Second,
-	}
-	proxy.Transport = transport
-
-	// Modify response to disable buffering for streaming.
+	// Modify response to disable buffering for streaming. Upstream CORS headers
+	// are deliberately left in place: this wrapper has no CORS middleware of its
+	// own, and llama-swap strips them when it proxies through; see issue #85.
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 			resp.Header.Set("X-Accel-Buffering", "no")

@@ -2,7 +2,7 @@
 // Ported from lib/agentLoop.ts. It holds no UI state, does no fetching and
 // touches no DOM; the Docs tab supplies the real streamChat and callTool.
 
-export const DEFAULT_MAX_ITERATIONS = 8;
+export const DEFAULT_MAX_ITERATIONS = 16;
 
 function isAbort(error) {
   return error instanceof Error && error.name === "AbortError";

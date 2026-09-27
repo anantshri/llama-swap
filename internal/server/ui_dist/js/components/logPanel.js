@@ -7,11 +7,17 @@ import { ansiToHtml } from "../util/ansi.js";
 
 const FONT_SIZES = ["xxs", "xs", "small", "normal"];
 
+// Matches lines worth escalating: bracketed log levels (the proxy log's
+// [WARN]/[ERROR] format), severity words in upstream model-server output,
+// and non-2xx access-log statuses ("\" 404 " style).
+const CONCERNS_RE = /(\[(warn|error|fatal|panic)\]|\b(warn|warning|error|fatal|panic|crash|critical|failed|failure|exception|traceback|sigsegv|sigabrt|sigterm)\b|"\s(4\d\d|5\d\d)\s)/i;
+
 export function LogPanel({ id, title, logData }) {
   // Per-panel persistent settings. id captured at init (must be stable for the panel's life).
   const fontSize = persistent(`logPanel-${id}-fontSize`, "normal");
   const wrapText = persistent(`logPanel-${id}-wrapText`, false);
   const showFilter = persistent(`logPanel-${id}-showFilter`, false);
+  const showConcerns = persistent(`logPanel-${id}-concerns`, false);
 
   let filterRegex = "";
   let userScrolledUp = false;
@@ -30,6 +36,9 @@ export function LogPanel({ id, title, logData }) {
             </button>
             <button class="logpanel-btn" data-act="filter" title="Toggle filter">
               <span class="filter-icon"></span>
+            </button>
+            <button class="logpanel-btn" data-act="concerns" title="Show only warnings and errors">
+              <span class="concerns-icon"></span>
             </button>
           </div>
         </div>
@@ -52,17 +61,19 @@ export function LogPanel({ id, title, logData }) {
   const pre = root.querySelector(".logpanel-pre");
 
   function getFiltered() {
-    if (!filterRegex) return logData.get();
-    try {
-      const re = new RegExp(filterRegex, "i");
-      return logData
-        .get()
-        .split("\n")
-        .filter((line) => re.test(line))
-        .join("\n");
-    } catch {
-      return logData.get();
+    let lines = logData.get().split("\n");
+    if (showConcerns.get()) {
+      lines = lines.filter((line) => CONCERNS_RE.test(line));
     }
+    if (filterRegex) {
+      try {
+        const re = new RegExp(filterRegex, "i");
+        lines = lines.filter((line) => re.test(line));
+      } catch {
+        return lines.join("\n");
+      }
+    }
+    return lines.join("\n");
   }
 
   function applyContent() {
@@ -100,10 +111,18 @@ export function LogPanel({ id, title, logData }) {
       : `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon-4"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"/></svg>`;
   }
 
+  function applyConcernsIcon() {
+    const btn = root.querySelector('[data-act="concerns"] .concerns-icon');
+    btn.innerHTML = showConcerns.get()
+      ? `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="icon-4 logpanel-btn-on"><path fill-rule="evenodd" d="M9.401 3.003c1.155-2 4.043-2 5.197 0l7.355 12.748c1.154 2-.29 4.5-2.599 4.5H4.645c-2.309 0-3.752-2.5-2.598-4.5L9.4 3.003ZM12 8.25a.75.75 0 0 1 .75.75v3.75a.75.75 0 0 1-1.5 0V9a.75.75 0 0 1 .75-.75Zm0 8.25a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z" clip-rule="evenodd"/></svg>`
+      : `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon-4"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"/></svg>`;
+  }
+
   // initial paint
   applyClasses();
   applyWrapIcon();
   applyFilterIcon();
+  applyConcernsIcon();
   applyFilterVisible();
   applyContent();
 
@@ -117,6 +136,9 @@ export function LogPanel({ id, title, logData }) {
   root.querySelector('[data-act="wrap"]').addEventListener("click", () => wrapText.update((v) => !v));
   root.querySelector('[data-act="filter"]').addEventListener("click", () =>
     showFilter.update((v) => !v)
+  );
+  root.querySelector('[data-act="concerns"]').addEventListener("click", () =>
+    showConcerns.update((v) => !v)
   );
   filterInput.addEventListener("input", (e) => {
     filterRegex = e.target.value;
@@ -142,6 +164,10 @@ export function LogPanel({ id, title, logData }) {
     showFilter.subscribe(() => {
       applyFilterVisible();
       applyFilterIcon();
+    }),
+    showConcerns.subscribe(() => {
+      applyContent();
+      applyConcernsIcon();
     }),
   ];
 

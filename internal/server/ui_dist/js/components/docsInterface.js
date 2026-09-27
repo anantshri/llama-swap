@@ -15,17 +15,14 @@ import { fetchToolDefinitions, callTool, friendlyToolName } from "../agent/agent
 import { DOCS_AGENT_SYSTEM_PROMPT } from "../agent/docsAgentPrompt.js";
 import { playgroundStores } from "../playgroundActivity.js";
 import { AgentWork } from "./agentWork.js";
+import { pickSuggestions } from "../agent/docsSuggestions.js";
 import { renderMarkdown } from "../markdown.js";
 
 const TEMPERATURE = 0;
-const MAX_TOKENS = 4096;
+const MAX_TOKENS = 65536;
 
-const SUGGESTIONS = [
-  "How do I unload a model after 5 minutes of inactivity?",
-  "How do I run two models on one GPU at the same time?",
-  "What models are configured on this server?",
-  "My model won't load. How do I debug it?",
-];
+// Topic suggestions for the empty state, re-picked by the refresh action.
+let suggestions = [];
 
 function getTextContent(content) {
   if (typeof content === "string") return content;
@@ -230,16 +227,21 @@ export function DocsInterface() {
     const items = displayItems();
 
     if (messages.length === 0) {
+      // Topic suggestions are re-picked on every empty-state render, so the
+      // refresh button always offers something new.
+      suggestions = suggestions.length ? suggestions : pickSuggestions();
       messagesEl.innerHTML = `
         <div class="docs-empty">
           <div class="docs-empty-inner">
-            <p class="docs-empty-title">Ask about llama-swap</p>
-            <p class="docs-empty-sub">Answers come from this server's own documentation and its running configuration, not
-            from what the model remembers.</p>
+            <p class="docs-empty-title">Ask llama-swap about llama-swap</p>
+            <p class="docs-empty-sub">Choose a topic below or ask a question to get started.</p>
             <div class="docs-suggestions">
-              ${SUGGESTIONS.map(
-                (s) => `<button type="button" class="docs-suggestion" data-ask="${escapeHtml(s)}" ${!canSend() ? "disabled" : ""}>${escapeHtml(s)}</button>`
-              ).join("")}
+              ${suggestions
+                .map(
+                  (s) => `<button type="button" class="docs-suggestion" data-ask="${escapeHtml(s)}" ${!canSend() ? "disabled" : ""}>${escapeHtml(s)}</button>`
+                )
+                .join("")}
+              <button type="button" class="docs-suggestion docs-suggestion-refresh" data-refresh-suggestions title="Show different topics">↻ New topics</button>
             </div>
             ${!selectedModelStore.get() ? `<p class="muted docs-empty-hint">Select a model to get started.</p>` : ""}
           </div>
@@ -289,6 +291,11 @@ export function DocsInterface() {
     if (ask && canSend()) {
       inputEl.value = ask.getAttribute("data-ask");
       sendMessage();
+      return;
+    }
+    if (e.target.closest("[data-refresh-suggestions]")) {
+      suggestions = pickSuggestions();
+      renderMessages();
       return;
     }
     const regen = e.target.closest("[data-regen]");

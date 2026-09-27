@@ -7,6 +7,7 @@ import { observable, persistent } from "../store.js";
 import { models } from "../api.js";
 import { playgroundStores } from "../playgroundActivity.js";
 import { streamChatCompletion } from "../api/chat.js";
+import { startTracking, trackChunk, markCancelled, currentStats, formatStatsLine } from "../util/generationStats.js";
 import { ChatMessage } from "./chatMessage.js";
 import { ModelSelector } from "./modelSelector.js";
 import { ExpandableTextarea } from "./expandableTextarea.js";
@@ -33,6 +34,11 @@ export function ChatInterface() {
   const temperature = persistent("playground-temperature", 0.7);
   const endpoint = persistent("playground-endpoint", "v1/chat/completions");
   const maxTokens = persistent("playground-max-tokens", 4096);
+  // Sampling hyper params (#1120); empty string means "use the backend
+  // default" and is not sent.
+  const topK = persistent("playground-top-k", "");
+  const topP = persistent("playground-top-p", "");
+  const minP = persistent("playground-min-p", "");
   const userInput = observable("");
 
   let messages = loadMessages();
@@ -41,6 +47,9 @@ export function ChatInterface() {
   let isReasoning = false;
   let reasoningStartTime = 0;
   let abortController = null;
+  // Accumulates per-turn prompt/decode stats for the live line and the final
+  // block under the answer.
+  let genTracker = null;
   let showSettings = false;
   let attachedImages = [];
   let imageError = null;
@@ -106,11 +115,18 @@ export function ChatInterface() {
   function propsFor(i) {
     const m = messages[i];
     const last = i === messages.length - 1;
+    // Live line while this message is streaming; the frozen per-turn line
+    // afterwards.
+    const statsText =
+      isStreaming && last && m.role === "assistant" && genTracker
+        ? formatStatsLine(currentStats(genTracker, Date.now(), true))
+        : formatStatsLine(m.genStats);
     return {
       role: m.role,
       content: m.content,
       reasoning_content: m.reasoning_content || "",
       reasoningTimeMs: m.reasoningTimeMs || 0,
+      statsText,
       isStreaming: isStreaming && last && m.role === "assistant",
       isReasoning: isReasoning && last && m.role === "assistant",
       onEdit: m.role === "user" ? (nc) => editMessage(i, nc) : undefined,
@@ -206,7 +222,16 @@ export function ChatInterface() {
   }
 
   function cancelStreaming() {
+    if (genTracker) markCancelled(genTracker);
     abortController?.abort();
+  }
+
+  // Empty-string settings mean "backend default": parse to a number or drop.
+  function optNum(v) {
+    const s = String(v ?? "").trim();
+    if (s === "") return undefined;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : undefined;
   }
 
   function newChat() {
@@ -245,11 +270,18 @@ export function ChatInterface() {
         temperature: temperature.get(),
         endpoint: endpoint.get(),
         max_tokens: maxTokens.get(),
+        top_k: optNum(topK.get()),
+        top_p: optNum(topP.get()),
+        min_p: optNum(minP.get()),
       });
 
       const lastIdx = messages.length - 1;
+      genTracker = startTracking(Date.now());
+      let lastLiveStats = "";
       for await (const chunk of stream) {
         if (chunk.done) break;
+
+        trackChunk(genTracker, chunk, Date.now());
 
         if (chunk.reasoning_content) {
           if (!isReasoning) {
@@ -271,11 +303,20 @@ export function ChatInterface() {
         if (chunk.reasoning_content || chunk.content) {
           updateLast();
           saveMessages();
+        } else if (chunk.usage) {
+          // Usage/timings-only chunk (final usage report or per-token
+          // timings): refresh the live stats line without touching content.
+          const live = formatStatsLine(currentStats(genTracker, Date.now(), true));
+          if (live !== lastLiveStats) {
+            lastLiveStats = live;
+            updateLast();
+          }
         }
       }
     } catch (error) {
       const lastIdx = messages.length - 1;
       if (error && error.name === "AbortError") {
+        markCancelled(genTracker);
         if (isReasoning && reasoningStartTime > 0) {
           messages[lastIdx].reasoningTimeMs = Date.now() - reasoningStartTime;
         }
@@ -284,6 +325,15 @@ export function ChatInterface() {
         messages[lastIdx].content = messages[lastIdx].content + `\n\n**Error:** ${msg}`;
       }
     } finally {
+      // Freeze whatever the turn measured — real usage when the backend
+      // reported it, chunk-count estimates otherwise — onto the message.
+      if (genTracker) {
+        const lastIdx = messages.length - 1;
+        if (lastIdx >= 0 && messages[lastIdx].role === "assistant") {
+          messages[lastIdx].genStats = currentStats(genTracker, Date.now(), false);
+        }
+        genTracker = null;
+      }
       isStreaming = false;
       isReasoning = false;
       abortController = null;
@@ -327,6 +377,20 @@ export function ChatInterface() {
         <input id="chat-temp" type="range" min="0" max="2" step="0.05" class="chat-setting-range" data-k="temperature" />
         <div class="chat-setting-range-labels"><span>Precise (0)</span><span>Creative (2)</span></div>
       </div>
+      <div class="chat-setting chat-setting-row">
+        <div class="chat-setting">
+          <label class="chat-setting-label" for="chat-topk">top_k</label>
+          <input id="chat-topk" type="number" min="1" step="1" class="pg-input chat-setting-input" placeholder="default" data-k="topK" />
+        </div>
+        <div class="chat-setting">
+          <label class="chat-setting-label" for="chat-topp">top_p</label>
+          <input id="chat-topp" type="number" min="0" max="1" step="0.05" class="pg-input chat-setting-input" placeholder="default" data-k="topP" />
+        </div>
+        <div class="chat-setting">
+          <label class="chat-setting-label" for="chat-minp">min_p</label>
+          <input id="chat-minp" type="number" min="0" max="1" step="0.01" class="pg-input chat-setting-input" placeholder="default" data-k="minP" />
+        </div>
+      </div>
       <div class="chat-setting">
         <label class="chat-setting-label" for="chat-maxtokens">Max Tokens</label>
         <input id="chat-maxtokens" type="number" min="1" class="pg-input chat-setting-input" data-k="maxTokens" />
@@ -336,6 +400,9 @@ export function ChatInterface() {
     settingsPanel.querySelector('[data-k="system"]').value = systemPrompt.get();
     settingsPanel.querySelector('[data-k="temperature"]').value = String(temperature.get());
     settingsPanel.querySelector('[data-k="maxTokens"]').value = String(maxTokens.get());
+    settingsPanel.querySelector('[data-k="topK"]').value = String(topK.get());
+    settingsPanel.querySelector('[data-k="topP"]').value = String(topP.get());
+    settingsPanel.querySelector('[data-k="minP"]').value = String(minP.get());
     setControlsDisabled(isStreaming);
   }
 
@@ -349,6 +416,9 @@ export function ChatInterface() {
       const lbl = settingsPanel.querySelector("[data-temp-val]");
       if (lbl) lbl.textContent = v.toFixed(2);
     } else if (k === "maxTokens") maxTokens.set(Number(e.target.value));
+    else if (k === "topK") topK.set(e.target.value);
+    else if (k === "topP") topP.set(e.target.value);
+    else if (k === "minP") minP.set(e.target.value);
   });
 
   function setControlsDisabled(disabled) {

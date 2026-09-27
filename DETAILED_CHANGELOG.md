@@ -5,6 +5,785 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-09-26 — UI upgrades (models/search, capability pickers, stats split, log concerns) and upstream-review fixes (hw + perf)
+
+### Addendum (same day): GPU telemetry saw-tooth fix
+
+Live diagnosis on dumbo (`/api/performance`): while generating
+(util 94–98%), `temp_c`/`vram_temp_c`/`fan`/`power_draw_w` hit 0 in
+roughly every other 5s sample — e.g. `temp 70, power 261 → all 0 → temp
+70, power 260` — while `gpu_util_pct`/`mem_used_mb` stayed healthy. Root
+cause: the healthy numbers come from DRM fdinfo (`/proc`, never touches
+the device), while hwmon passes fail entirely when the xe card is
+runtime-suspended mid-wake; `poll()` published the zeroed sample as-is.
+Fix in `internal/perf/monitor_sysfs.go`: `readHwmon` returns success and
+retries once after 100ms (the first read kick-starts the resume),
+last-known values are carried forward for up to `telemetryHold` (30s,
+power only while active), and `lastHwmonAt` advances only on success so a
+failed pass is retried next tick. Tests: `TestSysfs_HwmonThrottledWhileActive`
+reworked to prove carried values vs re-read (sensor value changed under
+the throttle window), plus `TestSysfs_HwmonFailureCarriesLastKnown` and
+`TestSysfs_TelemetryHoldExpiry`. Deploying the fix requires rebuilding and
+restarting the binary on the affected host.
+
+### Goal
+
+Four UI requests plus a review pass over two upstream PRs (#1158 hardware
+detection, #1159 sysfs GPU stats) that carry this fork's code: apply
+everything the bot reviewers found that is real in our tree.
+
+### UI changes (all in `internal/server/ui_dist/`, hand-authored)
+
+- **Models dashboard** (`js/components/modelsPanel.js`, `css/app.css`):
+  descriptions render collapsed (single line, ellipsis) behind a chevron
+  button; expanded state lives in a per-panel `Set` so the SSE-driven
+  re-renders (one per modelStatus event) don't collapse it again. A filter
+  box under the header matches id/name/alias/description case-insensitively;
+  peer groups whose name matches show all their models; Profiles/Selectors
+  cards hide while filtering; empty state names the query.
+- **Playground pickers** (`js/components/modelSelector.js`): tabs that pass
+  a capability `match` (image/audio/speech/rerank) now start with
+  `fitsOnly = true` — the dropdown lists only capable models, with a footer
+  toggle "Show all models (N hidden)" / "Show fitting models only". Empty
+  state says "No models fit this tab" when appropriate.
+- **Stats page** (`js/pages/stats.js`): two tables — Active Models (ids from
+  `/v1/models` incl. `meta.llamaswap.aliases`, unioned with the SSE models
+  store so unlisted models count) and Inactive Models (usage history for
+  removed/renamed models). Shared sort state across both headers; inactive
+  table hides when empty; SSE modelStatus triggers a local recompute (the
+  `/v1/models` listing is fetched once, guarded by a `loaded` flag so the
+  subscribe-time immediate fire doesn't race the boot render).
+- **Log panels** (`js/components/logPanel.js`): persistent `concerns` toggle
+  filtering lines via a combined regex — bracketed levels, severity words,
+  and `" 4xx "/" 5xx "` access-log statuses; composes with the text regex.
+
+### Review-driven fixes from upstream PRs #1158 / #1159
+
+Both PRs contain code that already lives in this fork; the Greptile/CodeRaby
+findings were verified line-by-line against our copies and the real ones
+fixed:
+
+- `internal/perf/monitor_sysfs.go` — (P1) fdinfo records without
+  `drm-pdev` matched every GPU: now attributed via the render node's sysfs
+  device link (cached per node), and skipped on multi-GPU hosts
+  (`ambiguous` flag set by discovery) when unresolvable. (P1) duplicated
+  fds sharing a `drm-client-id` double-counted VRAM: count once per client
+  per poll. (P2) tests renamed to `TestSysfs_<case>`.
+- `internal/hw/intel_linux.go` — detail response with empty BDF no longer
+  errors before the listing-BDF fallback; integrated GPUs keep
+  `CapacityBytes` nil (borrowed system RAM was published as VRAM); generic
+  `Intel(R) Graphics [0x…]` names yield to the PCI-table model.
+- `internal/hw/intel.go` — Battlemage G21 gains `0xE215` (per
+  intel/compute-runtime). The reviewer's claim that `0xE209` maps to
+  "Arc B580" was NOT applied: sources conflict and the table's documented
+  policy is unambiguous models only.
+- `internal/hw/intel_linux_test.go` — `TestHardware_IntelXPUSMIAbsent` now
+  pins `PATH` to an empty temp dir instead of assuming the host lacks
+  xpu-smi; dead `xpusmiListing` const removed (staticcheck U1000).
+- `internal/perf/monitor_unix.go` — removed the dead `readSysfs` stub
+  (superseded by `trySysfs` in monitor_sysfs.go).
+
+### Verification environment
+
+No browser existed in the container; `pip install --break-system-packages
+playwright` + `python3 -m playwright install chromium` + the needed apt
+packages (`libglib2.0-0t64 libnss3 … libxkbcommon0 libasound2t64
+fontconfig fonts-liberation` — skia FATAL-crashes without fontconfig)
+gave a working headless Chromium. The selftest runs against a real server
+(`go build -o build/llama-swap . && setsid nohup build/llama-swap …`) since
+`/ui/...` module paths are absolute; `setsid` is required — plain `&`
+background jobs get reaped when the tool shell command exits.
+
+### Verification
+
+```
+__selftest.html (headless Chromium)   # 146/146 — +11: models panel ×7,
+                                      # picker capability ×2, log concerns ×1,
+                                      # stats split ×1
+go test ./internal/perf/ ./internal/hw/ -count=1   # ok (3 new perf tests:
+                                                   # dup-client VRAM, pdev-less
+                                                   # via sysfs, multi-GPU skip)
+make test-dev                         # all packages ok; staticcheck clean in
+                                      # touched files (remaining U1000s are
+                                      # pre-existing in d3dkmt/apple, untouched)
+make gosec                            # 0 issues
+aidc-scan                             # semgrep + gitleaks + gosec clean
+go test -cover                        # perf 61.9%, hw 67.3%
+```
+
+### Notes
+
+- The review comments should also be answered upstream: #1159's two P1s are
+  real and fixed here; #1158's findings are fixed except the `0xE209`
+  model-name claim (intentionally skipped, see above).
+- The stats "active" set treats a model as active only if `/v1/models` or
+  the SSE store knows it; if BOTH are unavailable the page falls back to the
+  old single-table behaviour (everything active) rather than hiding rows.
+
+---
+
+## 2026-09-25 — Parts view: collapse/expand controls and pretty-printed tool payloads
+
+### Goal
+
+Operator feedback on the merged parts view:
+
+1. Long contexts produce dozens of part blocks, all open — a scroll marathon.
+   Add `Collapse all` / `Expand all` next to Copy.
+2. Tool results arrive as one-line JSON blobs inside the boxes; render them
+   pretty-printed.
+
+### How
+
+`internal/server/ui_dist/js/components/captureDialog.js`:
+
+- `prettyIfJson(text)` (exported): when text parses as JSON it is re-rendered
+  with 2-space indent; anything not JSON-shaped passes through untouched.
+  Applied to `role:"tool"` message content, Responses-API
+  `function_call_output.output`, and `tool_use` content-part inputs (the
+  latter via the existing `prettyArgs`). Char/word/token counts are computed
+  from the rendered text, so they track the pretty form.
+- `requestPartsHTML(parts, {open})` — `open: false` renders every
+  `<details>` block without the `open` attribute (default unchanged: open).
+- Dialog state gains `partsOpen` (`undefined` = expanded default, reset per
+  capture in `open()`); the request tab row shows `Collapse all` /
+  `Expand all` buttons only while the Parts tab is active; clicking sets
+  `partsOpen` and re-renders, so the choice survives the Copy button's
+  "Copied!" re-render. Copy still copies the full text regardless of
+  collapse state.
+
+### Verification
+
+```
+__selftest.html (headless Chromium)   # 119/119 — 6 new tests:
+                                      #   open option, prettyIfJson (JSON /
+                                      #   non-JSON / empty / null), tool
+                                      #   result pretty, plain-text result
+                                      #   untouched, function_call_output
+                                      #   pretty, tool_use input pretty
+headless dialog drive                 # buttons render; 3/3 open → Collapse
+                                      # all → 0 open → Expand all → 3 open;
+                                      # tool result pre carries the indented
+                                      # JSON; no page errors
+```
+
+---
+
+## 2026-09-25 — UI ports: live chat stats (#1099), profile controls (#1170), Help topics (#1088), responsive chat (#1120)
+
+### Live generation stats (#1099)
+
+- `js/api/chat.js`: requests `stream_options.include_usage` (OpenAI) and
+  llama.cpp's `timings_per_token`; `normalizeUsage` accepts OpenAI and
+  Anthropic spellings incl. cached-token variants, `normalizeTimings` maps
+  llama.cpp `prompt_n + cache_n` timings; all three stream parsers now emit
+  `usage` on chunks. Sampling params `top_k` / `top_p` / `min_p` are plumbed
+  into the request bodies (responses API: `top_p` only).
+- `js/util/generationStats.js` (new, harness-tested): per-turn tracker with
+  prompt/decode phase clocks, reasoning/answer chunk split, draft-token
+  counts; chunk-based estimates are replaced by real usage when reported.
+  `formatStatsLine` renders one readable line.
+- `chatInterface.js` / `chatMessage.js`: live stats line under the streaming
+  answer, frozen per-turn stats after completion; cancelled turns are marked
+  "stopped".
+
+### Profile mappings (#1170)
+
+`modelsPanel.js` profile rows resolve their target against the model list:
+live status dot (local only), link to the model detail page, Load/Unload
+buttons reusing the panel's delegated handlers. Peer targets link without
+controls; unresolved/disabled render as before.
+
+### Help agent topics and controls (#1088)
+
+`agent/docsSuggestions.js` (new): 37-question curated pool +
+`pickSuggestions` (Fisher-Yates). The Help empty state offers 4 random topics
+with a "New topics" refresh button and streamlined copy. Agent loop limit
+8 → 16 iterations. Stale speculative-decoding KB article removed; docs search
+description now cites "Docker health check" instead of draft models.
+
+### Responsive chat (#1120)
+
+Settings panel capped at `min(60vh, 26rem)` with internal scrolling, so a
+large system prompt no longer stretches the page; system textarea gets a
+bounded vertical resize; the three sampling params share a compact row;
+mobile breakpoint tightens gutters and wraps the param row.
+
+### Verification
+
+```
+go test -short -count=1 ./internal/server/ ./internal/docagent/  # ok
+__selftest.html (headless Chromium)   # 135/135 across the batch
+headless drives: combobox filter+select, agent-work counters/expansion,
+fetch capture proving the request body carries stream_options,
+timings_per_token, top_k/top_p/min_p; no page errors
+```
+
+### Notes
+
+- `make eval-docs-agent` still needs a live model (see 2026-09-24 jq entry).
+- The remaining upstream deltas are the tailcat stack (internal + #1091 UI)
+  and the decision-skipped items (store split, kubeswap, release tooling,
+  docker images).
+
+---
+
+
+
+
+## 2026-09-25 — UI ports: searchable model picker (#1153) and stable Work header (#1101)
+
+### Model picker combobox (#1153)
+
+`internal/server/ui_dist/js/components/modelSelector.js` rewritten from the
+`<select>` dropdown into a search combobox: click or typing opens the list,
+the query filters local models/aliases/peers in real time, ArrowUp/Down +
+Enter + Escape navigate, outside pointerdown closes. Optional per-tab `match`
+predicate floats models that fit the tab's needs to the top (marked ◆):
+audio (audio input / transcriptions / speech), image (image output /
+generation / image-to-image), speech, rerank. Model records in `api.js` now
+carry `architecture` modalities for those checks. Pure helpers
+`buildModelOptions` / `filterModelOptions` live in `util/modelUtils.js`.
+
+### Stable Work header (#1101)
+
+`internal/server/ui_dist/js/components/agentWork.js` now renders one
+collapsible **Work** section per assistant response instead of a flat item
+list. The collapsed header shows stable counters — reasoning characters ·
+duration · tool-call count — with a spinner only while work runs; the label
+never switches with the current item, so nothing flickers. Expansion state is
+tracked across the frequent re-renders while streaming (click-driven, since
+the `toggle` event fires after the default action and would restore stale
+state).
+
+### Verification
+
+```
+__selftest.html (headless Chromium)   # 135/135 — +3 picker option/filter tests
+headless drive: combobox              # type "whi" filters to whisper; Enter
+                                      # selects; input shows the selection
+headless drive: agent work            # counters identical working vs done;
+                                      # spinner toggles; expansion survives
+                                      # re-renders; no page errors
+```
+
+---
+
+## 2026-09-25 — Port upstream small-fix batch 2 (#1165, #1090, #1145, #1089)
+
+### Goal
+
+Final cheap wins from the upstream survey: cmdStop output logging, vllm
+wrapper timeout cleanup, the comfyui endpoint rework + guide, and the Docs
+Agent max_tokens raise. (Branch tip was first cleaned of a test README
+commit by the operator.)
+
+### What was picked
+
+| Upstream commit | PR | Change |
+|---|---|---|
+| `e1526c8` | #1090 | vllm-wrapper: drop the custom `http.Transport`, use Go's default timeouts. Conflict resolved by removing the transport while keeping the fork's CORS comment on `ModifyResponse`. |
+| `111d2d3` | #1165 | `cmdStop` stdout/stderr now go to the process logger; `WaitDelay` bounds the pipe copy so a backgrounded child cannot hang `Run()`; `ErrWaitDelay` is a warning. Conflict: kept the fork's `#nosec G204` line on `exec.Command`, added upstream's wiring. |
+| `29d10df` | #1145 | ComfyUI handlers moved from `api.go` into `comfyui.go` (+282-line test suite); root-only start rule replaced by `comfyUIIgnorePaths` (static assets, `/ws`, `/api/jobs` — GET only, writes still start the model); 178-line KB guide; targeted swap-restriction patterns. `api.go` conflict resolved to upstream's deletion — its version strictly supersedes the fork's. |
+| `8365956` | #1089 | Docs Agent max_tokens 4096 → 65536; hand-ported as a one-liner to `docsInterface.js` (upstream's Svelte/CLI half N/A). Long agent answers were being truncated at 4k. |
+
+### Security-gate follow-ups
+
+- gosec G710 fires on the moved `/comfyui/` redirect; suppressed at the exact
+  line in `comfyui.go` (same false-positive verdict as before) and
+  `docs/gosec-suppressions.md` updated: the site is now
+  `internal/server/comfyui.go`, not `api.go`.
+
+### Verification
+
+```
+go test -short -count=1 ./internal/... ./cmd/vllm-wrapper/  # all ok
+make test-dev                                               # ok; same 4
+                                                            # pre-existing staticcheck
+make gosec                                                  # 0 issues
+aidc-scan                                                   # semgrep/gitleaks clean
+__selftest.html (headless Chromium)                         # 113/113
+```
+
+### Notes
+
+- These commits are unsigned (container has no signing key); the operator
+  re-signs the tip with the established
+  `git rebase main --rebase-merges --exec 'git commit --amend --no-edit -S'`.
+- With this batch, every small/medium upstream commit is ported. Remaining
+  upstream deltas are the decision-gated ones: store interface split
+  (`aecf92e`), kubeswap (`c5753ce`+), the tailcat stack, release tooling,
+  docker images, and the agreed-last UI ports.
+
+---
+
+## 2026-09-24 — Port upstream jq-backed get_config for the Docs Agent (#1087)
+
+### Goal
+
+Fifth batch of the upstream survey: replace the Docs Agent's path-based
+`get_config` with a jq query (upstream `a77f107`, updates upstream #1085) —
+a large multi-model config no longer has to be paged through whole.
+
+### How
+
+- `internal/config/mcpprovider.go` (auto-merged): `get_config` evaluates a
+  jq expression (gojq) against the running, credential-redacted config.
+  Hardening, all carried over from upstream: 5s evaluation timeout, 200k
+  value-node cap, 32 KB rendered-result cap, and a heap-growth guard
+  (128 MiB, sampled every 10 ms) that can stop unbounded constructs like
+  `[range(0; 5000000)]` — relevant because `/api/mcp` needs no credentials
+  by default.
+- `internal/server/apimcp.go` wiring + 300 lines of provider tests + a
+  config eval-fixture helper landed with it.
+- `evals/docs-agent/`: new jq cases (incl. holdout), fixture models, and an
+  updated `run.sh`.
+- `docs/kb/`: mcp-endpoint guide and README updated for the new tool.
+
+### Adaptations for the fork
+
+- Upstream's Svelte UI half of the commit (`ui/src/**` — Help page move,
+  playground stores, suggestion lists) was dropped entirely: the fork's UI
+  is hand-authored vanilla JS under `internal/server/ui_dist/`.
+- The agent-facing prompt text was ported by hand instead: the fork keeps
+  the Docs Agent system prompt in
+  `internal/server/ui_dist/js/agent/docsAgentPrompt.js`, whose
+  `config__get_config` bullet now documents the jq query form with the same
+  examples upstream uses.
+- `AGENTS.md` conflict resolved to the fork's version (upstream's change
+  only renamed the Svelte page hosting the agent).
+- `go.mod`: `github.com/itchyny/gojq v0.12.19` (+ `timefmt-go` indirect)
+  added to the fork's dependency set; upstream's klauspost/compress bump
+  not taken.
+
+### Verification
+
+```
+go test -short -count=1 ./internal/...   # all ok, incl. new provider tests
+make test-dev                            # ok; staticcheck: same 4 pre-existing
+make gosec                               # 0 issues
+__selftest.html (headless Chromium)      # 113/113; docsAgentPrompt.js imports clean
+```
+
+### Notes
+
+- `make eval-docs-agent` (scoring the agent against a local model) could not
+  run in this environment — it needs a llama-swap-served model. Run it once
+  where a model is available to confirm the new cases pass.
+- The UI-side Help page did not change: the fork's docsInterface.js already
+  talks to `/api/mcp`, whose tool contract changed transparently.
+
+---
+
+## 2026-09-24 — Port upstream capcompat: automatic capability discovery (#1083/#1105)
+
+### Goal
+
+Fourth batch of the upstream survey: `internal/capcompat` (upstream `eeac3e6`,
+the largest port at ~3.8k lines / 43 files) — automatic context and modality
+discovery from upstream servers, cached across restarts.
+
+### How it works (upstream design, adapted)
+
+- On process `Ready`, the server probes the model's own proxy address
+  (`capcompat.NewClient`) — never through the router, so TTL windows and
+  concurrency slots are untouched — on its own goroutine.
+- Adapters parse llama-server `/props` + `/v1/models`, vLLM `/v1/models`
+  (incl. LoRA), and halogen `/health` + `/v1/models`.
+- Results are stored via the store's new generic key/value cache
+  (`cache` table) and survive model unload / proxy restart.
+- `/v1/models`, the dashboard listing, and aliases resolve capabilities as
+  `config.Merge(auto)`: configured values win field-by-field; a model with
+  `capabilities.disableAuto: true` is never probed.
+- A `ModelCapabilitiesChangedEvent` is emitted when a probe learns something
+  new, so UI clients re-pull the listing.
+
+### Adaptations for the fork
+
+- Upstream's store is split (`internal/store` + `internal/store/sqlite`);
+  the fork keeps its single-file store. The `CacheRepository` interface
+  (`internal/store/cache.go`) landed as-is; the sqlite implementation was
+  folded into `internal/store/store.go` as methods on `*Store`
+  (`Cache()` returns the store itself), cache rows are pruned on start, and
+  upstream's cache tests were moved into `package store`.
+- Upstream's `00003_create_cache.sql` was renumbered to
+  `00004_create_cache.sql` (the fork already has its own
+  `00003_activity_src.sql` from the forwarded-headers port); the partial
+  `internal/store/sqlite/` package was deleted.
+- `ModelCapConfig` kept the fork's #915 fields (`max_output_tokens`,
+  `reasoning`) and gained upstream's json tags, `disableAuto`, and `Merge`.
+- `apigroup.go` keeps the fork's 10-value `renderCapabilities` signature but
+  now renders the *resolved* capabilities.
+- gosec G104 in `capcompat.go` (unhandled drain on the error path) fixed with
+  `_, _ =` + comment.
+
+### Verification
+
+```
+go test -short -count=1 ./internal/...   # all ok, incl. capcompat 517-line
+                                         # test suite + store cache tests
+make test-dev                            # ok; staticcheck: same 4 pre-existing
+make gosec                               # 0 issues (after G104 fix)
+aidc-scan                                # semgrep/gitleaks/gosec clean
+__selftest.html (headless Chromium)      # 113/113, no page errors
+```
+
+### Notes
+
+- `store.New` now runs `Cache().Prune(ctx)` at startup — in-memory stores
+  start empty, file stores drop rows that expired while the process was down.
+- The `cache` table is a general-purpose key/value API (callers own the key
+  namespace); capcompat is its first user.
+- Migration numbering: this fork's migrations diverge from upstream's
+  (fork: `00003_activity_src`, `00004_create_cache`). Future ports touching
+  migrations must renumber accordingly.
+
+---
+
+## 2026-09-24 — Port upstream global concurrency semaphore (#1110)
+
+### Goal
+
+Third batch of the upstream survey, per the agreed order (CORS → concurrency
+semaphore → capcompat → jq config → kubeswap): `globalConcurrencyLimit`, a
+top-level cap on concurrent inference requests across all models
+(upstream `41ec321`, fixes upstream #1086).
+
+### How
+
+- `internal/server/concurrency.go` (added clean): token semaphore built on
+  `golang.org/x/sync/semaphore`; `CreateConcurrencyLimitMiddleware(limit)`
+  rejects with HTTP 429 (Retry-After honoured) once the limit is reached —
+  requests are never queued.
+- `internal/server/server.go`: the middleware joins `modelMWs` (top of the
+  inference chain, right after auth) only when the limit is > 0, so a default
+  config pays nothing.
+- `internal/config`: `GlobalConcurrencyLimit int` field (fork's struct kept
+  as-is otherwise), load-time validation `>= 0`, config test + schema +
+  `docs/config.example.yaml` + capacity-and-queues guide landed from upstream
+  automatically.
+
+### Conflicts / adaptations
+
+- `AGENTS.md`: upstream rewrote it for its own workflow — kept the fork's
+  version in full.
+- `go.mod`/`go.sum`: kept the fork's dependency set; promoted
+  `golang.org/x/sync` to a direct dependency at upstream's `v0.22.0`
+  (fork had v0.21.0 indirect) and ran `go mod tidy`. Upstream's x/sys bump
+  was not taken.
+- `internal/config/config.go`: fork's Config struct kept; only the new field
+  added (upstream also regrouped fields and carries tailcat runtime state).
+- `internal/docagent/golden_test.go`: expected config-example sections now
+  include `globalConcurrencyLimit` alongside the fork's `security`/`pricing`.
+
+### Verification
+
+```
+go test -short -count=1 ./internal/...   # all ok, incl.
+                                         # TestServer_GlobalConcurrencyLimit
+make test-dev                            # ok; staticcheck: same 4 pre-existing
+make gosec                               # 0 issues
+aidc-scan                                # gitleaks clean (tree committed)
+```
+
+### Notes
+
+- The fork's `experimental-concurrency-refactor` branch predates this; the
+  upstream semaphore is now the supported global cap. That branch should be
+  reassessed (likely rebased or retired) rather than merged as-is.
+- Interaction to know: the semaphore guards the inference chain only —
+  /api, UI, health endpoints are not counted against the limit.
+
+---
+
+## 2026-09-24 — Port upstream CORS controls (#1133); browser self-test green
+
+### Goal
+
+Second batch of the upstream survey: the CORS hardening (biggest of the
+"bigger features", done first per the agreed order) plus getting the
+in-browser self-test runnable in this environment.
+
+### Browser test setup
+
+- Installed Playwright + Chromium (headless shell 153) in `/tmp/opencode/venv`
+  with OS deps via `playwright install-deps`.
+- Self-test served over HTTP (ES modules need a real origin):
+  `ui_dist` symlinked as `/tmp/opencode/serve/ui`, `python3 -m http.server`.
+- Result: **113/113 passed — all green**, no page errors. This is the first
+  real-browser verification of the merged PR #25 (107 tests) plus this
+  session's 6 M1/L2 tests.
+
+### CORS port (upstream `769dbac`, + `6c36b88` follow-up)
+
+Conflicts/adaptations (fork has no tailcat, no kubeswap, no global
+concurrency limit yet, and keeps its own pricing block):
+
+- `cmd/kubeswap/serve.go` hunk dropped (`git rm`) — kubeswap not ported yet.
+- `cmd/vllm-wrapper/main.go`: kept the fork's custom transport, took
+  upstream's updated comment (headers now stripped by llama-swap).
+- `config-schema.json`: kept fork `pricing` + added upstream `security`.
+- `docs/config.example.yaml`: added `security` example, dropped the tailcat
+  example.
+- `internal/config/config.go`: added `Security SecurityConfig`, dropped
+  upstream's `tailcatEnabled` runtime state.
+- `internal/docagent/golden_test.go`: expected-sections list gained
+  `security` only (not `tailcat`/`globalConcurrencyLimit`).
+- `internal/server/auth.go`: old hardcoded permissive `CreateCORSMiddleware`
+  and its sanitize helpers deleted — replaced by new `cors.go` (added clean).
+- `internal/server/server_test.go`: ported upstream's
+  `newTestServerWithConfig` helper (adapted to the fork's `store.New`),
+  dropped the obsolete `TestServer_CORSPreflight`.
+- `6c36b88` is an ancestor of `769dbac` upstream; its auth.go fix is already
+  superseded by `cors.go`, but its `api.go`/`api_test.go` hunks still matter:
+  the `/api/tags` Origin echo was removed (redundant in permissive mode and a
+  bypass of `allowedOrigins` in restrictive mode), with the actual-response
+  regression test added.
+
+### Security-gate cleanup (`aidc-scan --all`)
+
+Pre-existing findings surfaced by the first full-repo scan, fixed:
+
+- `internal/server/captures_test.go`: `math/rand` → inline deterministic
+  xorshift64 (keeps reproducibility, drops the flagged import).
+- `docker/build-container.sh`: quoted `cd`, loop-based ARCH check (SC2199/
+  SC2076/SC2145), `local`/assign separation (SC2155).
+- `scripts/uninstall.sh`: quoted `command -v` instead of unquoted `which`.
+
+### Verification
+
+```
+go test -short -count=1 ./internal/...   # all ok
+make test-dev                            # ok; staticcheck: same 5 pre-existing
+                                         # findings (internal/perf, server.go,
+                                         # swaputil) — untouched by this session
+make gosec                               # 0 issues
+aidc-scan --all                          # all scanners clean
+__selftest.html (headless Chromium)      # 113/113, no page errors
+```
+
+### Notes
+
+- staticcheck's 5 pre-existing findings remain open and predate this session
+  (`d3dkmt_types.go` unused fields, `monitor_unix.go` `readSysfs`,
+  `server.go:283` TrimPrefix, `swaputil/http.go` unused assignment) — flagged
+  for a separate decision, since the perf code is Windows/sysfs-specific.
+- Upstream also strips CORS headers in the peer proxy and kubeswap; the peer
+  hunk landed as part of `769dbac` (staged file `internal/router/peer.go`).
+
+---
+
+## 2026-09-24 — Upstream ports: forwarded headers, totals-after-prune, TTL, zstd, tabbyAPI
+
+### Goal
+
+Pull five small, high-value upstream fixes into the fork (all Go-side, no UI
+impact), per the 2026-09-24 upstream survey (fork main was 37 commits behind
+`mostlygeek/llama-swap`).
+
+### What was picked
+
+| Upstream commit | PR | Change |
+|---|---|---|
+| `8fa8589` | #1104 | tabbyAPI usage extraction (`prompt_tokens_per_sec`, `completion_tokens_per_sec`, `total_time`) |
+| `0e1f797` | #1123 | single bounded shared zstd encoder replaces per-core sync.Pool |
+| `21bc145` | #1095 | TTL idle window starts when the model is ready, with regression test |
+| `2edad4a` | #1130 | `X-Forwarded-For`/`X-Real-IP` support; activity `src` source attribution |
+| `96e6f94` | #1136 | stats `TotalRequests` = `MAX(id)` so totals survive pruning |
+
+### Adaptations (upstream base differed)
+
+- `2edad4a` assumed upstream's tailcat and store-split (`internal/store/sqlite/
+  activity.go`) work, which the fork has not picked. Adaptations:
+  - `activitySource()` in `internal/server/metrics.go` was added **without**
+    the `tailcat.SourceFromContext` preference (fork has no tailcat); the
+    forwarded-header fallback and `ip:` fallback are verbatim upstream.
+  - `forwardedIP()` + `clientIP()` refactor landed cleanly in
+    `internal/server/log.go` from the same commit.
+  - Persistence was added for the fork's single-file store: `ActivityLogEntry.Src`
+    (`json:"src"`), `src` in the activity INSERT/SELECT and sort whitelist
+    (`internal/store/store.go`), plus new goose migration
+    `00003_activity_src.sql` (`ALTER TABLE activity ADD COLUMN src TEXT NOT
+    NULL DEFAULT ''`). Upstream's optional `idx_activity_src_created_id`
+    index was skipped — the fork has no src-filtered queries yet.
+- `96e6f94` only existed as a diff against upstream's split store; the
+  one-line change (`COUNT(*)` → `COALESCE(MAX(id), 0)`) and its regression
+  assertions were applied by hand to `ActivityStats` and
+  `TestStore_PruneActivity` in the fork's layout, with a comment explaining
+  the MAX(id) rationale.
+
+### Verification
+
+```
+go test -short -count=1 ./internal/...   # all packages ok
+make test-dev                            # go test + staticcheck
+make gosec                               # 0 issues (GOOS linux/darwin/windows)
+aidc-scan                                # gitleaks clean; semgrep clean on the UI half earlier
+```
+
+- staticcheck reports 5 findings, all verified pre-existing on `main`
+  (`internal/perf`, `internal/server/server.go:283`, `internal/swaputil`):
+  none are in files touched by this session.
+- `2edad4a`'s `activitySource`/forwarded-header tests pass unmodified against
+  the no-tailcat adaptation.
+- The fork's `src` persistence is covered by existing store round-trip tests
+  via `InsertActivity`/`ListActivity` and by `TestStore_PruneActivity` for the
+  totals change.
+
+### Notes
+
+- `src` values are not yet displayed in the Activity UI; the column is in the
+  API payload (`src` JSON key) and sortable. UI display can ride along with
+  the upcoming UI-porting round.
+- `aidc-scan` scoped run found nothing after commits; it scopes to a dirty
+  tree, so the Go half was verified by `make gosec` + gitleaks instead.
+
+---
+
+## 2026-09-24 — Parts view: Responses-API function items and CJK-aware token estimates
+
+### Goal
+
+Follow-ups from the code review of PR #25 (parts view):
+
+- **M1** — Responses-API `input[]` items of type `function_call` and
+  `function_call_output` carry neither `role` nor `content`, so
+  `splitRequestParts()` silently dropped them, despite responses-API support
+  being a headline claim.
+- **L2** — the token estimate charged every character at chars ÷ 4, which
+  under-counts CJK text roughly 4x (CJK tokenizes at close to one token per
+  character).
+
+### How
+
+`internal/server/ui_dist/js/components/captureDialog.js`:
+
+- The message loop gained two early-return branches before the role-based
+  handling: `msg.type === "function_call"` pushes a `tool_call` part with the
+  decoded arguments (`prettyArgs(msg.arguments)`, label carrying the call
+  name); `msg.type === "function_call_output"` pushes a `tool`-role message
+  part from `contentText(msg.output)` with the `call_id` in the label. Content
+  arrays (`[{type:"output_text",...}]`) flatten via the existing `contentText`.
+- `estimateTokens()` now counts CJK characters (Han, Hiragana, Katakana,
+  Hangul via a `\p{Script=...}` regex) at one token each and applies chars ÷ 4
+  to the remainder; empty text stays 0 and any non-empty text stays ≥ 1. The
+  totals note now reads "≈1 per CJK char, other chars ÷ 4".
+
+### Verification
+
+- No Node/Chromium available in this environment, so the changed algorithms
+  were verified via a faithful Python transliteration of `estimateTokens` /
+  `splitRequestParts` run against the new self-test assertions — all passed
+  (CJK rates, mixed CJK/latin, both function-item branches, content-array
+  output, request-order preservation, plus regressions for the pre-existing
+  request shapes and `null` returns).
+- `internal/server/ui_dist/__selftest.html` gained 6 tests (2 CJK estimate,
+  4 function-item) — to be exercised by the next headless browser run of the
+  self-test harness.
+- `make test` passes (UI assets embedded and served unchanged; no Go code
+  changed).
+
+### Notes
+
+- `estimateTokens` iterates by code point, so astral-plane characters count as
+  one CJK/non-CJK unit while `s.length` counts UTF-16 units — the estimate
+  slightly over-counts emoji-heavy text, which is acceptable for a labelled
+  approximation.
+
+---
+
+## 2026-09-21 — Activity capture dialog: request-body parts view
+
+### Goal
+
+Issue #24 ("Activity View enhacement"): when a request contains multiple parts,
+show them separately — system prompt, user prompt, tool calls — with a word
+count and, if possible, a token count for each.
+
+### Why
+
+The capture dialog rendered the request body as pretty-printed JSON only, so a
+multi-turn tool-using request had to be read as one blob: the system prompt, the
+individual messages, tool calls and the tool schemas were all mixed together and
+there was no sense of how the prompt budget was spent across them.
+
+### How
+
+`internal/server/ui_dist/js/components/captureDialog.js` — the UI is hand-authored
+ES modules with no build step, so the served files are edited directly:
+
+- `countWords(text)` / `estimateTokens(text)` — words split on whitespace runs;
+  tokens are `max(1, chars ÷ 4)`. There is no tokenizer in the tree (the proxy
+  only forwards `/v1/messages/count_tokens` upstream), so the estimate is
+  labelled as such everywhere it is displayed.
+- `contentText(content)` flattens a `content` value — plain string, array of
+  typed parts (`text`/`input_text`, `image_url`, `input_audio`, `tool_use`,
+  `tool_result`) or arbitrary object — into display text.
+- `splitRequestParts(body)` returns `{parts, totals}` with one entry per
+  readable piece: top-level `system` and `instructions`, one part per
+  `messages[]` item keyed by role, one part per `tool_calls` / legacy
+  `function_call` (arguments JSON-decoded and re-indented), one part per tool
+  result (label carries the `tool_call_id`), a `tools`/`functions` part for the
+  schemas, and the bare `prompt`/`input` of the completions and responses APIs.
+  Returns `null` when the body carries none of these (audio, images,
+  embeddings, rerank), so the parts tab simply does not appear.
+- `requestPartsHTML(parts)` / `requestPartsText(parts)` render the view and the
+  plain-text form used by the dialog's Copy button; all model-supplied text goes
+  through `escapeHtml`.
+- `requestPartsFor(rawBody)` memoizes the parse of the last body so tab switches
+  do not re-parse multi-megabyte prompts.
+- The Request Body tab row becomes `Parts | Pretty | Raw` for such bodies, and
+  `defaultReqTab()` lands multi-part requests on `Parts` (single-part bodies and
+  non-JSON bodies keep the previous pretty/raw behaviour). A stale `parts`
+  selection falls back to `pretty` if the body has no parts.
+
+`internal/server/ui_dist/css/app.css` styles the parts blocks
+(`.capture-parts`, `.capture-part`, role-coloured `.capture-part-role--*`,
+monospaced stats line).
+
+### Commands
+
+```
+make test                                  # go test -short -count=1 ./internal/...
+gofmt -l .                                 # clean
+go vet ./internal/server/                  # clean
+python3 ../verify24_parts_view.py          # headless Chromium checks
+```
+
+### Verification
+
+- `internal/server/ui_dist/__selftest.html` (the repo's in-browser test harness)
+  gained 20 tests over `countWords`/`estimateTokens`/`splitRequestParts`/
+  `requestPartsHTML`/`requestPartsText`, covering every request shape, the
+  tool-call/tool-result labelling, content-array flattening, totals, the
+  no-parts `null` return and HTML escaping. Headless Chromium run:
+  **107/107 passed — all green**.
+- The dialog itself was driven in the same browser session with a synthetic
+  capture (system prompt + user + tool_call + tool result + assistant + tool
+  schema): tabs render `Parts | Pretty | Raw`, the request lands on `Parts`, the
+  six parts carry the expected labels and counts (`6 parts · 189 chars · 30
+  words · ≈49 tokens`), switching to Raw and back preserves the parts, and a
+  single-message body still opens on `Pretty`. No page errors.
+- `make test` (go test -short ./internal/...) passes: the UI is embedded and
+  served unchanged (`TestServer_EmbeddedUIAssets`, `TestServer_ServeUI_*`).
+- No Go code changed, so `make gosec` is unaffected.
+
+### Notes
+
+- Token counts are an approximation by design. Exact per-part counts would need
+  a tokenizer: either a llama.cpp `/tokenize` round-trip per part through a new
+  server-side breakdown endpoint, or a bundled tokenizer in the UI. The estimate
+  is labelled `≈` and the totals line states the formula, so nobody mistakes it
+  for a server-reported number.
+- Empty parts are skipped — an assistant turn that only carries tool calls
+  contributes its tool-call part, not an empty message part — and a body with no
+  recognizable prompt keys returns `null`, so the parts tab stays hidden.
+- Follow-up ideas (not implemented): show the server-reported prompt token count
+  from the activity row next to the estimate, and offer the same breakdown for
+  the response body.
+
+---
+
 ## 2026-09-10 — config: fix TestConfig_LoadWindows after pricing defaults
 
 ### Symptom

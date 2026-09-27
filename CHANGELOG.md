@@ -12,12 +12,70 @@ Long-form entries with full context live in
 
 ### Added
 
+- Models dashboard: model descriptions now start collapsed to their first
+  line with an expandable chevron (expanded state survives the frequent SSE
+  re-renders), and a filter box matches model id, name, alias, and
+  description text — including peer models; a matching peer group name shows
+  the whole group. While filtering, the Profiles/Selectors cards yield the
+  screen to the matches and a no-match empty state names the query. The
+  models table uses a fixed layout so the Load/Unload and State columns stay
+  on screen beside long descriptions, and long URLs wrap instead of forcing
+  a horizontal scrollbar.
+- Playground model pickers on capability-bound tabs (Images, Audio, Speech,
+  Rerank) now list only models that fit the tab by default — a
+  text-generation model no longer clutters the Images tab. A footer toggle
+  shows the full list (with the hidden count) and flips back; tabs without a
+  capability constraint (Chat, Docs) are unchanged.
+- Stats page: usage is now split into two tables — **Active Models** (still
+  present in the running configuration, matched via `/v1/models` plus the
+  live SSE store including aliases) and **Inactive Models** (usage history
+  for models removed or renamed since). Both share sort state; a model
+  removed mid-session moves to Inactive without a reload.
+- Logs page: each log panel gained a persistent "concerns" filter (warning
+  triangle button) that keeps only lines worth escalating — `[WARN]`/
+  `[ERROR]`/`[FATAL]`/`[PANIC]` level tokens, severity words in upstream
+  output (warn/error/fatal/panic/crash/critical/failed/exception/traceback/
+  SIGSEGV/SIGABRT/SIGTERM), and 4xx/5xx access-log statuses. Composes with
+  the existing regex filter.
+- Activity captures: the capture dialog's Request Body gained a **Parts** view
+  that splits a JSON request into separately readable pieces — top-level
+  `system`/`instructions`, every `messages[]` entry by role (including bare
+  Responses-API `function_call` / `function_call_output` input items), each
+  tool call and tool result, and the tool definitions — with per-part
+  character, word and approximate token counts (≈1 token per CJK character,
+  other text chars ÷ 4; the proxy ships no tokenizer, so the number is
+  labelled an estimate). Multi-part requests open on the parts view;
+  single-part bodies keep the pretty JSON view. `Collapse all` / `Expand all`
+  controls sit next to Copy for long contexts, and tool results, tool-call
+  inputs and function outputs that carry JSON are rendered pretty-printed.
 - Port of upstream PR #1075: a `setParams`/`setParamsByID` key ending in `?`
   (e.g. `max_tokens?: 4096`) is set-if-undefined — the value applies only when
   the request does not already carry that parameter, so configs can supply
   defaults without clobbering clients. Works on model and peer filters;
   stripped parameters count as undefined and a hard spelling of the same key
   wins over the `?` form. Backward compatible (fixes upstream #1052).
+- Global concurrency limit: a top-level `globalConcurrencyLimit` caps
+  inference requests served at once across all models combined, independent
+  of per-model limits. Default 0 (no limit); once the cap is reached requests
+  are rejected with HTTP 429 rather than queued. Implemented as middleware at
+  the top of the inference chain, only wired when the limit is > 0
+  (upstream #1086/#1110, commit `41ec321`).
+- Docs Agent `get_config` tool now answers jq queries instead of a dotted
+  path: the agent can request exactly the slice of the running configuration
+  it needs (`.models | keys`, `.models.qwen3`, …) instead of paging through a
+  full dump. Evaluation is bounded by a 5s timeout, a value-count cap, a
+  32 KB result cap, and a heap-growth guard, since `/api/mcp` needs no
+  credentials by default and jq is a real language. The Help agent's system
+  prompt documents the query form (upstream #1087/#1085, commit `a77f107`).
+- Automatic capability discovery (new `internal/capcompat`): when a model
+  becomes ready, llama-swap asks the upstream what it supports — context
+  length, input/output modalities, tools — and caches the result in the
+  sqlite store (new `cache` table), so an unloaded model still advertises its
+  real capabilities in `/v1/models`. Configured `capabilities` always win
+  field-by-field; `capabilities.disableAuto: true` opts a model out.
+  Probes support llama-server, vLLM, and halogen (Strix Halo) upstreams. The
+  activity store gains a general-purpose key/value cache API (upstream
+  #1083/#1105, commit `eeac3e6`).
 - Approximate token-cost estimates on the Stats page. A new top-level
   `pricing:` config section sets the display currency (USD, or INR with a
   configurable `usdToINR` rate, default 95) and default per-million-token
@@ -26,9 +84,37 @@ Long-form entries with full context live in
   `/api/metrics/stats`; the Stats page shows an "Est. Cost" summary tile and a
   sortable per-model column. Cached tokens are deducted from billable input
   and charged at their own rate (the input rate when unset). The UI's Settings
-  page adds per-browser overrides (cost on/off, currency, INR rate, default
-  rates) plus a "Compact large numbers" toggle that compresses Stats-page
-  token/request counts to M/B/T suffixes with exact values on hover.
+   page adds per-browser overrides (cost on/off, currency, INR rate, default
+   rates) plus a "Compact large numbers" toggle that compresses Stats-page
+   token/request counts to M/B/T suffixes with exact values on hover.
+
+### Fixed
+
+- perf sysfs GPU provider (Linux): GPU/VRAM temperature, fan and power
+  charts no longer saw-tooth to zero while a model is busy. On cards that
+  runtime-suspend between generation bursts (observed on Intel Arc B70 /
+  xe) an hwmon pass can fail entirely while the device wakes up, and the
+  poller published the zeroed sample as-is — the live feed alternated
+  `temp 70 / 0 / 70 / 0` mid-generation. Failed passes are now retried once
+  after 100ms (the first read kick-starts the resume), last-known values
+  are carried forward for up to 30s (power only while the card is busy),
+  and the throttle clock advances only on successful passes so failures
+  are retried next tick.
+- perf sysfs GPU provider (Linux): fdinfo records without `drm-pdev`
+  (kernels before ~6.8) were counted on every discovered GPU — on multi-GPU
+  hosts this inflated VRAM/utilisation and marked idle cards active (which
+  then woke them for hwmon reads). Records are now attributed through the
+  render node's sysfs device link, and unattributable records are skipped
+  when more than one GPU is present. Duplicated or fork-inherited DRM fds
+  sharing one `drm-client-id` no longer double-count VRAM. Test suite moved
+  to the repo's `TestSysfs_<case>` naming convention.
+- hw Intel detection: an xpu-smi detail response with an empty BDF no longer
+  discards the device before the listing's BDF fallback can apply;
+  integrated GPUs no longer publish borrowed system RAM as memory capacity;
+  a generic `Intel(R) Graphics [0x…]` device name is replaced by the mapped
+  marketing name from the PCI table (e.g. Arc Pro B60); Battlemage table
+  gains device ID `0xE215`; the absent-tool test no longer depends on the
+  host's installed binaries.
 
 ### Added (selective upstream-PR ports)
 
@@ -47,6 +133,33 @@ Long-form entries with full context live in
   bounded by a 2s timeout so an unresponsive upstream cannot stall startup.
 - Matrix `+undefined` reference: a set can include every model not named by
   any other set expression (upstream PR #1026).
+- Proxy forwarded headers: activity records now carry the client source —
+  `xff:`-prefixed when taken from `X-Forwarded-For`/`X-Real-IP`, otherwise
+  `ip:` + connection address — persisted as `ActivityLogEntry.Src` via a new
+  sqlite migration and accepted as an activity sort key (upstream #1130,
+  commit `2edad4a`).
+- Request totals survive activity pruning: stats `TotalRequests` uses
+  `MAX(id)` instead of `COUNT(*)` so the all-time total stays stable
+  (upstream #1136, commit `96e6f94`).
+- A model's TTL idle window now starts when the process becomes ready, so a
+  positive-TTL model gets its full idle window even before the first request
+  (upstream #1095, commit `21bc145`).
+- The zstd encoder pool is replaced by a single bounded shared encoder,
+  cutting retained memory from ~20 MiB per core to one bounded instance
+  (upstream #1123, commit `0e1f797`).
+- tabbyAPI `usage` extensions (`prompt_tokens_per_sec`,
+  `completion_tokens_per_sec`, `total_time`) are extracted into activity
+  metrics (upstream #1104, commit `8fa8589`).
+- Configurable CORS controls (upstream #1133, commits `769dbac` + follow-up):
+  a new `security.cors` config block — `allowedOrigins`, `allowCredentials`,
+  `allowPrivateNetwork`, `allowedMethods`, `allowedHeaders`,
+  `exposedHeaders`, `maxAge`. Omitting `allowedOrigins` keeps the permissive
+  any-origin default; setting it switches to deny-by-default. CORS headers
+  are only sent when the request carries an `Origin`, and upstream-set CORS
+  headers are stripped from proxied responses so exactly one set reaches the
+  client. Replaces the old hardcoded permissive middleware; the redundant
+  `/api/tags` Origin echo was removed (it would have bypassed the
+  restriction).
 
 ### Changed
 

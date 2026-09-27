@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mostlygeek/llama-swap/internal/capcompat"
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/docagent"
 	"github.com/mostlygeek/llama-swap/internal/event"
@@ -72,6 +73,12 @@ func (s *stubRouter) ProcessLogger(modelID string) (*logmon.Monitor, bool) {
 
 // newTestServer wires a Server with stub routers and a built mux.
 func newTestServer(local router.LocalRouter, peer router.Router) *Server {
+	return newTestServerWithConfig(config.Config{}, local, peer)
+}
+
+// newTestServerWithConfig is newTestServer with a caller-supplied config, for
+// tests that exercise config-driven middleware wiring in routes().
+func newTestServerWithConfig(cfg config.Config, local router.LocalRouter, peer router.Router) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	proxylog := logmon.NewWriter(io.Discard)
 	st, err := store.New("")
@@ -79,13 +86,14 @@ func newTestServer(local router.LocalRouter, peer router.Router) *Server {
 		panic(err)
 	}
 	s := &Server{
-		cfg:         config.Config{},
+		cfg:         cfg,
 		muxlog:      logmon.NewWriter(io.Discard),
 		proxylog:    proxylog,
 		upstreamlog: logmon.NewWriter(io.Discard),
 		inflight:    newInflightTracker(),
 		metrics:     newMetricsMonitor(proxylog, 0, 0, st),
 		store:       st,
+		capcompat:   capcompat.New(st.Cache(), proxylog),
 		local:       local,
 		peer:        peer,
 		shutdownCtx: ctx,
@@ -259,6 +267,59 @@ func TestServer_RouteToLocalModel_PrefersLocalCollision(t *testing.T) {
 	}
 }
 
+func TestServer_GlobalConcurrencyLimit(t *testing.T) {
+	t.Run("zero disables the limiter, unbounded requests pass", func(t *testing.T) {
+		s := newTestServerWithConfig(
+			config.Config{GlobalConcurrencyLimit: 0},
+			newStubRouter([]string{"local-model"}, "ok"),
+			newStubRouter(nil, ""),
+		)
+
+		for i := 0; i < 5; i++ {
+			w := httptest.NewRecorder()
+			s.ServeHTTP(w, chatRequest("local-model"))
+			if w.Code != http.StatusOK {
+				t.Fatalf("request %d: status=%d body=%q", i, w.Code, w.Body.String())
+			}
+		}
+	})
+
+	t.Run("rejects requests beyond the configured limit with 429", func(t *testing.T) {
+		release := make(chan struct{})
+		started := make(chan struct{})
+		blocking := newStubRouter([]string{"local-model"}, "")
+		blocking.serveHTTP = func(w http.ResponseWriter, r *http.Request) {
+			close(started)
+			<-release
+			w.WriteHeader(http.StatusOK)
+		}
+
+		s := newTestServerWithConfig(
+			config.Config{GlobalConcurrencyLimit: 1},
+			blocking,
+			newStubRouter(nil, ""),
+		)
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			w := httptest.NewRecorder()
+			s.ServeHTTP(w, chatRequest("local-model"))
+		}()
+
+		<-started
+
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, chatRequest("local-model"))
+		if w.Code != http.StatusTooManyRequests {
+			t.Fatalf("status=%d body=%q want 429", w.Code, w.Body.String())
+		}
+
+		close(release)
+		<-done
+	})
+}
+
 func TestServer_UnknownModelReturns404(t *testing.T) {
 	s := newTestServer(
 		newStubRouter([]string{"local-model"}, ""),
@@ -330,18 +391,22 @@ func TestServer_Health(t *testing.T) {
 	}
 }
 
-func TestServer_CORSPreflight(t *testing.T) {
-	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
+// A passing preflight does not let a browser read the response; the actual
+// response needs the header too. Without it a cross-origin GET /running is
+// fetched and then discarded, which is what broke browser dashboards.
+func TestServer_CORSActualResponse(t *testing.T) {
+	s := newTestServer(newStubRouter([]string{"m1"}, ""), newStubRouter(nil, ""))
 
-	req := httptest.NewRequest(http.MethodOptions, "/v1/chat/completions", nil)
+	req := httptest.NewRequest(http.MethodGet, "/running", nil)
+	req.Header.Set("Origin", "http://example.com")
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("status=%d want 204", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200", w.Code)
 	}
 	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "*" {
-		t.Errorf("Access-Control-Allow-Origin=%q want *", got)
+		t.Errorf("Access-Control-Allow-Origin=%q want * on the actual response", got)
 	}
 }
 

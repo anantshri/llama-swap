@@ -46,7 +46,7 @@ export function RerankInterface() {
   const content = root.querySelector("[data-content]");
   const bottom = root.querySelector("[data-bottom]");
 
-  const modelSel = ModelSelector({ value: selectedModel, placeholder: "Select a rerank model..." });
+  const modelSel = ModelSelector({ value: selectedModel, placeholder: "Select a rerank model...", match: (m) => !!m.capabilities?.reranker });
   toolbar.appendChild(modelSel.el);
 
   const queryInput = el(`<input type="text" class="pg-input pg-rerank-query" placeholder="Query..." data-query>`);

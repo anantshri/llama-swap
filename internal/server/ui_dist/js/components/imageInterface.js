@@ -70,7 +70,7 @@ export function ImageInterface() {
   const promptRowEl = root.querySelector("[data-prompt-row]");
 
   // Model selector + API mode + size + (optional) Settings toggle
-  const modelSel = ModelSelector({ value: selectedModel, placeholder: "Select an image model...", disabled: false });
+  const modelSel = ModelSelector({ value: selectedModel, placeholder: "Select an image model...", disabled: false, match: (m) => (m.architecture?.output_modalities ?? []).includes("image") || !!(m.capabilities?.image_generation ?? m.capabilities?.image_to_image) });
   toolbarEl.appendChild(modelSel.el);
 
   const modeSel = el(`

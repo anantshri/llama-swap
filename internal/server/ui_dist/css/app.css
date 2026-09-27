@@ -197,8 +197,18 @@ table td { padding: 0.5rem; }
 .models-title { margin: 0; }
 .models-actions { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
 .models-actions-row { display: flex; gap: 0.5rem; }
+.models-search {
+  width: 100%; margin-top: 0.625rem; font-size: 0.875rem; padding: 0.375rem 0.625rem;
+  border: 1px solid var(--color-card-border); border-radius: 0.375rem;
+  background: var(--color-background); color: var(--color-txtmain);
+}
+.models-search:focus { outline: 1px solid var(--color-primary); }
 .models-body { flex: 1; overflow-y: auto; }
-.models-table { width: 100%; border-collapse: collapse; }
+.models-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+/* Fixed layout keeps the action/state columns on screen when the models pane
+   is narrow; widths come from the header cells in table-layout: fixed. */
+.models-table thead th:nth-child(2) { width: 5rem; }
+.models-table thead th:nth-child(3) { width: 6rem; }
 .models-thead { position: sticky; top: 0; z-index: 10; background: var(--color-surface); }
 .models-thead tr { border-bottom: 1px solid var(--color-border); }
 .models-row { border-bottom: 1px solid var(--color-card-border-inner); }
@@ -213,10 +223,29 @@ table td { padding: 0.5rem; }
 .models-row-transition { background: color-mix(in srgb, var(--color-warning) 7%, transparent); }
 .models-row-transition:hover { background: color-mix(in srgb, var(--color-warning) 13%, transparent); }
 .models-row-transition .models-name { box-shadow: inset 3px 0 0 var(--color-warning); }
-.models-name { padding: 0.5rem; }
+.models-name { padding: 0.5rem; overflow-wrap: anywhere; }
 .models-name.model-unlisted { color: var(--color-txtsecondary); }
 .models-link { font-weight: 600; color: var(--color-primary); }
-.model-desc { font-style: italic; margin: 0.125rem 0 0; white-space: pre-line; }
+/* Description is collapsed to its FIRST line by default (line-clamp over
+   pre-line keeps the original newlines, so the clamp shows exactly one
+   line); .model-desc--open shows the full pre-formatted text. */
+.model-desc { font-style: italic; margin: 0.125rem 0 0; display: flex; align-items: baseline; gap: 0.125rem; min-width: 0; cursor: pointer; }
+.model-desc--open { cursor: default; }
+.model-desc-text {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1;
+  overflow: hidden; white-space: pre-line; min-width: 0;
+}
+.model-desc--open .model-desc-text { -webkit-line-clamp: unset; }
+.model-desc-toggle { flex-shrink: 0; line-height: 1; padding: 0 0.125rem; color: var(--color-txtsecondary); }
+.model-desc-toggle svg { display: block; transition: transform 0.15s; }
+.model-desc-toggle:hover { color: var(--color-txtmain); }
+.model-desc--open .model-desc-toggle svg { transform: rotate(90deg); }
+
+/* Stats page: one table for configured models, one for removed ones. */
+.stats-table-title { margin: 0 0 0.5rem; font-size: 1rem; }
+.stats-table-count { font-weight: 400; font-size: 0.875rem; }
+.stats-table-hint { margin: 0 0 0.5rem; font-size: 0.8125rem; }
+.logpanel-btn .logpanel-btn-on { color: var(--color-warning); }
 .model-aliases { font-size: 0.75rem; color: var(--color-txtsecondary); margin: 0.125rem 0 0; }
 .models-action { width: 5rem; padding: 0.5rem; text-align: right; }
 .models-state { width: 6rem; padding: 0.5rem; text-align: center; }
@@ -431,6 +460,28 @@ table td { padding: 0.5rem; }
 .capture-empty-title { font-size: 1.125rem; color: var(--color-txtsecondary); }
 .capture-empty-sub { font-size: 0.875rem; color: var(--color-txtsecondary); }
 
+/* Request-body parts view (system prompt / messages / tool calls) */
+.capture-parts { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.375rem; }
+.capture-parts-totals { font-size: 0.75rem; color: var(--color-txtsecondary); font-variant-numeric: tabular-nums; }
+.capture-parts-note { opacity: 0.75; }
+.capture-part { background: var(--color-background); border: 1px solid var(--color-card-border); border-radius: 0.25rem; overflow: hidden; }
+.capture-part-head {
+  display: flex; align-items: center; gap: 0.5rem; padding: 0.375rem 0.625rem;
+  font-size: 0.75rem; cursor: pointer; list-style: none; user-select: none;
+}
+.capture-part-head::-webkit-details-marker { display: none; }
+.capture-part-role { font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+.capture-part-role--system { color: var(--color-warning); }
+.capture-part-role--user { color: var(--color-primary); }
+.capture-part-role--assistant { color: var(--color-success); }
+.capture-part-role--tool,
+.capture-part-role--tools,
+.capture-part-role--prompt,
+.capture-part-role--other { color: var(--color-txtsecondary); }
+.capture-part-label { font-family: ui-monospace, monospace; color: var(--color-txtsecondary); }
+.capture-part-stats { margin-left: auto; color: var(--color-txtsecondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.capture-part-body { border-top: 1px solid var(--color-card-border-inner); max-height: 24rem; overflow: auto; }
+
 /* ---- Performance page ---- */
 .page-performance { display: flex; flex-direction: column; gap: 1.5rem; }
 .perf-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; }
@@ -535,6 +586,34 @@ table td { padding: 0.5rem; }
 .pg-image { display: flex; flex-direction: column; height: 100%; gap: 1rem; }
 .pg-image-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; flex-shrink: 0; }
 .pg-model-select { min-width: 0; flex: 1 1 12rem; }
+
+/* Searchable model combobox (upstream #1153) */
+.pg-model-combo { position: relative; min-width: 0; flex: 1 1 12rem; display: flex; }
+.pg-model-combo .pg-model-input { width: 100%; min-width: 0; }
+.pg-model-panel {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 40;
+  max-height: 18rem; overflow: auto; margin-top: 0.25rem;
+  background: var(--color-background); border: 1px solid var(--color-card-border);
+  border-radius: 0.375rem; box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+}
+.pg-model-group { padding: 0.375rem 0.625rem 0.125rem; font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--color-txtsecondary); }
+.pg-model-option {
+  display: flex; align-items: center; gap: 0.375rem; width: 100%; text-align: left;
+  padding: 0.375rem 0.625rem; border: none; background: none; cursor: pointer;
+  color: var(--color-txtmain); font-size: 0.875rem;
+}
+.pg-model-option:hover, .pg-model-option.hl { background: color-mix(in srgb, var(--color-txtmain) 10%, transparent); }
+.pg-model-option.sel .pg-model-option-value { font-weight: 600; }
+.pg-model-option.alias .pg-model-option-value { padding-left: 1.125rem; color: var(--color-txtsecondary); }
+.pg-model-option-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pg-model-option-check { color: var(--color-success); }
+.pg-model-option-fit { color: var(--color-primary); font-size: 0.6875rem; }
+.pg-model-empty { padding: 0.5rem 0.625rem; font-size: 0.875rem; color: var(--color-txtsecondary); }
+.pg-model-all {
+  display: block; width: 100%; text-align: left; padding: 0.5rem 0.625rem;
+  font-size: 0.75rem; color: var(--color-primary); border-top: 1px solid var(--color-card-border-inner);
+}
+.pg-model-all:hover { background: color-mix(in srgb, var(--color-txtmain) 10%, transparent); }
 .pg-image-stage { flex: 1; overflow: auto; }
 .pg-image-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; padding: 0.5rem; width: 100%; height: 100%; overflow: auto; }
 .pg-image-cell { position: relative; display: flex; align-items: center; justify-content: center; }

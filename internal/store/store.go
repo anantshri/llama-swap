@@ -37,6 +37,7 @@ type ActivityLogEntry struct {
 	Timestamp       time.Time         `json:"timestamp"`
 	Model           string            `json:"model"`
 	ReqPath         string            `json:"req_path"`
+	Src             string            `json:"src"`
 	RespContentType string            `json:"resp_content_type"`
 	RespStatusCode  int               `json:"resp_status_code"`
 	Tokens          TokenMetrics      `json:"tokens"`
@@ -71,6 +72,7 @@ type ActivityQuery struct {
 var activitySortColumns = map[string]string{
 	"id":                "id",
 	"time":              "ts_created",
+	"src":               "src",
 	"model":             "model_id",
 	"req_path":          "req_path",
 	"resp_status_code":  "resp_status_code",
@@ -184,7 +186,14 @@ func New(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &Store{db: db, inMemory: !diskFile}, nil
+	// Drop cache rows that expired while the process was not running, so a
+	// stale entry never serves for a model that just came back.
+	st := &Store{db: db, inMemory: !diskFile}
+	if err := st.Cache().Prune(ctx); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("prune cache on start: %w", err)
+	}
+	return st, nil
 }
 
 func runMigrations(ctx context.Context, db *sql.DB) error {
@@ -209,6 +218,119 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// Cache returns the repository for cached key/blob records. The Store
+// implements CacheRepository itself over the cache table.
+func (s *Store) Cache() CacheRepository {
+	return s
+}
+
+// beforeExpiryDelete runs between reading a row that turned out to be expired
+// and deleting it. It is nil outside tests, and exists so the interleaving the
+// conditional delete guards against can be produced on demand rather than
+// waited for: the gap between those two statements is a few instructions wide
+// and a concurrent writer almost never lands in it by chance.
+var beforeExpiryDelete func()
+
+// Get returns the entry stored under key. found is false when no entry exists
+// or the entry has expired; an expired entry is deleted as a side effect of
+// the read.
+//
+// Expiry is evaluated against the read row in Go and re-checked in the DELETE
+// so a Set landing between the two statements is never discarded: the delete
+// repeats the expiry test in SQL against the same clock rather than deleting
+// by key.
+func (s *Store) Get(ctx context.Context, key string) (CacheEntry, bool, error) {
+	var (
+		data []byte
+		ttl  int64
+		ts   int64
+	)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT data, ttl_seconds, ts_created FROM cache WHERE key = ?`,
+		key,
+	).Scan(&data, &ttl, &ts)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CacheEntry{}, false, nil
+	}
+	if err != nil {
+		return CacheEntry{}, false, fmt.Errorf("get cache: %w", err)
+	}
+
+	now := time.Now()
+	entry := CacheEntry{
+		Key:       key,
+		Data:      data,
+		TTL:       time.Duration(ttl) * time.Second,
+		Timestamp: time.Unix(ts, 0),
+	}
+	if entry.Expired(now) {
+		if beforeExpiryDelete != nil {
+			beforeExpiryDelete()
+		}
+		// Drop it now so a key that is never written again does not linger
+		// until the next Prune.
+		if _, err := s.db.ExecContext(ctx, `
+			DELETE FROM cache
+			WHERE key = ? AND ttl_seconds > 0 AND ts_created + ttl_seconds < ?`,
+			key, now.Unix(),
+		); err != nil {
+			return CacheEntry{}, false, fmt.Errorf("delete expired cache: %w", err)
+		}
+		return CacheEntry{}, false, nil
+	}
+	return entry, true, nil
+}
+
+// Set inserts the entry, replacing any entry already stored under the same
+// key. A zero Timestamp is replaced with the current time.
+func (s *Store) Set(ctx context.Context, entry CacheEntry) error {
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = time.Now()
+	}
+	// ttl_seconds is whole seconds, and 0 means "never expires". Rounding a
+	// positive TTL down would turn anything under a second into a permanent
+	// row, so round up instead: a positive TTL always expires.
+	ttl := int64(0)
+	if entry.TTL > 0 {
+		ttl = int64((entry.TTL + time.Second - 1) / time.Second)
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO cache (key, data, ttl_seconds, ts_created)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET
+			data = excluded.data,
+			ttl_seconds = excluded.ttl_seconds,
+			ts_created = excluded.ts_created`,
+		entry.Key, entry.Data, ttl, entry.Timestamp.Unix(),
+	)
+	if err != nil {
+		return fmt.Errorf("set cache: %w", err)
+	}
+	return nil
+}
+
+// Delete removes the entry stored under key. Deleting a key that is not
+// present is not an error.
+func (s *Store) Delete(ctx context.Context, key string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM cache WHERE key = ?`, key); err != nil {
+		return fmt.Errorf("delete cache: %w", err)
+	}
+	return nil
+}
+
+// Prune deletes every expired entry. Entries with no TTL are kept.
+func (s *Store) Prune(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM cache
+		WHERE ttl_seconds > 0 AND ts_created + ttl_seconds < ?`,
+		time.Now().Unix(),
+	)
+	if err != nil {
+		return fmt.Errorf("prune cache: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) InsertActivity(ctx context.Context, entry ActivityLogEntry) (ActivityLogEntry, error) {
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now()
@@ -220,11 +342,12 @@ func (s *Store) InsertActivity(ctx context.Context, entry ActivityLogEntry) (Act
 
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO activity (
-			ts_created, model_id, req_path, resp_content_type, resp_status_code,
+			ts_created, src, model_id, req_path, resp_content_type, resp_status_code,
 			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens, output_tokens,
 			prompt_per_second, tokens_per_second, duration_ms, error_msg, metadata_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.Timestamp.Unix(),
+		entry.Src,
 		entry.Model,
 		entry.ReqPath,
 		entry.RespContentType,
@@ -266,7 +389,7 @@ func (s *Store) ListActivity(ctx context.Context, query ActivityQuery) (Activity
 	// no user input is concatenated into the SQL text.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
-			id, ts_created, model_id, req_path, resp_content_type, resp_status_code,
+			id, ts_created, src, model_id, req_path, resp_content_type, resp_status_code,
 			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens, output_tokens,
 			prompt_per_second, tokens_per_second, duration_ms, error_msg, metadata_json
 		FROM activity`+where+activityOrderBy(query)+`
@@ -305,11 +428,13 @@ func (s *Store) ActivityStats(ctx context.Context, query ActivityStatsQuery) (Ac
 		filter.Models = []string{model}
 	}
 	where, args := activityWhere(filter)
+	// TotalRequests is MAX(id), not COUNT(*): pruning deletes old rows, and
+	// the monotonic id keeps the all-time request total stable across prunes.
 	// #nosec G202 -- `where` uses ? placeholders bound via args; no user input
 	// is concatenated into the SQL text.
 	row := s.db.QueryRowContext(ctx, `
 		SELECT
-			COUNT(*),
+			COALESCE(MAX(id), 0),
 			COALESCE(SUM(input_tokens), 0),
 			COALESCE(SUM(output_tokens), 0),
 			COALESCE(SUM(CASE WHEN cache_tokens > 0 THEN cache_tokens ELSE 0 END), 0)
@@ -708,6 +833,7 @@ func scanActivity(scanner activityScanner) (ActivityLogEntry, error) {
 	if err := scanner.Scan(
 		&entry.ID,
 		&ts,
+		&entry.Src,
 		&entry.Model,
 		&entry.ReqPath,
 		&entry.RespContentType,

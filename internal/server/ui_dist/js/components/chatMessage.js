@@ -127,7 +127,7 @@ function reconcileSettled(container, blocks) {
 }
 
 export function ChatMessage(initial) {
-  let props = { reasoning_content: "", reasoningTimeMs: 0, isStreaming: false, isReasoning: false, ...initial };
+  let props = { reasoning_content: "", reasoningTimeMs: 0, isStreaming: false, isReasoning: false, statsText: "", ...initial };
   let showReasoning = false;
   let showRaw = false;
   let isEditing = false;
@@ -152,6 +152,7 @@ export function ChatMessage(initial) {
           <span class="chat-cursor" data-cursor style="display:none"></span>
         </div>
         <div class="chat-actions" data-actions style="display:none"></div>
+        <div class="chat-msg-stats" data-stats style="display:none"></div>
       </div>`;
     proseDisconnect = codeBlockCopy(root.querySelector("[data-prose]"));
 
@@ -275,7 +276,18 @@ export function ChatMessage(initial) {
     renderReasoning();
     renderImages();
     renderProse();
+    renderStats();
     renderActions();
+  }
+
+  // Live and per-turn generation stats (tok/s, prompt timing); the text is
+  // formatted by the caller, here it is only displayed.
+  function renderStats() {
+    const host = root.querySelector("[data-stats]");
+    if (!host) return;
+    const text = props.statsText || "";
+    host.style.display = text ? "" : "none";
+    host.textContent = text;
   }
 
   // ===== user / system =====
@@ -355,7 +367,7 @@ export function ChatMessage(initial) {
   return {
     el: root,
     update(next) {
-      props = { reasoning_content: "", reasoningTimeMs: 0, isStreaming: false, isReasoning: false, ...next };
+      props = { reasoning_content: "", reasoningTimeMs: 0, isStreaming: false, isReasoning: false, statsText: "", ...next };
       if (props.role === "assistant") updateAssistant();
       else renderUser();
     },

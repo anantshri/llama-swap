@@ -10,6 +10,7 @@ require (
 	github.com/fxamacker/cbor/v2 v2.9.1
 	github.com/gin-gonic/gin v1.10.0
 	github.com/google/jsonschema-go v0.4.3
+	github.com/itchyny/gojq v0.12.19
 	github.com/klauspost/compress v1.18.5
 	github.com/pressly/goose/v3 v3.27.2
 	github.com/shirou/gopsutil/v4 v4.26.4
@@ -17,6 +18,7 @@ require (
 	github.com/tidwall/gjson v1.18.0
 	github.com/tidwall/sjson v1.2.5
 	github.com/yusufpapurcu/wmi v1.2.4
+	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.53.0
@@ -47,6 +49,7 @@ require (
 	github.com/go-playground/validator/v10 v10.20.0 // indirect
 	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/itchyny/timefmt-go v0.1.8 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.7 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
@@ -80,7 +83,6 @@ require (
 	golang.org/x/arch v0.8.0 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
-	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	modernc.org/libc v1.73.4 // indirect

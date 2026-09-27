@@ -169,8 +169,8 @@ func TestDocs_RealConfigExample_SectionKeys(t *testing.T) {
 		"healthCheckTimeout", "logLevel", "logTimeFormat", "logToStdout",
 		"metricsMaxInMemory", "captureBuffer", "ui", "performance", "startPort",
 		"sendLoadingState", "includeAliasesInList", "globalTTL", "unloadTimeout",
-		"macros", "apiKeys", "upstream", "pricing", "profiles", "selectors", "models",
-		"hooks", "routing", "peers",
+		"macros", "apiKeys", "security", "upstream", "pricing", "globalConcurrencyLimit",
+		"profiles", "selectors", "models", "hooks", "routing", "peers",
 	}
 
 	for _, key := range want {

@@ -102,9 +102,11 @@ cap would break the large audio/image uploads this proxy must forward.
 
 ## G710 — open redirect · 2 sites · MEDIUM
 
-**Verdict: false positive.** `internal/server/api.go` issues relative,
-same-origin redirects with fixed `/comfyui/` and `/upstream/` prefixes; only the
-query string is carried over and the host is never user-controlled.
+**Verdict: false positive.** `internal/server/comfyui.go` (moved from
+`internal/server/api.go` by the upstream #1145 port) and
+`internal/server/api.go` issue relative, same-origin redirects with fixed
+`/comfyui/` and `/upstream/` prefixes; only the query string is carried over
+and the host is never user-controlled.
 
 ## G118 — goroutine uses context.Background · 1 site · MEDIUM
 

@@ -21,7 +21,7 @@ func TestIntelGPU_DiscreteWithModel(t *testing.T) {
 
 func TestIntelGPU_BattlemageArchOnly(t *testing.T) {
 	// Known Battlemage die IDs without a resolved marketing model.
-	for _, id := range []uint16{0xE202, 0xE209, 0xE20D, 0xE210, 0xE216, 0xE220, 0xE221} {
+	for _, id := range []uint16{0xE202, 0xE209, 0xE20D, 0xE210, 0xE215, 0xE216, 0xE220, 0xE221} {
 		got, ok := intelGPU(id)
 		if !ok {
 			t.Fatalf("intelGPU(%#x) not found", id)

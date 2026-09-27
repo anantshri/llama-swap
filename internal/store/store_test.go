@@ -526,6 +526,22 @@ func TestStore_PruneActivity(t *testing.T) {
 	if page.Data[0].ID != 5 || page.Data[1].ID != 4 {
 		t.Fatalf("kept IDs = %+v", page.Data)
 	}
+	// Request totals survive pruning: MAX(id) stays at the last inserted id
+	// even though rows were deleted (upstream #1136).
+	stats, err := store.ActivityStats(ctx, ActivityStatsQuery{})
+	if err != nil {
+		t.Fatalf("ActivityStats: %v", err)
+	}
+	if stats.TotalRequests != 5 {
+		t.Fatalf("total requests after prune = %d, want 5", stats.TotalRequests)
+	}
+	modelStats, err := store.ActivityStats(ctx, ActivityStatsQuery{Model: "m"})
+	if err != nil {
+		t.Fatalf("model ActivityStats: %v", err)
+	}
+	if modelStats.TotalRequests != 5 {
+		t.Fatalf("model total requests after prune = %d, want 5", modelStats.TotalRequests)
+	}
 	ids, err := store.PinnedCaptureIDs(ctx)
 	if err != nil {
 		t.Fatalf("PinnedCaptureIDs: %v", err)

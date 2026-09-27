@@ -123,6 +123,21 @@ func (mp *metricsMonitor) Close() error {
 	return nil
 }
 
+// activitySource returns connection metadata for activity records. It
+// prefers the X-Forwarded-For/X-Real-IP headers (prefixed with "xff:" since
+// a proxy header is client-supplied and can be spoofed), and finally the raw
+// connection address.
+func activitySource(r *http.Request) string {
+	if ip, ok := forwardedIP(r); ok {
+		return "xff:" + ip
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	return "ip:" + host
+}
+
 // record parses a completed response body and stores/emits an activity entry.
 // Successful requests store a zstd+CBOR capture (when enabled) with cf
 // controlling which parts are retained. Failed (non-200) requests capture the
@@ -138,6 +153,7 @@ func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *resp
 		RespStatusCode:  recorder.Status(),
 		DurationMs:      int(time.Since(recorder.StartTime()).Milliseconds()),
 	}
+	tm.Src = activitySource(r)
 
 	if ctxData, ok := swaputil.ReadContext(r.Context()); ok && len(ctxData.Metadata) > 0 {
 		tm.Metadata = make(map[string]string, len(ctxData.Metadata))
@@ -384,6 +400,7 @@ func processStreamingResponse(modelID string, start time.Time, body []byte) (Act
 		inputTokens, outputTokens int64
 		cachedTokens              int64 = -1
 		hasAny                    bool
+		usage                     gjson.Result
 		timings                   gjson.Result
 		responseMetrics           gjson.Result
 	)
@@ -432,6 +449,9 @@ func processStreamingResponse(modelID string, start time.Time, body []byte) (Act
 			if c >= 0 {
 				cachedTokens = c
 			}
+			// Remember the last usage block so buildMetrics can read the
+			// TabbyAPI rates it embeds there.
+			usage = u
 		}
 		if t := parsed.Get("timings"); t.Exists() {
 			timings = t
@@ -447,24 +467,43 @@ func processStreamingResponse(modelID string, start time.Time, body []byte) (Act
 		return ActivityLogEntry{}, fmt.Errorf("no valid JSON data found in stream")
 	}
 
-	return buildMetrics(modelID, start, inputTokens, outputTokens, cachedTokens, timings, responseMetrics), nil
+	return buildMetrics(modelID, start, inputTokens, outputTokens, cachedTokens, usage, timings, responseMetrics), nil
 }
 
 func parseMetrics(modelID string, start time.Time, usage, timings, responseMetrics gjson.Result) (ActivityLogEntry, error) {
 	input, output, cached, _ := extractUsageTokens(usage)
-	return buildMetrics(modelID, start, input, output, cached, timings, responseMetrics), nil
+	return buildMetrics(modelID, start, input, output, cached, usage, timings, responseMetrics), nil
 }
 
 // buildMetrics composes an ActivityLogEntry from accumulated token counts and
 // optional llama-server timings (which override input/output and provide rates)
-// or vLLM response metrics (rates and speculative decoding counters).
-func buildMetrics(modelID string, start time.Time, inputTokens, outputTokens, cachedTokens int64, timings, responseMetrics gjson.Result) ActivityLogEntry {
+// or vLLM response metrics (rates and speculative decoding counters). TabbyAPI
+// embeds its rates and total time in the usage block, which supplies base rates
+// when timings and metrics are absent.
+func buildMetrics(modelID string, start time.Time, inputTokens, outputTokens, cachedTokens int64, usage, timings, responseMetrics gjson.Result) ActivityLogEntry {
 	wallDurationMs := int(time.Since(start).Milliseconds())
 	durationMs := wallDurationMs
 	tokensPerSecond := -1.0
 	promptPerSecond := -1.0
 	draftTokens := -1
 	draftAccTokens := -1
+
+	// TabbyAPI reports prompt/completion rates and total time inside its usage
+	// block. These are base values that llama-server timings and vLLM metrics
+	// override when present.
+	if usage.Exists() {
+		if v := usage.Get("prompt_tokens_per_sec"); v.Exists() {
+			promptPerSecond = v.Float()
+		}
+		if v := usage.Get("completion_tokens_per_sec"); v.Exists() {
+			tokensPerSecond = v.Float()
+		}
+		if v := usage.Get("total_time"); v.Exists() {
+			if totalTimeMs := int(v.Float() * 1000); totalTimeMs > durationMs {
+				durationMs = totalTimeMs
+			}
+		}
+	}
 
 	if timings.Exists() {
 		inputTokens = timings.Get("prompt_n").Int()

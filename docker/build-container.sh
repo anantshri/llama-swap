@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-cd $(dirname "$0")
+cd "$(dirname "$0")"
 
 # use this to test locally, example:
 # GITHUB_TOKEN=$(gh auth token) LOG_DEBUG=1 DEBUG_ABORT_BUILD=1 ./docker/build-container.sh rocm
@@ -30,8 +30,15 @@ PUSH_IMAGES=${2:-false}
 ALLOWED_ARCHS=("intel" "vulkan" "musa" "cuda" "cuda13" "cpu" "rocm")
 
 # Check if ARCH is in the allowed list
-if [[ ! " ${ALLOWED_ARCHS[@]} " =~ " ${ARCH} " ]]; then
-  log_info "Error: ARCH must be one of the following: ${ALLOWED_ARCHS[@]}"
+arch_allowed=false
+for allowed in "${ALLOWED_ARCHS[@]}"; do
+  if [[ "$ARCH" == "$allowed" ]]; then
+    arch_allowed=true
+    break
+  fi
+done
+if [[ "$arch_allowed" != true ]]; then
+  log_info "Error: ARCH must be one of the following: ${ALLOWED_ARCHS[*]}"
   exit 1
 fi
 
@@ -84,12 +91,14 @@ fetch_llama_tag() {
     while true; do
         log_debug "Fetching page $page for tag prefix: $tag_prefix"
 
-        local response=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+        local response
+        response=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
             "https://api.github.com/users/ggml-org/packages/container/llama.cpp/versions?per_page=${per_page}&page=${page}")
 
         # Check for API errors
         if echo "$response" | jq -e '.message' > /dev/null 2>&1; then
-            local error_msg=$(echo "$response" | jq -r '.message')
+            local error_msg
+            error_msg=$(echo "$response" | jq -r '.message')
             log_info "GitHub API error: $error_msg"
             return 1
         fi
@@ -101,7 +110,8 @@ fetch_llama_tag() {
         fi
 
         # Extract matching tag from this page
-        local found_tag=$(echo "$response" | jq -r \
+        local found_tag
+        found_tag=$(echo "$response" | jq -r \
             ".[] | select(.metadata.container.tags[]? | startswith(\"$tag_prefix\")) | .metadata.container.tags[] | select(startswith(\"$tag_prefix\"))" \
             | sort -r | head -n1)
 
