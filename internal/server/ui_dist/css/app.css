@@ -204,7 +204,11 @@ table td { padding: 0.5rem; }
 }
 .models-search:focus { outline: 1px solid var(--color-primary); }
 .models-body { flex: 1; overflow-y: auto; }
-.models-table { width: 100%; border-collapse: collapse; }
+.models-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+/* Fixed layout keeps the action/state columns on screen when the models pane
+   is narrow; widths come from the header cells in table-layout: fixed. */
+.models-table thead th:nth-child(2) { width: 5rem; }
+.models-table thead th:nth-child(3) { width: 6rem; }
 .models-thead { position: sticky; top: 0; z-index: 10; background: var(--color-surface); }
 .models-thead tr { border-bottom: 1px solid var(--color-border); }
 .models-row { border-bottom: 1px solid var(--color-card-border-inner); }
@@ -219,18 +223,22 @@ table td { padding: 0.5rem; }
 .models-row-transition { background: color-mix(in srgb, var(--color-warning) 7%, transparent); }
 .models-row-transition:hover { background: color-mix(in srgb, var(--color-warning) 13%, transparent); }
 .models-row-transition .models-name { box-shadow: inset 3px 0 0 var(--color-warning); }
-.models-name { padding: 0.5rem; }
+.models-name { padding: 0.5rem; overflow-wrap: anywhere; }
 .models-name.model-unlisted { color: var(--color-txtsecondary); }
 .models-link { font-weight: 600; color: var(--color-primary); }
-/* Description is collapsed to one line by default; .model-desc--open shows
-   the full pre-formatted text. The chevron is the toggle button's content. */
+/* Description is collapsed to its FIRST line by default (line-clamp over
+   pre-line keeps the original newlines, so the clamp shows exactly one
+   line); .model-desc--open shows the full pre-formatted text. */
 .model-desc { font-style: italic; margin: 0.125rem 0 0; display: flex; align-items: baseline; gap: 0.125rem; min-width: 0; }
-.model-desc-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.model-desc--open .model-desc-text { white-space: pre-line; }
-.model-desc-toggle { flex-shrink: 0; font-size: 0.6875rem; line-height: 1; padding: 0 0.125rem; color: var(--color-txtsecondary); }
-.model-desc-toggle::before { content: "▸"; }
+.model-desc-text {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1;
+  overflow: hidden; white-space: pre-line; min-width: 0;
+}
+.model-desc--open .model-desc-text { -webkit-line-clamp: unset; }
+.model-desc-toggle { flex-shrink: 0; line-height: 1; padding: 0 0.125rem; color: var(--color-txtsecondary); }
+.model-desc-toggle svg { display: block; transition: transform 0.15s; }
 .model-desc-toggle:hover { color: var(--color-txtmain); }
-.model-desc--open .model-desc-toggle::before { content: "▾"; }
+.model-desc--open .model-desc-toggle svg { transform: rotate(90deg); }
 
 /* Stats page: one table for configured models, one for removed ones. */
 .stats-table-title { margin: 0 0 0.5rem; font-size: 1rem; }

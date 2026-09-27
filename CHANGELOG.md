@@ -12,12 +12,15 @@ Long-form entries with full context live in
 
 ### Added
 
-- Models dashboard: model descriptions now start collapsed to a single line
-  with an expandable chevron (expanded state survives the frequent SSE
+- Models dashboard: model descriptions now start collapsed to their first
+  line with an expandable chevron (expanded state survives the frequent SSE
   re-renders), and a filter box matches model id, name, alias, and
   description text — including peer models; a matching peer group name shows
   the whole group. While filtering, the Profiles/Selectors cards yield the
-  screen to the matches and a no-match empty state names the query.
+  screen to the matches and a no-match empty state names the query. The
+  models table uses a fixed layout so the Load/Unload and State columns stay
+  on screen beside long descriptions, and long URLs wrap instead of forcing
+  a horizontal scrollbar.
 - Playground model pickers on capability-bound tabs (Images, Audio, Speech,
   Rerank) now list only models that fit the tab by default — a
   text-generation model no longer clutters the Images tab. A footer toggle

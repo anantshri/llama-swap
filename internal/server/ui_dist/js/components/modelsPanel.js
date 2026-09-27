@@ -123,7 +123,9 @@ export function ModelsPanel() {
     const desc = m.description
       ? `<p class="model-desc${descOpen ? " model-desc--open" : ""}">
           <button type="button" class="model-desc-toggle" data-desc-toggle="${escapeHtml(m.id)}"
-            aria-expanded="${descOpen}" title="Toggle description"></button>
+            aria-expanded="${descOpen}" title="Toggle description">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="icon-3"><path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5"/></svg>
+          </button>
           <em class="model-desc-text">${escapeHtml(m.description)}</em>
         </p>`
       : "";
