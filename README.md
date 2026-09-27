@@ -100,7 +100,8 @@ Playground (chat, images, speech, transcription, rerank, load test, help):
 
 ![Playground](docs/assets/fork-playground.jpg)
 
-Models page with load/unload, states, and model descriptions:
+Models page — filter box, descriptions collapsed to the first line, capability
+badges, load/unload with live states:
 
 ![Models](docs/assets/fork-models.jpg)
 
@@ -108,17 +109,28 @@ Activity log with token metrics and captures:
 
 ![Activity](docs/assets/fork-activity.jpg)
 
-Aggregate usage stats:
+Capture viewer — a multi-part request split into separately readable parts
+(system, each message, tool definitions) with character, word, and approximate
+token counts per part:
+
+![Capture parts view](docs/assets/fork-capture-parts.jpg)
+
+Aggregate usage stats with active/inactive model split:
 
 ![Stats](docs/assets/fork-stats.jpg)
 
-Log viewer:
+Log viewer with per-panel concerns filter:
 
 ![Logs](docs/assets/fork-logs.jpg)
 
-Hardware detection:
+Hardware detection on an NVIDIA host:
 
 ![Hardware](docs/assets/fork-hardware.jpg)
+
+Hardware detection on an Intel host — Arc Pro B70 detected as Battlemage with
+dedicated memory (via xpu-smi + the PCI device-ID table), iGPU via DRM sysfs:
+
+![Hardware — Intel](docs/assets/fork-hardware-intel.jpg)
 
 ## Building from source
 
