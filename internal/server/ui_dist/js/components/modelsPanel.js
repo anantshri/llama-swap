@@ -121,7 +121,7 @@ export function ModelsPanel() {
     // expands to the full pre-formatted text.
     const descOpen = expandedDescriptions.has(m.id);
     const desc = m.description
-      ? `<p class="model-desc${descOpen ? " model-desc--open" : ""}">
+      ? `<p class="model-desc${descOpen ? " model-desc--open" : ""}" title="${descOpen ? "Click the arrow to collapse" : "Click to show the full description"}">
           <button type="button" class="model-desc-toggle" data-desc-toggle="${escapeHtml(m.id)}"
             aria-expanded="${descOpen}" title="Toggle description">
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="icon-3"><path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5"/></svg>
@@ -386,16 +386,21 @@ export function ModelsPanel() {
 
   // Delegated handlers on list (desc expand, load/unload per row; profile switch)
   listEl.addEventListener("click", (e) => {
-    const descBtn = e.target.closest("[data-desc-toggle]");
-    if (descBtn) {
+    // Clicking anywhere on a collapsed description expands it; an expanded
+    // one collapses only via its chevron, so text stays selectable.
+    const descArea = e.target.closest(".model-desc");
+    if (descArea) {
+      const btn = descArea.querySelector("[data-desc-toggle]");
+      const clickedBtn = e.target.closest("[data-desc-toggle]");
+      if (descArea.classList.contains("model-desc--open") && !clickedBtn) return;
       // Toggle in place (no re-render) and remember the choice across the
       // re-renders triggered by modelStatus SSE events.
-      const id = descBtn.getAttribute("data-desc-toggle");
+      const id = btn.getAttribute("data-desc-toggle");
       const open = !expandedDescriptions.has(id);
       if (open) expandedDescriptions.add(id);
       else expandedDescriptions.delete(id);
-      descBtn.closest(".model-desc")?.classList.toggle("model-desc--open", open);
-      descBtn.setAttribute("aria-expanded", String(open));
+      descArea.classList.toggle("model-desc--open", open);
+      btn.setAttribute("aria-expanded", String(open));
       return;
     }
     const loadBtn = e.target.closest("[data-load]");

@@ -229,7 +229,8 @@ table td { padding: 0.5rem; }
 /* Description is collapsed to its FIRST line by default (line-clamp over
    pre-line keeps the original newlines, so the clamp shows exactly one
    line); .model-desc--open shows the full pre-formatted text. */
-.model-desc { font-style: italic; margin: 0.125rem 0 0; display: flex; align-items: baseline; gap: 0.125rem; min-width: 0; }
+.model-desc { font-style: italic; margin: 0.125rem 0 0; display: flex; align-items: baseline; gap: 0.125rem; min-width: 0; cursor: pointer; }
+.model-desc--open { cursor: default; }
 .model-desc-text {
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1;
   overflow: hidden; white-space: pre-line; min-width: 0;
