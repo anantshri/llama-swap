@@ -306,7 +306,7 @@ func stripAudioAPIPrefix(r *http.Request) {
 func (s *Server) routes() {
 
 	authMW := CreateAuthMiddleware(s.cfg)
-	modelMWs := []chain.Middleware{authMW}
+	modelMWs := []chain.Middleware{authMW, createContentTypeMiddleware()}
 	// globalConcurrencyLimit guards the top of the inference chain; a limit of
 	// 0 (the default) means no limit, so the handler is left out of the chain
 	// entirely rather than wrapping every request in a no-op semaphore.
@@ -333,8 +333,11 @@ func (s *Server) routes() {
 	// before routing, but not auth/in-flight (the Anthropic/Ollama route chains
 	// own those). The handlers wrap the response writer outside this chain so
 	// metrics tees the raw OpenAI bytes while the client sees the translated
-	// shape.
+	// shape. Content-type normalization runs first so the filters and the
+	// translation handlers see the same body format the model chain does
+	// (fork extension of upstream #1194 to the translated routes).
 	s.translatedDispatch = chain.New(
+		createContentTypeMiddleware(),
 		CreateFilterMiddleware(s.cfg),
 		CreateFormFilterMiddleware(s.cfg),
 		CreateMetricsMiddleware(s.metrics, s.cfg),
