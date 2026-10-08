@@ -7,6 +7,7 @@ import { LogPanel } from "../components/logPanel.js";
 import { ActivityTable } from "../components/activityTable.js";
 import { capabilityLabels } from "../util/capabilities.js";
 import { formatUptime } from "../util/format.js";
+import { loadingPercent, loadingMessage } from "../util/modelUtils.js";
 
 const LOG_LENGTH_LIMIT = 1024 * 100; // 100KB
 
@@ -112,6 +113,12 @@ export function ModelDetailPage(getModelId) {
       return;
     }
     const desc = m.description ? `<p class="muted model-detail-desc"><em>${escapeHtml(m.description)}</em></p>` : "";
+    // Loading progress from the upstream's health check (upstream #1212);
+    // updates arrive as modelStatus SSE events.
+    const pct = loadingPercent(m);
+    const loadPctHtml = pct !== undefined ? ` <span class="model-loadpct">${pct}%</span>` : "";
+    const msg = loadingMessage(m);
+    const loadMsgHtml = msg ? `<span class="model-loadmsg muted" title="${escapeHtml(msg)}">${escapeHtml(msg)}</span>` : "";
     const aliases =
       m.aliases && m.aliases.length
         ? `<p class="muted model-detail-aliases">Aliases: ${escapeHtml(m.aliases.join(", "))}</p>`
@@ -125,7 +132,8 @@ export function ModelDetailPage(getModelId) {
         <span class="${statusDotClass(m)}" title="${escapeHtml(m.state)}"></span>
         <h2 class="model-detail-title">${escapeHtml(m.name || m.id)}</h2>
         <span class="muted model-detail-id">(${escapeHtml(m.id)})</span>
-        <span class="status status--${escapeHtml(m.state)}">${escapeHtml(m.state)}</span>
+        <span class="status status--${escapeHtml(m.state)}">${escapeHtml(m.state)}${loadPctHtml}</span>
+        ${loadMsgHtml}
         <div class="model-detail-head-actions">
           ${
             !m.peerID

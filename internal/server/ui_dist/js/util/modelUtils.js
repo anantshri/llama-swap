@@ -11,6 +11,19 @@ export function groupModels(models) {
   return { local, peersByProvider };
 }
 
+// Loading progress an upstream reported through its health check
+// (upstream #1212). Percent rounds down and clamps, so a load that is not
+// finished never shows 100%.
+export function loadingPercent(m) {
+  if (!m || m.state !== "starting" || m.loadingProgress === undefined) return undefined;
+  return Math.floor(Math.min(Math.max(m.loadingProgress, 0), 1) * 100);
+}
+
+// The upstream's reported loading step while starting; empty otherwise.
+export function loadingMessage(m) {
+  return m && m.state === "starting" ? m.loadingMessage ?? "" : "";
+}
+
 // Flattens the grouped model list into ordered picker options. Each option
 // carries the group it belongs to, its parent model, and — for aliases — the
 // model id it points at. Order: local models (aliases after each), then peer

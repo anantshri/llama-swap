@@ -16,6 +16,7 @@ import { isNarrow } from "../theme.js";
 import { persistent } from "../store.js";
 import { listCapabilityBadges, capabilityBadgeClass } from "../util/capabilities.js";
 import { formatUptime } from "../util/format.js";
+import { loadingPercent, loadingMessage } from "../util/modelUtils.js";
 
 function statusDotClass(m) {
   if (m.state === "ready") return "status-dot status-dot--ready";
@@ -169,6 +170,16 @@ export function ModelsPanel() {
     } else {
       uptimeAnchors.delete(m.id);
     }
+    // Loading progress from the upstream's health check (upstream #1212).
+    // The percentage text carries it for screen readers; the bar is a thin
+    // decorative track inside the state cell (a <tr> cannot host an
+    // absolutely-positioned row-wide bar). Progress updates arrive as
+    // modelStatus SSE events, so no client-side ticking is needed.
+    const pct = loadingPercent(m);
+    const msg = loadingMessage(m);
+    const loadPctHtml = pct !== undefined ? ` <span class="model-loadpct">${pct}%</span>` : "";
+    const loadMsgHtml = msg ? `<span class="model-loadmsg muted" title="${escapeHtml(msg)}">${escapeHtml(msg)}</span>` : "";
+    const loadBarHtml = pct !== undefined ? `<span class="model-loadbar" aria-hidden="true"><span class="model-loadbar-fill" style="width:${pct}%"></span></span>` : "";
     return `
       <tr class="models-row${rowCls}">
         <td class="models-name">
@@ -182,7 +193,12 @@ export function ModelsPanel() {
           ${badgeHtml(m)}
         </td>
         <td class="models-action">${action}</td>
-        <td class="models-state"><span class="status status--${escapeHtml(m.state)}">${escapeHtml(m.state)}</span>${uptime}</td>
+        <td class="models-state">
+          <span class="status status--${escapeHtml(m.state)}">${escapeHtml(m.state)}${loadPctHtml}</span>
+          ${loadBarHtml}
+          ${loadMsgHtml}
+          ${uptime}
+        </td>
       </tr>
     `;
   }

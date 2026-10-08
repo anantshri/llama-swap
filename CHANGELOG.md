@@ -224,6 +224,18 @@ Long-form entries with full context live in
   drop-on-full publish lost the exact stat a test awaited (an upstream test
   race that surfaced here under parallel-suite timing) — and the new tests'
   wait deadlines carry load headroom.
+- Hand-merge batch 4:
+  - Loading progress from the health check (upstream #1212, commit
+    `d3ab665`): an upstream that answers its not-yet-ready health check
+    with `{"progress": 0.42, "message": "…"}` has that reported live —
+    `modelStatus` SSE entries carry `loadingProgress`/`loadingMessage`
+    (each tick re-sends the status, so no client polling), and the vanilla
+    models table shows the percent next to the starting state, the
+    truncated message, and a thin progress bar in the State cell; the
+    model detail header shows percent + message. Kept deliberately simple:
+    two helpers in `util/modelUtils.js` and five CSS rules, no new
+    components or stores. Documented for upstream authors in the
+    writing-cmd KB guide.
 - Hand-merge batch 3:
   - Logging rework (upstream #1172, commit `bbdb55d`): log data moves off
     `/api/events` onto its own `GET /api/events/logs?stream=proxy&stream=…`

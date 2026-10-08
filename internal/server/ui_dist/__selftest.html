@@ -50,6 +50,7 @@
         buildModelOptions, filterModelOptions,
       } from "/ui/js/util/modelUtils.js";
       import { formatUptime } from "/ui/js/util/format.js";
+      import { loadingPercent, loadingMessage } from "/ui/js/util/modelUtils.js";
       import { ModelsPanel } from "/ui/js/components/modelsPanel.js";
       import { ModelSelector } from "/ui/js/components/modelSelector.js";
       import { LogPanel } from "/ui/js/components/logPanel.js";
@@ -629,6 +630,47 @@
         modelsStore.set([]);
         apanel.destroy();
         apanel.el.remove();
+
+        group("models panel — loading progress (#1212)");
+        await atest("loadingPercent clamps, floors, and only fires while starting", () => {
+          expect(loadingPercent({ state: "starting", loadingProgress: 0.42 })).toBe(42);
+          expect(loadingPercent({ state: "starting", loadingProgress: 1.2 })).toBe(100);
+          expect(loadingPercent({ state: "starting", loadingProgress: -3 })).toBe(0);
+          expect(loadingPercent({ state: "starting" })).toBe(undefined);
+          expect(loadingPercent({ state: "ready", loadingProgress: 0.9 })).toBe(undefined);
+          expect(loadingPercent(undefined)).toBe(undefined);
+        });
+        await atest("loadingMessage only fires while starting", () => {
+          expect(loadingMessage({ state: "starting", loadingMessage: "loading tensors" })).toBe("loading tensors");
+          expect(loadingMessage({ state: "ready", loadingMessage: "loading tensors" })).toBe("");
+          expect(loadingMessage(undefined)).toBe("");
+        });
+        modelsStore.set([
+          { id: "big", name: "", description: "", state: "starting", unlisted: false, peerID: "", aliases: [],
+            loadingProgress: 0.42, loadingMessage: "loading tensors" },
+          { id: "idle", name: "", description: "", state: "stopped", unlisted: false, peerID: "", aliases: [] },
+        ]);
+        const lpanel = ModelsPanel();
+        document.body.appendChild(lpanel.el);
+        await atest("starting model shows percent, message, and a bar; others show none", () => {
+          const pct = lpanel.el.querySelector(".model-loadpct");
+          expect(pct?.textContent).toBe("42%");
+          expect(lpanel.el.querySelector(".model-loadmsg").getAttribute("title")).toBe("loading tensors");
+          const fill = lpanel.el.querySelector(".model-loadbar-fill");
+          expect(fill?.getAttribute("style")).toContain("width:42%");
+          expect(lpanel.el.querySelectorAll(".model-loadbar").length).toBe(1);
+        });
+        await atest("progress update re-renders via the modelStatus store", () => {
+          modelsStore.set([
+            { id: "big", name: "", description: "", state: "starting", unlisted: false, peerID: "", aliases: [],
+              loadingProgress: 0.9, loadingMessage: "almost there" },
+          ]);
+          expect(lpanel.el.querySelector(".model-loadpct").textContent).toBe("90%");
+          expect(lpanel.el.querySelector(".model-loadbar-fill").getAttribute("style")).toContain("width:90%");
+        });
+        modelsStore.set([]);
+        lpanel.destroy();
+        lpanel.el.remove();
 
         group("model picker — capability default");
         modelsStore.set([

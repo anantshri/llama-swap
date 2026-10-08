@@ -5,6 +5,48 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+---
+
+## 2026-10-12 — Hand-merge batch 4: loading progress (#1212 / d3ab665)
+
+### What / why
+
+The last queue item: upstreams can report their own startup progress by
+answering the not-yet-ready health check with
+`{"progress": 0.42, "message": "…"}`. Per user instruction the vanilla-UI
+port was kept deliberately simple.
+
+### Picks and resolutions
+
+The entire Go side applied clean (loading_progress.go + 202-line tests,
+process_command health-check parsing, `ProcessLoadingEvent` wiring that
+re-sends `modelStatus` per progress tick, apigroup fields, schema, docs);
+only the four Svelte files needed `git rm`. Vanilla port:
+
+- `loadingPercent`/`loadingMessage` helpers in `util/modelUtils.js`
+  (shared): percent floors and clamps so a load never shows 100% while
+  starting; both helpers only fire in the `starting` state.
+- models table State cell: percent beside the state, truncated message
+  line, and a thin decorative bar inside the cell (a `<tr>` cannot host a
+  row-wide absolutely-positioned bar — invalid HTML; upstream's row-edge
+  bar is a Svelte-shell nicety). Progress updates arrive as modelStatus
+  SSE events, so no client ticking.
+- model detail header: percent + message beside the status badge.
+- Five CSS rules reusing theme tokens; no new components, stores, or
+  timers.
+
+### Verification
+
+- E2E with a fake upstream serving `503 {"progress":0.5,"message":
+  "loading tensors"}` on its health endpoint: the `modelStatus` SSE
+  stream shows `stopped → starting` with `"loadingProgress":0.5,
+  "loadingMessage":"loading tensors"` → `stopped` (fixture never goes
+  ready). Browser selftest **156/156** (+4: helper edge cases, render,
+  update-on-store).
+- `go test -short ./...` green, gosec 0 ×3 GOOS; aidc-scan --all clean
+  after one inline nosemgrep marker on the new test fixture write
+  (documented FP category).
+
 ## 2026-10-12 — Hand-merge batch 3: multi-stream logging (#1172 / bbdb55d)
 
 ### What / why
