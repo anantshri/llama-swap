@@ -43,6 +43,25 @@ gosec flagged G710 on `audiocpp.go`'s redirect — same fixed-prefix
 same-origin pattern already ledgered for comfyui.go. Suppressed at the line
 with the same reasoning; ledger updated (G710 ×2 → ×3, total 92 → 93).
 
+### Post-review fixes (fresh-eyes review catch)
+
+- Hardware page is field-list driven, not data-driven: ported the #1163
+  Svelte page changes — `systemLabel` Device row (vendor/model/family) in
+  the System card + text summary, and `powerLabel` falling back to
+  `nominal_power_watts` ("W (nominal SoC)"). The initial "needs no UI
+  change" claim was wrong; docs corrected.
+- Uptime anchored per `uptimeMs` value (first instant seen) instead of per
+  render: an unrelated re-render (search keystroke, profile switch) no
+  longer resets the displayed age; a new SSE value re-anchors. Selftest
+  covers anchor persistence + re-anchoring.
+- Ported #1173's interrupted-turn semantics to the vanilla chat: aborted
+  turns keep a "Cancelled" label + Retry instead of a bare empty bubble,
+  failed turns mark `interrupted: "error"` (error text unchanged), retry
+  title switches to "Retry". Docs-agent variant intentionally not ported.
+- Ledger: G204 section header recounted (7 → 8 internal sites; notes the
+  two `cmd/vllm-wrapper` markers outside the audit test's scope). The
+  summary line the audit test enforces was already correct.
+
 ### Verification
 
 - `go test -short ./...` → 1892 tests, 32 packages, zero failures

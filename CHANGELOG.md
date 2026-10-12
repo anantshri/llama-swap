@@ -192,15 +192,23 @@ Long-form entries with full context live in
     (upstream #1182, commit `a6f3b09`).
 - Upstream picks whose only conflicts were the deleted Svelte UI — resolved
   by dropping `ui/src` and porting the user-visible half to the vanilla UI:
-  - DGX Spark (GB10) hardware detection; the Hardware page is data-driven so
-    it needs no UI change (upstream #1163, commit `ccccb20`).
+  - DGX Spark (GB10) hardware detection (upstream #1163, commit `ccccb20`),
+    with the Svelte Hardware-page changes ported to the vanilla page: a
+    Device row (`system.vendor/model/family` — e.g. "NVIDIA DGX Spark
+    (GB10)") in the System card and text summary, and Power now falls back
+    to `nominal_power_watts` ("W (nominal SoC)") when no power limit is
+    reported.
   - Model uptime tracking: `modelStatus` entries carry `readySince` (RFC
     3339) and `uptimeMs`; the models table's State cell shows a
     live-ticking uptime (updated in place once a second, computed from the
-    server-provided `uptimeMs` so browser clock skew cannot skew it) and the
-    model detail Details tab shows uptime + ready-since (upstream #1173,
-    commit `85a109b`; sidebar resize and middle-truncated IDs are
-    Svelte-shell specifics with no vanilla equivalent).
+    server-provided `uptimeMs` so browser clock skew cannot skew it, and
+    anchored per uptime value so unrelated re-renders never reset the
+    displayed age) and the model detail Details tab shows uptime +
+    ready-since. The playground marks interrupted turns — aborted turns
+    keep a "Cancelled" turn with its Retry, failed turns mark their error
+    and retry (upstream #1173, commit `85a109b`; sidebar resize and
+    middle-truncated IDs are Svelte-shell specifics with no vanilla
+    equivalent, and the docs-agent variant was left as-is).
   - `/audiocpp/` passthrough endpoint serving audio.cpp's own web UI via the
     reserved `audiocpp_auto` model, with the open-model link on the models
     table targeting it (upstream #1223, commit `fd49827`; G710 suppression

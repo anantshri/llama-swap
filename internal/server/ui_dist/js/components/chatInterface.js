@@ -129,6 +129,7 @@ export function ChatInterface() {
       statsText,
       isStreaming: isStreaming && last && m.role === "assistant",
       isReasoning: isReasoning && last && m.role === "assistant",
+      interrupted: m.interrupted,
       onEdit: m.role === "user" ? (nc) => editMessage(i, nc) : undefined,
       onRegenerate:
         m.role === "assistant" && i > 0 && messages[i - 1].role === "user"
@@ -317,12 +318,15 @@ export function ChatInterface() {
       const lastIdx = messages.length - 1;
       if (error && error.name === "AbortError") {
         markCancelled(genTracker);
+        // Keep the cancelled turn visible with its retry (upstream #1173).
+        messages[lastIdx].interrupted = "cancelled";
         if (isReasoning && reasoningStartTime > 0) {
           messages[lastIdx].reasoningTimeMs = Date.now() - reasoningStartTime;
         }
       } else {
         const msg = error instanceof Error ? error.message : "An error occurred";
         messages[lastIdx].content = messages[lastIdx].content + `\n\n**Error:** ${msg}`;
+        messages[lastIdx].interrupted = "error";
       }
     } finally {
       // Freeze whatever the turn measured — real usage when the backend

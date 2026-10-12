@@ -55,7 +55,7 @@
       import { LogPanel } from "/ui/js/components/logPanel.js";
       import { StatsPage } from "/ui/js/pages/stats.js";
       import { observable } from "/ui/js/store.js";
-      import { models as modelsStore } from "/ui/js/api.js";
+      import { models as modelsStore, playgroundModels as playgroundModelsStore } from "/ui/js/api.js";
 
       // ---- tiny test harness ----
       const groups = [];
@@ -592,9 +592,26 @@
         });
         await atest("uptime survives the playground capabilities merge", () => {
           // mergedModels() spreads the live SSE record first; uptimeMs must
-          // still be present after capabilities are attached.
+          // still be present after capabilities are attached. Populate the
+          // playground store so the merge branch actually runs.
+          playgroundModelsStore.set([{ id: "ready1", capabilities: { chat: true }, context_length: 8192 }]);
           modelsStore.set(modelsStore.get().slice());
           expect(upanel.el.querySelector("[data-uptime-base]").textContent).toBe("5m 12s");
+          playgroundModelsStore.set([]);
+        });
+        await atest("re-render keeps the anchor; new uptimeMs re-anchors", () => {
+          const before = upanel.el.querySelector("[data-uptime-base]");
+          const atBefore = before.getAttribute("data-uptime-at");
+          // Unchanged uptimeMs: anchor must not reset on an unrelated re-render.
+          modelsStore.set(modelsStore.get().slice());
+          const after = upanel.el.querySelector("[data-uptime-base]");
+          expect(after.getAttribute("data-uptime-at")).toBe(atBefore);
+          // A newer event (uptimeMs changed) re-anchors from the new value.
+          const bumped = modelsStore.get().map((m) => (m.id === "ready1" ? { ...m, uptimeMs: m.uptimeMs + 60_000 } : m));
+          modelsStore.set(bumped);
+          const reanchored = upanel.el.querySelector("[data-uptime-base]");
+          expect(Number(reanchored.getAttribute("data-uptime-base"))).toBe(6 * 60_000 + 12_000);
+          expect(Number(reanchored.getAttribute("data-uptime-at"))).toBeGreaterThanOrEqual(Number(atBefore));
         });
         modelsStore.set([]);
         upanel.destroy();

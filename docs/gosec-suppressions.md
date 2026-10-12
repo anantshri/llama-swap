@@ -52,7 +52,7 @@ telemetry syscall paths (`internal/perf/d3dkmt_windows.go`, `pdh_windows.go`,
 pointers across the `syscall`/`golang.org/x/sys/windows` boundary. There is no
 safe alternative for these OS ABIs.
 
-## G204 — subprocess launched with a variable · 7 sites · MEDIUM
+## G204 — subprocess launched with a variable · 8 sites in `internal/` (+2 in `cmd/`) · MEDIUM
 
 **Verdict: by design — this is the product.** llama-swap's core function is to
 launch operator-configured model server commands (`cmd`, `cmdStop`) and helper
@@ -60,7 +60,9 @@ tools (`nvidia-smi`, `rocm-smi`, `xpu-smi`, `powermetrics`). The command source 
 operator's trusted config, not attacker input.
 Files: `internal/process/{process_command,runtime_windows}.go`,
 `internal/perf/{monitor_unix,monitor_darwin,monitor_windows}.go`,
-`internal/hw/{detect_linux,intel_linux}.go`.
+`internal/hw/{detect_linux,intel_linux}.go`; the `cmd`/`cmdStop` launches in
+`internal/process/process_command.go` account for two of the sites, and
+`cmd/vllm-wrapper/main.go` carries two more outside the audit test's scope.
 
 ## G304 — file inclusion via variable · 10 sites · MEDIUM
 

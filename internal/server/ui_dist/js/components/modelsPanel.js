@@ -62,6 +62,24 @@ export function ModelsPanel() {
     return showIdOrName.get() === "id" ? m.id : m.name || m.id;
   }
 
+  // Uptime anchoring (upstream #1173): modelStatus SSE events fire only on
+  // state changes, so uptimeMs goes stale between events. Anchor each model
+  // at the instant its uptimeMs value was first seen; renders and the ticker
+  // count forward from that anchor, so a re-render triggered by an unrelated
+  // store update (search, profile switch) cannot reset the displayed age.
+  // A new event changes uptimeMs, which re-anchors automatically.
+  const uptimeAnchors = new Map();
+
+  function uptimeAnchor(m) {
+    const current = uptimeAnchors.get(m.id);
+    if (!current || current.base !== m.uptimeMs) {
+      const entry = { base: m.uptimeMs, at: Date.now() };
+      uptimeAnchors.set(m.id, entry);
+      return entry;
+    }
+    return current;
+  }
+
   // Merge /v1/models capabilities into the live SSE model records. The SSE
   // modelStatus entries carry state; the playground records carry
   // capabilities/context_length/aliases.
@@ -117,7 +135,7 @@ export function ModelsPanel() {
     };
   }
 
-  function rowHtml(m, renderedAt) {
+  function rowHtml(m) {
     const display = escapeHtml(getDisplay(m));
     // Descriptions start collapsed (single line with ellipsis); the chevron
     // expands to the full pre-formatted text.
@@ -144,10 +162,13 @@ export function ModelsPanel() {
         : `<button class="btn btn--sm" data-unload="${escapeHtml(m.id)}" ${m.state !== "ready" ? "disabled" : ""}>Unload</button>`;
     // Uptime ticks client-side from the server-provided uptimeMs so a
     // browser clock skew cannot skew the age (upstream #1173).
-    const uptime =
-      m.state === "ready" && m.uptimeMs > 0
-        ? `<span class="model-uptime muted" data-uptime-base="${m.uptimeMs}" data-uptime-at="${renderedAt}" title="ready since ${escapeHtml(m.readySince ?? "")}">${formatUptime(m.uptimeMs)}</span>`
-        : "";
+    let uptime = "";
+    if (m.state === "ready" && m.uptimeMs > 0) {
+      const anchor = uptimeAnchor(m);
+      uptime = `<span class="model-uptime muted" data-uptime-base="${anchor.base}" data-uptime-at="${anchor.at}" title="ready since ${escapeHtml(m.readySince ?? "")}">${formatUptime(anchor.base)}</span>`;
+    } else {
+      uptimeAnchors.delete(m.id);
+    }
     return `
       <tr class="models-row${rowCls}">
         <td class="models-name">
@@ -267,10 +288,7 @@ export function ModelsPanel() {
 
   function renderList() {
     const f = filtered();
-    // Capture the render instant once so every row's uptime ticks from the
-    // same baseline (see the interval in createUptimeTicker).
-    const renderedAt = Date.now();
-    const regularHtml = f.regularModels.map((m) => rowHtml(m, renderedAt)).join("");
+    const regularHtml = f.regularModels.map((m) => rowHtml(m)).join("");
     const peerEntries = Object.entries(f.peerModelsByPeerId).sort(([a], [b]) => a.localeCompare(b));
     const peerHtml = peerEntries.length
       ? `<h3 class="peer-heading">Peer Models</h3>` +
@@ -443,7 +461,7 @@ export function ModelsPanel() {
     renderList();
   });
 
-  // SSE modelStatus events only fire on state changes, so uptime would go
+  // SSE modelStatus events only fire on state changes, so uptimeMs goes
   // stale between events. Tick the cells in place once a second instead of
   // re-rendering the whole list (which would drop focus/scroll state).
   const uptimeTimer = setInterval(() => {

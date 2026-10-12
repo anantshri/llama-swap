@@ -255,8 +255,12 @@ export function ChatMessage(initial) {
       host.innerHTML = "";
       return;
     }
+    // An interrupted reply may have no text at all, but still needs its
+    // retry; cancelled turns are labelled so the empty bubble makes sense
+    // (upstream #1173).
     host.innerHTML = `
-      ${props.onRegenerate ? `<button class="chat-action-btn" data-regen title="Regenerate response">${ICON_REGEN}</button>` : ""}
+      ${props.interrupted === "cancelled" ? `<span class="chat-cancelled muted">Cancelled</span>` : ""}
+      ${props.onRegenerate ? `<button class="chat-action-btn" data-regen title="${props.interrupted ? "Retry" : "Regenerate response"}">${ICON_REGEN}</button>` : ""}
       <button class="chat-action-btn" data-copy title="${copied ? "Copied!" : "Copy to clipboard"}">${copied ? ICON_CHECK : ICON_COPY}</button>
       <button class="chat-action-btn ${showRaw ? "chat-action-on" : ""}" data-rawtoggle title="${showRaw ? "Show rendered" : "Show raw"}">${ICON_CODE}</button>`;
   }

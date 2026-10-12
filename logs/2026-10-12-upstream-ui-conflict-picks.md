@@ -75,6 +75,29 @@ python3 /tmp/opencode/run_selftest.py        # 151/151
 - node is absent in this container now; module syntax is verified by the
   browser selftest run instead (a module load failure fails the whole page).
 
+## Pre-completion review outcome
+
+Self-review + fresh-eyes subagent review of `a24d78f..HEAD`: 4 real findings,
+all fixed and re-verified in the follow-up commit:
+
+- **H1** Hardware page is field-list driven, not data-driven — GB10's Device
+  row and nominal-SoC power fallback were silently dropped; ported
+  (`systemLabel`/`powerLabel`) and docs corrected.
+- **M2** #1173's interrupted/cancelled-turn chat semantics were neither
+  ported nor documented; ported (Cancelled label + Retry title +
+  `interrupted` flags; docs-agent variant documented as skipped).
+- **M3** uptime re-anchored at every render, resetting the displayed age on
+  unrelated re-renders; now anchored per uptimeMs value (selftest covers
+  persistence + re-anchoring).
+- **L** G204 ledger section header stale (7 vs 8 internal sites; cmd/vllm
+  wrapper markers outside audit scope noted). The audit-enforced summary
+  line was already correct.
+
+Final gates: `go test -short ./...` 1892/32 ok; gosec 0 ×3 GOOS; aidc-scan
+clean; browser selftest **152/152** (verified the served page contains the
+new groups before trusting the count). `aidc-review-record` is not installed
+in this container — this log entry is the record.
+
 ## Remaining upstream batch (real hand merges)
 
 `a2bf16e` gopsutil panic fix · `486376e` content-type autofill · `d34ddb2`
