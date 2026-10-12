@@ -190,6 +190,21 @@ Long-form entries with full context live in
   - docker/unified audio.cpp: download and mp3 support (upstream #1157,
     commit `aa8031f`); static eSpeak-ng build with phoneme data installed
     (upstream #1182, commit `a6f3b09`).
+- Upstream picks whose only conflicts were the deleted Svelte UI — resolved
+  by dropping `ui/src` and porting the user-visible half to the vanilla UI:
+  - DGX Spark (GB10) hardware detection; the Hardware page is data-driven so
+    it needs no UI change (upstream #1163, commit `ccccb20`).
+  - Model uptime tracking: `modelStatus` entries carry `readySince` (RFC
+    3339) and `uptimeMs`; the models table's State cell shows a
+    live-ticking uptime (updated in place once a second, computed from the
+    server-provided `uptimeMs` so browser clock skew cannot skew it) and the
+    model detail Details tab shows uptime + ready-since (upstream #1173,
+    commit `85a109b`; sidebar resize and middle-truncated IDs are
+    Svelte-shell specifics with no vanilla equivalent).
+  - `/audiocpp/` passthrough endpoint serving audio.cpp's own web UI via the
+    reserved `audiocpp_auto` model, with the open-model link on the models
+    table targeting it (upstream #1223, commit `fd49827`; G710 suppression
+    carried over from comfyui.go — same fixed-prefix same-origin redirect).
 
 ### Changed
 

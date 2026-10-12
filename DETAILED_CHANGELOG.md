@@ -5,6 +5,58 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-10-12 — UI-only-conflict upstream picks (GB10, uptime, /audiocpp)
+
+### What / why
+
+Second batch of the upstream survey: the three commits whose cherry-pick
+conflicts were only in the deleted Svelte UI (`ui/src/**`) or in vanilla
+files rename-matched against Svelte originals. Resolution per user
+decision: `git rm` the Svelte side, keep our vanilla versions, and port the
+user-visible changes to the vanilla UI by hand.
+
+### Picks and resolutions
+
+- `e2f4e43` (upstream `ccccb20` #1163) — GB10/DGX Spark hw detection.
+  All Go applied clean; only `ui/src/{types.ts,Hardware.svelte}` conflicted
+  (deleted here). No UI port needed: the vanilla Hardware page renders
+  whatever `/api/hardware` reports.
+- `3351168` (upstream `85a109b` #1173) — uptime. Conflicts were
+  rename-detected matches of our ported vanilla files (`format.js`) plus
+  missing Svelte files; kept ours, dropped theirs. Follow-up commit
+  `b3da3a3` ports the UI half: `formatUptime` (42s / 5m 12s / 2h 5m / 3d 4h),
+  live-ticking uptime cell in the models State column (1s in-place update
+  from server `uptimeMs`, no list re-render so focus/scroll survive), and an
+  Uptime/ready-since row on the model Details tab. Sidebar resize and
+  middle-truncate IDs were judged Svelte-shell specifics without a vanilla
+  equivalent and skipped.
+- `c3f4323` (upstream `fd49827` #1223) — `/audiocpp/` endpoint. Server side
+  applied clean; README conflict resolved onto the fork notice (added a
+  pointer that post-baseline adopted features live in the CHANGELOG), and
+  upstream's one-line `modelUtils` change ported to both vanilla
+  `modelServerPath` copies so `audiocpp_auto`'s open-model link targets
+  `/audiocpp/`.
+
+### Security
+
+gosec flagged G710 on `audiocpp.go`'s redirect — same fixed-prefix
+same-origin pattern already ledgered for comfyui.go. Suppressed at the line
+with the same reasoning; ledger updated (G710 ×2 → ×3, total 92 → 93).
+
+### Verification
+
+- `go test -short ./...` → 1892 tests, 32 packages, zero failures
+  (includes upstream's new audiocpp/uptime/hw tests).
+- gosec ×3 GOOS → 0 findings; aidc-scan clean (semgrep/gitleaks/gosec).
+- Browser selftest via playwright headless chromium against a rebuilt
+  binary: **151/151** (+5: formatUptime, uptime cell ×3, audiocpp link).
+  Note for future sessions: `fuser -k 8765/tcp` via the wrapper did not
+  kill the old server — the stale binary kept serving and hid the new
+  selftest; `kill <pid>` + restart resolved it. Chromium needs the apt
+  lib set from the 2026-09-26 log (playwright module reinstalled too).
+- Runtime smoke: `/audiocpp/` without the model → 404 (expected); `/health`
+  200.
+
 ## 2026-10-12 — Upstream clean cherry-pick batch (8 commits, zero hand merges)
 
 ### What / why
