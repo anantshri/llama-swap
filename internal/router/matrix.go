@@ -7,6 +7,7 @@ import (
 
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
+	"github.com/mostlygeek/llama-swap/internal/matrix"
 	"github.com/mostlygeek/llama-swap/internal/process"
 )
 
@@ -24,14 +25,14 @@ func NewMatrix(conf config.Config, proxylog, upstreamlog *logmon.Monitor) (*Matr
 			return nil, fmt.Errorf("compiling matrix configuration: %w", err)
 		}
 	}
-	models, mode := mtx.Program().SynthesizedUndefined()
+	models, mode := mtx.Program().SynthesizedOrphans()
 	switch mode {
 	case "synthesized":
-		proxylog.Infof("matrix: synthesized set \"undefined\" = (%s)", strings.Join(models, " | "))
+		proxylog.Infof("matrix: synthesized set %q = (%s)", matrix.OrphanSetName, strings.Join(models, " | "))
 	case "empty":
-		proxylog.Info("matrix: synthesized set \"undefined\" is empty; +undefined terms dropped")
+		proxylog.Infof("matrix: synthesized set %q is empty; +%s terms dropped", matrix.OrphanSetName, matrix.OrphanSetName)
 	case "user-defined":
-		proxylog.Info("matrix: set \"undefined\" is user-defined; orphan synthesis disabled")
+		proxylog.Infof("matrix: set %q is user-defined; orphan synthesis disabled", matrix.OrphanSetName)
 	}
 
 	swapper := &matrixSwapper{

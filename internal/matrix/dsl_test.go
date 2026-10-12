@@ -46,6 +46,17 @@ func TestDSL_Tokenize(t *testing.T) {
 				{typ: tokEOF},
 			},
 		},
+		{
+			name: "namespaced reference", input: "+auto:orphans & x",
+			expect: []token{
+				{typ: tokRef, val: "auto:orphans"},
+				{typ: tokAnd, val: "&"},
+				{typ: tokIdent, val: "x"},
+				{typ: tokEOF},
+			},
+		},
+		{name: "bare namespaced name", input: "auto:orphans", errMsg: "unexpected character ':'"},
+		{name: "bare model with colon", input: "qwen3:32b", errMsg: "unexpected character ':'"},
 		{name: "empty ref", input: "+", errMsg: "expected set name after '+'"},
 		{name: "invalid character", input: "a @ b", errMsg: "unexpected character"},
 	}
