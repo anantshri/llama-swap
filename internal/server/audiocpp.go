@@ -22,7 +22,9 @@ func handleAudioCppRedirect(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		status = http.StatusMovedPermanently
 	}
-	http.Redirect(w, r, location, status)
+	// #nosec G710 -- relative same-origin redirect (fixed "/audiocpp/" prefix);
+	// only the query string is carried over, the host is never user-controlled.
+	http.Redirect(w, r, location, status) // nosemgrep: go.lang.security.injection.open-redirect.open-redirect
 }
 
 // handleAudioCpp proxies requests under /audiocpp/ to the fixed local

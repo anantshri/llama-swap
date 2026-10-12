@@ -23,7 +23,7 @@ To list the live markers at any time:
 grep -rn "#nosec" internal/
 ```
 
-Total: **92** suppressions across **12** rules (G115 ×29, G103 ×27, G304 ×10, G204 ×8, G404 ×4, G202 ×5, G117 ×2, G120 ×2, G710 ×2, G118 ×1, G703 ×1, G705 ×1).
+Total: **93** suppressions across **12** rules (G115 ×29, G103 ×27, G304 ×10, G204 ×8, G404 ×4, G202 ×5, G117 ×2, G120 ×2, G710 ×3, G118 ×1, G703 ×1, G705 ×1).
 
 ---
 
@@ -100,13 +100,14 @@ never leaves the function un-redacted.
 with an explicit `MaxMultiPartSize` (32 MB) in-memory bound. A hard total-size
 cap would break the large audio/image uploads this proxy must forward.
 
-## G710 — open redirect · 2 sites · MEDIUM
+## G710 — open redirect · 3 sites · MEDIUM
 
 **Verdict: false positive.** `internal/server/comfyui.go` (moved from
-`internal/server/api.go` by the upstream #1145 port) and
-`internal/server/api.go` issue relative, same-origin redirects with fixed
-`/comfyui/` and `/upstream/` prefixes; only the query string is carried over
-and the host is never user-controlled.
+`internal/server/api.go` by the upstream #1145 port), `internal/server/api.go`,
+and `internal/server/audiocpp.go` (upstream #1223 port) issue relative,
+same-origin redirects with fixed `/comfyui/`, `/upstream/`, and `/audiocpp/`
+prefixes; only the query string is carried over and the host is never
+user-controlled.
 
 ## G118 — goroutine uses context.Background · 1 site · MEDIUM
 
