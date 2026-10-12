@@ -5,6 +5,48 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-10-12 — Upstream clean cherry-pick batch (8 commits, zero hand merges)
+
+### What / why
+
+Follow-up to the upstream survey: of the 72 unmerged upstream commits, 8
+applied with `git cherry-pick -x` without a single conflict, build clean,
+and pass the full suite — taken as-is before tackling the ones that need
+hand merges. Tested first in a throwaway worktree (`git worktree add`) so
+the real tree was never at risk.
+
+### Picked (upstream order)
+
+- `aa8031f` #1157 — docker/unified audio.cpp: download + mp3 support
+- `a6f3b09` #1182 — docker/unified audio.cpp: static eSpeak-ng + phoneme data
+- `7e18554` #1189 — ComfyUI `concurrencyLimit` floor 50 → 999 (internal/config)
+- `45b78e2` #1197 — `/v1/systemone` added to POST-JSON model routes
+- `9db37d0` #1198 — capcompat `defaultProber` fallback (replaces `vllmProber`)
+- `783c323` #1199 — oMLX token-per-second usage fields into activity metrics
+- `d60d084` #1205 — per-model `disableKeepAlives` (stream-then-POST EOF fix)
+- `8db9566` #1213 — wol-proxy `-require-confirm` + wake progress UI
+
+Conflict-checked and deferred for hand merges (next batch): `e054c90`
+(vllm-wrapper untagged build), `bbdb55d` (multi-stream logging), `ccccb20`
+(DGX Spark GB10), `85a109b` (model uptime), `a2bf16e` (gopsutil panic fix —
+go.sum context), `0ac43bb` (sm_70 V100), `486376e` (content-type autofill),
+`5dd7f88` (perf collector restart loop), `d3ab665` (loading progress),
+`d34ddb2` (strip browser headers), `b51dde4` (decision models), `fd49827`
+(/audiocpp), `bea6428` (matrix `auto:orphans`).
+
+### Verification
+
+- Worktree dry-run: all 8 cherry-picks clean, `go build ./...` clean,
+  gofmt clean, touched packages (`config`, `capcompat`, `server`, `process`,
+  `cmd/wol-proxy`) all `ok`.
+- Real branch: `go test -short ./...` → 25 packages ok, zero failures.
+- `gosec` ×3 GOOS (linux/darwin/windows) → 0 findings.
+- `aidc-scan` → clean after adding one `.gitleaksignore` fingerprint: the
+  known tailcat-playground placeholder (`nodekey:012345…`, reviewed FP) got
+  re-attributed by gitleaks to its duplicate-lineage commit `f1d38508`
+  (same change as the already-listed `a41af15d`); both copies now listed,
+  matching the ledger's per-commit convention.
+
 ## 2026-09-26 — UI upgrades (models/search, capability pickers, stats split, log concerns) and upstream-review fixes (hw + perf)
 
 ### Addendum (same day): GPU telemetry saw-tooth fix

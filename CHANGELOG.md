@@ -160,6 +160,30 @@ Long-form entries with full context live in
   client. Replaces the old hardcoded permissive middleware; the redundant
   `/api/tags` Origin echo was removed (it would have bypassed the
   restriction).
+- Clean upstream cherry-pick batch (no hand merges required):
+  - ComfyUI models' `concurrencyLimit` floor raised from 50 to 999 — one
+    open ComfyUI tab makes many parallel asset and API requests, so the old
+    floor was still throttling it (upstream #1189, commit `7e18554`).
+  - `/v1/systemone` is routed through the POST-JSON model dispatch
+    (upstream #1197, commit `45b78e2`).
+  - Capability discovery gained a `defaultProber` fallback that works off
+    plain `/v1/models` JSON, replacing the vllm-specific prober in the
+    chain so unknown upstreams still get modalities detected (upstream
+    #1198, commit `9db37d0`).
+  - oMLX usage fields (`prompt_tokens_per_second`,
+    `generation_tokens_per_second`) are extracted into activity metrics
+    (upstream #1199, commit `783c323`).
+  - Per-model `disableKeepAlives` option: llama-server advertises
+    `Keep-Alive` on streamed responses and then closes the connection, so a
+    POST right after a stream could hit `proxy error: EOF` (502) on the
+    pooled connection; the option disables upstream connection pooling for
+    models that need it (upstream #1205, commit `d60d084`).
+  - wol-proxy: `-require-confirm` flag with a confirmation page and wake
+    progress tracking, so monitoring probes don't restart the target server
+    (upstream #1213, commit `8db9566`).
+  - docker/unified audio.cpp: download and mp3 support (upstream #1157,
+    commit `aa8031f`); static eSpeak-ng build with phoneme data installed
+    (upstream #1182, commit `a6f3b09`).
 
 ### Changed
 
