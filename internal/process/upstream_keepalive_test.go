@@ -186,6 +186,15 @@ func TestProcessCommand_DisableKeepAlives(t *testing.T) {
 					_, _ = io.WriteString(w, "ok")
 					return
 				}
+				if r.URL.Path == "/props" {
+					// The fork's reasoning-effort probe (upstream PR #915
+					// port) issues a one-time GET /props through the same
+					// transport; serve it, but keep it out of the
+					// chat-completions connection census.
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(w, "{}")
+					return
+				}
 				mu.Lock()
 				remotes[r.RemoteAddr] = struct{}{}
 				mu.Unlock()

@@ -60,6 +60,13 @@ aidc-scan
 - Worktree: 8/8 clean, build + gofmt + touched-package tests green.
 - Real branch: `go test -short ./...` all ok; gosec 0 findings ×3 GOOS;
   `aidc-scan` clean (gitleaks clean after the one fingerprint).
+- The #1205 process tests skip without `build/simple-responder` — built it
+  (`go build -o build/simple-responder ./cmd/simple-responder`) and ran
+  them for real.
+- Fresh-eyes review caught the #1205 census test failing on this fork
+  (`4 vs want 3`): our PR #915 `/props` reasoning probe opens an extra
+  upstream connection. Fixed the test to serve `/props` as JSON outside the
+  census; all 4 keepalive tests pass (`-count=1`).
 - `make` is not on PATH in this container; `make test-dev`'s two steps were
   run directly (`go test -short ./...`; staticcheck not installed, `|| true`
   in the Makefile tolerates it). `make test-all` (long concurrency tests)
@@ -76,3 +83,12 @@ aidc-scan
   `ccccb20` GB10 hw, `d3ab665` loading progress, `bbdb55d` multi-stream
   logging, `85a109b` uptime, `b51dde4` decision models, `fd49827` /audiocpp,
   `e054c90` vllm-wrapper build, `0ac43bb` sm_70.
+
+## Pre-completion review outcome
+
+Self-review + fresh-eyes subagent review of `540d1ad..HEAD`: 3 findings,
+all fixed in `9cfb969` (H1 census-test failure — fixed and re-verified;
+M1 verification overclaim — wording corrected, simple-responder built and
+tests actually run; L1 CHANGELOG overstatement — corrected). All other
+categories clean. `aidc-review-record` is not installed in this container
+(not on PATH, absent from ~/.local/bin) — this log entry is the record.

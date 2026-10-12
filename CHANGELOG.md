@@ -168,8 +168,8 @@ Long-form entries with full context live in
     (upstream #1197, commit `45b78e2`).
   - Capability discovery gained a `defaultProber` fallback that works off
     plain `/v1/models` JSON, replacing the vllm-specific prober in the
-    chain so unknown upstreams still get modalities detected (upstream
-    #1198, commit `9db37d0`).
+    chain so unknown upstreams still get context length and text in/out
+    capabilities detected (upstream #1198, commit `9db37d0`).
   - oMLX usage fields (`prompt_tokens_per_second`,
     `generation_tokens_per_second`) are extracted into activity metrics
     (upstream #1199, commit `783c323`).

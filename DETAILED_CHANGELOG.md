@@ -37,8 +37,10 @@ go.sum context), `0ac43bb` (sm_70 V100), `486376e` (content-type autofill),
 ### Verification
 
 - Worktree dry-run: all 8 cherry-picks clean, `go build ./...` clean,
-  gofmt clean, touched packages (`config`, `capcompat`, `server`, `process`,
-  `cmd/wol-proxy`) all `ok`.
+  gofmt clean; touched packages (`config`, `capcompat`, `server`, `process`,
+  `cmd/wol-proxy`) `ok` — note the two #1205 process tests SKIP unless
+  `build/simple-responder` exists (`go build -o build/simple-responder
+  ./cmd/simple-responder`); they were executed after building it.
 - Real branch: `go test -short ./...` → 25 packages ok, zero failures.
 - `gosec` ×3 GOOS (linux/darwin/windows) → 0 findings.
 - `aidc-scan` → clean after adding one `.gitleaksignore` fingerprint: the
@@ -46,6 +48,15 @@ go.sum context), `0ac43bb` (sm_70 V100), `486376e` (content-type autofill),
   re-attributed by gitleaks to its duplicate-lineage commit `f1d38508`
   (same change as the already-listed `a41af15d`); both copies now listed,
   matching the ledger's per-commit convention.
+
+### Post-review fix (fresh-eyes review catch)
+
+Upstream's #1205 census test counted every non-`/health` upstream
+connection; this fork's one-time `GET /props` reasoning probe (PR #915
+port) opened an extra connection, failing
+`TestProcessCommand_DisableKeepAlives/disableKeepAlives_opens_one_per_request`
+(4 vs want 3). The test handler now serves `/props` as JSON and keeps it
+out of the census — the only hand edit on top of the clean picks.
 
 ## 2026-09-26 — UI upgrades (models/search, capability pickers, stats split, log concerns) and upstream-review fixes (hw + perf)
 
