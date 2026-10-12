@@ -249,6 +249,8 @@ table td { padding: 0.5rem; }
 .model-aliases { font-size: 0.75rem; color: var(--color-txtsecondary); margin: 0.125rem 0 0; }
 .models-action { width: 5rem; padding: 0.5rem; text-align: right; }
 .models-state { width: 6rem; padding: 0.5rem; text-align: center; }
+.model-uptime { display: block; font-size: 0.7rem; font-variant-numeric: tabular-nums; margin-top: 0.125rem; }
+.model-detail-row { display: flex; justify-content: space-between; gap: 1rem; padding: 0.375rem 0; border-top: 1px solid var(--color-border, #333); margin-top: 0.75rem; font-size: 0.85rem; }
 .models-empty { padding: 2rem; text-align: center; }
 .peer-heading { margin: 2rem 0 0.5rem; }
 .peer-group { margin-bottom: 1rem; }

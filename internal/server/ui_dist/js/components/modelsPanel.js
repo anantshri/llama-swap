@@ -15,6 +15,7 @@ import {
 import { isNarrow } from "../theme.js";
 import { persistent } from "../store.js";
 import { listCapabilityBadges, capabilityBadgeClass } from "../util/capabilities.js";
+import { formatUptime } from "../util/format.js";
 
 function statusDotClass(m) {
   if (m.state === "ready") return "status-dot status-dot--ready";
@@ -115,7 +116,7 @@ export function ModelsPanel() {
     };
   }
 
-  function rowHtml(m) {
+  function rowHtml(m, renderedAt) {
     const display = escapeHtml(getDisplay(m));
     // Descriptions start collapsed (single line with ellipsis); the chevron
     // expands to the full pre-formatted text.
@@ -140,6 +141,12 @@ export function ModelsPanel() {
       m.state === "stopped"
         ? `<button class="btn btn--sm" data-load="${escapeHtml(m.id)}">Load</button>`
         : `<button class="btn btn--sm" data-unload="${escapeHtml(m.id)}" ${m.state !== "ready" ? "disabled" : ""}>Unload</button>`;
+    // Uptime ticks client-side from the server-provided uptimeMs so a
+    // browser clock skew cannot skew the age (upstream #1173).
+    const uptime =
+      m.state === "ready" && m.uptimeMs > 0
+        ? `<span class="model-uptime muted" data-uptime-base="${m.uptimeMs}" data-uptime-at="${renderedAt}" title="ready since ${escapeHtml(m.readySince ?? "")}">${formatUptime(m.uptimeMs)}</span>`
+        : "";
     return `
       <tr class="models-row${rowCls}">
         <td class="models-name">
@@ -153,7 +160,7 @@ export function ModelsPanel() {
           ${badgeHtml(m)}
         </td>
         <td class="models-action">${action}</td>
-        <td class="models-state"><span class="status status--${escapeHtml(m.state)}">${escapeHtml(m.state)}</span></td>
+        <td class="models-state"><span class="status status--${escapeHtml(m.state)}">${escapeHtml(m.state)}</span>${uptime}</td>
       </tr>
     `;
   }
@@ -259,7 +266,10 @@ export function ModelsPanel() {
 
   function renderList() {
     const f = filtered();
-    const regularHtml = f.regularModels.map(rowHtml).join("");
+    // Capture the render instant once so every row's uptime ticks from the
+    // same baseline (see the interval in createUptimeTicker).
+    const renderedAt = Date.now();
+    const regularHtml = f.regularModels.map((m) => rowHtml(m, renderedAt)).join("");
     const peerEntries = Object.entries(f.peerModelsByPeerId).sort(([a], [b]) => a.localeCompare(b));
     const peerHtml = peerEntries.length
       ? `<h3 class="peer-heading">Peer Models</h3>` +
@@ -432,6 +442,20 @@ export function ModelsPanel() {
     renderList();
   });
 
+  // SSE modelStatus events only fire on state changes, so uptime would go
+  // stale between events. Tick the cells in place once a second instead of
+  // re-rendering the whole list (which would drop focus/scroll state).
+  const uptimeTimer = setInterval(() => {
+    const now = Date.now();
+    for (const cell of listEl.querySelectorAll("[data-uptime-base]")) {
+      const base = Number(cell.getAttribute("data-uptime-base"));
+      const at = Number(cell.getAttribute("data-uptime-at"));
+      if (Number.isFinite(base) && Number.isFinite(at)) {
+        cell.textContent = formatUptime(base + (now - at));
+      }
+    }
+  }, 1000);
+
   const subs = [
     models.subscribe(renderList),
     playgroundModels.subscribe(renderList),
@@ -459,6 +483,7 @@ export function ModelsPanel() {
   return {
     el: root,
     destroy() {
+      clearInterval(uptimeTimer);
       cleanupAll(subs);
     },
   };

@@ -49,6 +49,7 @@
       import {
         buildModelOptions, filterModelOptions,
       } from "/ui/js/util/modelUtils.js";
+      import { formatUptime } from "/ui/js/util/format.js";
       import { ModelsPanel } from "/ui/js/components/modelsPanel.js";
       import { ModelSelector } from "/ui/js/components/modelSelector.js";
       import { LogPanel } from "/ui/js/components/logPanel.js";
@@ -561,6 +562,43 @@
         modelsStore.set([]);
         panel.destroy();
         panel.el.remove();
+
+        group("formatUptime (#1173)");
+        await atest("two largest units at each scale", () => {
+          expect(formatUptime(-5)).toBe("0s"); // clamped
+          expect(formatUptime(42_000)).toBe("42s");
+          expect(formatUptime(5 * 60_000 + 12_000)).toBe("5m 12s");
+          expect(formatUptime(2 * 3_600_000 + 5 * 60_000)).toBe("2h 5m");
+          expect(formatUptime((3 * 24 + 4) * 3_600_000)).toBe("3d 4h");
+        });
+
+        group("models panel — uptime (#1173)");
+        modelsStore.set([
+          { id: "ready1", name: "", description: "", state: "ready", unlisted: false, peerID: "", aliases: [],
+            uptimeMs: 5 * 60_000 + 12_000, readySince: "2026-10-12T10:00:00Z" },
+          { id: "stopped1", name: "", description: "", state: "stopped", unlisted: false, peerID: "", aliases: [] },
+        ]);
+        const upanel = ModelsPanel();
+        document.body.appendChild(upanel.el);
+        await atest("ready model shows uptime cell with tick attributes", () => {
+          const cell = upanel.el.querySelector("[data-uptime-base]");
+          expect(cell).toBeTruthy();
+          expect(cell.textContent).toBe("5m 12s");
+          expect(Number(cell.getAttribute("data-uptime-base"))).toBe(5 * 60_000 + 12_000);
+          expect(cell.getAttribute("title")).toContain("2026-10-12T10:00:00Z");
+        });
+        await atest("non-ready models show no uptime", () => {
+          expect(upanel.el.querySelectorAll("[data-uptime-base]").length).toBe(1);
+        });
+        await atest("uptime survives the playground capabilities merge", () => {
+          // mergedModels() spreads the live SSE record first; uptimeMs must
+          // still be present after capabilities are attached.
+          modelsStore.set(modelsStore.get().slice());
+          expect(upanel.el.querySelector("[data-uptime-base]").textContent).toBe("5m 12s");
+        });
+        modelsStore.set([]);
+        upanel.destroy();
+        upanel.el.remove();
 
         group("model picker — capability default");
         modelsStore.set([

@@ -6,6 +6,7 @@ import { observable } from "../store.js";
 import { LogPanel } from "../components/logPanel.js";
 import { ActivityTable } from "../components/activityTable.js";
 import { capabilityLabels } from "../util/capabilities.js";
+import { formatUptime } from "../util/format.js";
 
 const LOG_LENGTH_LIMIT = 1024 * 100; // 100KB
 
@@ -143,6 +144,12 @@ export function ModelDetailPage(getModelId) {
     const playground = playgroundModels.get().find((p) => p.id === (m?.id ?? id));
     const caps = Object.entries(playground?.capabilities ?? {}).filter(([, v]) => v);
     const ctx = playground?.context_length ?? 0;
+    // Uptime snapshot (upstream #1173): age of the ready state as of the
+    // latest modelStatus event, plus the server-side ready timestamp.
+    const uptimeRow =
+      m?.state === "ready" && m.uptimeMs > 0
+        ? `<div class="model-detail-row"><span class="muted">Uptime</span><span>${formatUptime(m.uptimeMs)}${m.readySince ? ` <span class="muted">(since ${escapeHtml(new Date(m.readySince).toLocaleString())})</span>` : ""}</span></div>`
+        : "";
 
     panes.details.innerHTML = `
       <div class="card model-detail-details">
@@ -158,6 +165,7 @@ export function ModelDetailPage(getModelId) {
                 }</div>`
           }
         </div>
+        ${uptimeRow}
       </div>
     `;
   }
