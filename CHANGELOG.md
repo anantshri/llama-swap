@@ -12,6 +12,12 @@ Long-form entries with full context live in
 
 ### Added
 
+- Docs: new KB guide `guides/api-integration/opik` — running Opik (open-source
+  LLM observability/evaluation) against llama-swap's OpenAI-compatible `/v1`
+  endpoint: the AI Providers "vLLM / Custom provider" setup for the Playground
+  and Online Evaluation (including the Docker host networking gotcha), and the
+  Python SDK LLM-as-judge configuration via `OPENAI_BASE_URL` + the LiteLLM
+  `openai/` model prefix.
 - Models dashboard: model descriptions now start collapsed to their first
   line with an expandable chevron (expanded state survives the frequent SSE
   re-renders), and a filter box matches model id, name, alias, and

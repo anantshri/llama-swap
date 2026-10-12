@@ -58,6 +58,49 @@ port) opened an extra connection, failing
 (4 vs want 3). The test handler now serves `/props` as JSON and keeps it
 out of the census — the only hand edit on top of the clean picks.
 
+## 2026-10-12 — KB guide: using Opik with llama-swap
+
+### Goal
+
+Evaluate whether [Opik](https://github.com/comet-ml/opik) (open-source LLM
+observability / evaluation platform) can be supported, and document the
+zero-code integration path chosen: llama-swap already serves the
+OpenAI-compatible `/v1` endpoint that Opik's model-facing features require.
+
+### Research findings (drove the design of the guide)
+
+- Opik is a full platform (tracing, datasets, experiments, LLM-as-a-judge,
+  prompt management) — embedding it in llama-swap or reimplementing it would
+  be a second product, out of scope for a lightweight proxy.
+- Opik never talks to model servers except through OpenAI-compatible APIs.
+  Two configuration-only integration points exist:
+  1. **AI Providers** (Workspace Settings → "vLLM / Custom provider"):
+     any base URL ending in `/v1`, optional static API key, model list,
+     "Discover models" fetches `/v1/models`. Used by the Prompt Playground
+     and Online Evaluation rules.
+  2. **Python SDK judge metrics** via LiteLLM: `OPENAI_BASE_URL` +
+     `OPENAI_API_KEY` env vars and the `openai/<model-id>` model prefix.
+
+### Change
+
+- New file `docs/kb/guides/api-integration/opik.md` following the KB
+  frontmatter contract (`category: guides`, `config_keys: [apiKeys,
+  hooks.on_startup.preload]`, both verified against `config-schema.json`).
+  Covers both integration points, the Docker networking failure mode
+  (`172.17.0.1`/`host.docker.internal` instead of `localhost`), cold-start
+  latency on first judge call (points at preloading), model-id matching, and
+  why no CORS setup is needed (all calls are server-side).
+- No code, config-schema, or UI changes.
+
+### Verification
+
+- `go test ./internal/docagent/ -run TestKB` — frontmatter + cross-reference
+  validation passes for the new article (one iteration: `config_keys` entry
+  `hooks.onStartup.preload` had to be corrected to the schema's snake_case
+  `hooks.on_startup.preload`).
+- `go test -short ./...` — all green; `gofmt -l .` — clean; `aidc-scan` —
+  clean (semgrep, gitleaks).
+
 ## 2026-09-26 — UI upgrades (models/search, capability pickers, stats split, log concerns) and upstream-review fixes (hw + perf)
 
 ### Addendum (same day): GPU telemetry saw-tooth fix
