@@ -21,6 +21,9 @@ reference; issues and pull requests are welcome but may sit untouched.
   Everything not listed below — installation channels (Docker, Homebrew, MacPorts,
   WinGet, release binaries), the full configuration reference, nginx reverse-proxy
   setup, CLI log streaming — works as documented there.
+- Post-baseline upstream features adopted by cherry-pick (most recently the
+  `/audiocpp/` audio.cpp UI endpoint, upstream #1223) are documented in the
+  CHANGELOG.
 - This fork's changes are tracked in [CHANGELOG.md](CHANGELOG.md) (summary) and
   [DETAILED_CHANGELOG.md](DETAILED_CHANGELOG.md) (long-form, with verification).
 

@@ -25,6 +25,7 @@ function statusDotClass(m) {
 
 function modelServerPath(modelId) {
   if (modelId === "comfyui_auto") return "/comfyui/";
+  if (modelId === "audiocpp_auto") return "/audiocpp/";
   return `/upstream/${encodeURIComponent(modelId)}/`;
 }
 

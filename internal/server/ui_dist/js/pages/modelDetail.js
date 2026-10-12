@@ -12,6 +12,7 @@ const LOG_LENGTH_LIMIT = 1024 * 100; // 100KB
 
 function modelServerPath(modelId) {
   if (modelId === "comfyui_auto") return "/comfyui/";
+  if (modelId === "audiocpp_auto") return "/audiocpp/";
   return `/upstream/${encodeURIComponent(modelId)}/`;
 }
 

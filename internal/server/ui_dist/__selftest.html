@@ -600,6 +600,19 @@
         upanel.destroy();
         upanel.el.remove();
 
+        group("models panel — audiocpp link (#1223)");
+        modelsStore.set([
+          { id: "audiocpp_auto", name: "", description: "", state: "stopped", unlisted: false, peerID: "", aliases: [] },
+        ]);
+        const apanel = ModelsPanel();
+        document.body.appendChild(apanel.el);
+        await atest("audiocpp_auto open-model link targets /audiocpp/", () => {
+          expect(apanel.el.querySelector(".models-open").getAttribute("href")).toBe("/audiocpp/");
+        });
+        modelsStore.set([]);
+        apanel.destroy();
+        apanel.el.remove();
+
         group("model picker — capability default");
         modelsStore.set([
           { id: "qwen3", name: "Qwen 3", state: "stopped", unlisted: false, peerID: "", aliases: [], capabilities: {}, architecture: { input_modalities: ["text"], output_modalities: ["text"] } },
