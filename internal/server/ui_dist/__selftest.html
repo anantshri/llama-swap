@@ -53,6 +53,7 @@
       import { loadingPercent, loadingMessage } from "/ui/js/util/modelUtils.js";
       import { ModelsPanel } from "/ui/js/components/modelsPanel.js";
       import { ModelSelector } from "/ui/js/components/modelSelector.js";
+      import { ModelDetailPage } from "/ui/js/pages/modelDetail.js";
       import { LogPanel } from "/ui/js/components/logPanel.js";
       import { StatsPage } from "/ui/js/pages/stats.js";
       import { observable } from "/ui/js/store.js";
@@ -671,6 +672,21 @@
         modelsStore.set([]);
         lpanel.destroy();
         lpanel.el.remove();
+
+        group("model detail — loading progress header (#1212)");
+        modelsStore.set([
+          { id: "big", name: "Big Model", description: "", state: "starting", unlisted: false, peerID: "", aliases: [],
+            loadingProgress: 0.42, loadingMessage: "loading tensors" },
+        ]);
+        const dpage = ModelDetailPage(() => "big");
+        document.body.appendChild(dpage.el);
+        await atest("detail head shows percent and message while starting", () => {
+          expect(dpage.el.querySelector(".model-loadpct")?.textContent).toBe("42%");
+          expect(dpage.el.querySelector(".model-loadmsg")?.getAttribute("title")).toBe("loading tensors");
+        });
+        modelsStore.set([]);
+        dpage.destroy();
+        dpage.el.remove();
 
         group("model picker — capability default");
         modelsStore.set([

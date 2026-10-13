@@ -5,8 +5,6 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
----
-
 ## 2026-10-12 — Hand-merge batch 4: loading progress (#1212 / d3ab665)
 
 ### What / why
@@ -21,7 +19,8 @@ port was kept deliberately simple.
 The entire Go side applied clean (loading_progress.go + 202-line tests,
 process_command health-check parsing, `ProcessLoadingEvent` wiring that
 re-sends `modelStatus` per progress tick, apigroup fields, schema, docs);
-only the four Svelte files needed `git rm`. Vanilla port:
+the five `ui/src` files were skipped — this repo has no Svelte UI.
+Vanilla port:
 
 - `loadingPercent`/`loadingMessage` helpers in `util/modelUtils.js`
   (shared): percent floors and clamps so a load never shows 100% while

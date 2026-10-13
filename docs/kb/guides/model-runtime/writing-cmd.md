@@ -106,8 +106,8 @@ the health check with a non-200 status and a JSON body like this:
   is treated as a plain "not ready yet". llama-server's own loading response
   falls in this group.
 
-The Models page and the model's detail page show the percentage, a progress
-bar and the message while the model starts.
+The Models page shows the percentage, a progress bar and the message while
+the model starts; the model's detail page shows the percentage and message.
 
 Each time the reported `progress` value changes, llama-swap restarts the
 `healthCheckTimeout` countdown. The timeout then limits how long a load may go

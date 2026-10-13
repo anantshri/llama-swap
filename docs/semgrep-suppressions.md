@@ -34,6 +34,7 @@ grep -rn "nosemgrep" internal/ cmd/ .github/
   The wol-proxy confirm/loading pages (#1213) write constant HTML — the two new
   `fmt.Fprint` sites carry inline markers; the remaining live hits are
   `httptest` fixture responders in `internal/capcompat/{capcompat,service}_test.go`
+  and `internal/process/loading_progress_test.go` (#1212 port)
   (static JSON bytes, reviewed FP) and the pre-existing category sites above.
 - **`django-no-csrf-token`** — misfire of a Django-template rule on the static,
   Go-embedded `cmd/wol-proxy/confirm.html` consent page; the form's POST is the
