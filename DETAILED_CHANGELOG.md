@@ -5,8 +5,6 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
----
-
 ## 2026-10-13 — Tailcat subsystem port (upstream #1074 → #1183)
 
 ### What / why
@@ -56,6 +54,21 @@ the final upstream state was snapshotted and integrated:
   CLI (key generation) and relay reachability, neither available in this
   container. First real deployment should smoke: boot with a generated
   key, connect a client, check `tc:` activity rows appear.
+
+### Post-review fixes (fresh-eyes review catch)
+
+- **H1** reload bricked the listener: the fork's reload path missed
+  upstream's `configureTailcatListener(&newCfg, *flagListenTailcat)` call,
+  so after any reload `TailcatEnabled()` was false and ServeTailcatHTTP
+  404'd everything. Added (also restores reload-time policy validation).
+- **M1** the schema merge had wholesale-replaced the peers block, dropping
+  the fork-only `setParamsByMatch` from peer filters — restored (peer
+  filters keep setParams/stripParams/setParamsByMatch + the new
+  tailcatKey).
+- **M2** the page leaked an ActivityTable per Reveal/Hide re-render —
+  tables are now destroyed on re-render and page destroy.
+- **M3** Copy buttons now use the UI's clipboard fallback
+  (textarea + execCommand) for plain-HTTP origins, with failure feedback.
 
 ## 2026-10-13 — Capture dialog: section collapse state survives re-renders
 

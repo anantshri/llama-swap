@@ -901,11 +901,49 @@
                                 "additionalProperties": true,
                                 "default": {},
                                 "description": "Dictionary of parameters to set/override in requests to this peer. Useful for injecting provider-specific settings. A key ending in '?' (e.g. 'max_tokens?') is set-if-undefined: it is only applied when the request does not already contain that parameter. Protected params like 'model' cannot be overridden. Values can be strings, numbers, booleans, arrays, or objects."
+                            },
+                            "setParamsByMatch": {
+                                "oneOf": [
+                                    {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "key": {
+                                                    "type": "string",
+                                                    "pattern": "^[A-Za-z0-9_-]+$",
+                                                    "description": "Top-level request field to inspect (e.g. reasoning_effort). Must not be 'model' and may only contain letters, digits, underscores, and hyphens."
+                                                },
+                                                "match": {
+                                                    "type": "string",
+                                                    "description": "Value the key must equal for the rule to apply. Non-string JSON values are compared by their string form, so booleans and numbers must be quoted."
+                                                },
+                                                "set": {
+                                                    "type": "object",
+                                                    "additionalProperties": true,
+                                                    "minProperties": 1,
+                                                    "description": "Parameters to apply when the rule matches. Object values are merged into an existing request object rather than replacing it. Protected params like 'model' cannot be overridden."
+                                                }
+                                            },
+                                            "required": [
+                                                "key",
+                                                "match",
+                                                "set"
+                                            ],
+                                            "additionalProperties": false
+                                        }
+                                    },
+                                    {
+                                        "$ref": "#/definitions/macroReference"
+                                    }
+                                ],
+                                "default": [],
+                                "description": "List of rules that set parameters when a request field equals a value, or a whole-value macro reference (e.g. ${my_rules}) expanding to such a list. Rules are evaluated in order and every matching rule applies, so a later rule overrides an earlier one. Applied after stripParams and before setParams."
                             }
                         },
                         "additionalProperties": false,
                         "default": {},
-                        "description": "Dictionary of filter settings for peer requests. Supports stripParams and setParams."
+                        "description": "Dictionary of filter settings for peer requests. Supports stripParams, setParams, and setParamsByMatch."
                     },
                     "timeouts": {
                         "type": "object",

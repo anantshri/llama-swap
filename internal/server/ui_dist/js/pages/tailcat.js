@@ -21,19 +21,51 @@ export function TailcatPage() {
   const bodyEl = root.querySelector("[data-body]");
 
   let revealed = false;
+  let activityTable = null;
 
-  async function copy(text, btn, doneLabel = "Copied!") {
+  // Clipboard with the LAN-HTTP fallback the rest of this UI uses
+  // (navigator.clipboard is undefined on plain HTTP origins).
+  async function copyText(text) {
     try {
       await navigator.clipboard.writeText(text);
-      const original = btn.textContent;
-      btn.textContent = doneLabel;
-      setTimeout(() => (btn.textContent = original), 1800);
+      return true;
     } catch {
-      /* clipboard unavailable */
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      let ok = false;
+      try {
+        ok = document.execCommand("copy");
+      } catch {
+        ok = false;
+      }
+      ta.remove();
+      return ok;
+    }
+  }
+
+  async function copy(text, btn) {
+    if (await copyText(text)) {
+      const original = btn.textContent;
+      btn.textContent = "Copied!";
+      setTimeout(() => (btn.textContent = original), 1800);
+    } else {
+      btn.textContent = "Copy failed";
+      setTimeout(() => (btn.textContent = "Copy"), 1800);
     }
   }
 
   function render(status) {
+    // Reveal/Hide re-renders; the previous activity table's listeners and
+    // subscriptions must not leak.
+    if (activityTable) {
+      activityTable.destroy();
+      activityTable = null;
+    }
     if (!status.enabled || !status.address) {
       bodyEl.innerHTML = `
         <div class="card tailcat-status">
@@ -86,12 +118,12 @@ export function TailcatPage() {
     bodyEl.querySelector("[data-copy-config]")?.addEventListener("click", (e) => copy(configYaml, e.target));
 
     const activityHost = bodyEl.querySelector("[data-activity]");
-    const table = ActivityTable({
+    activityTable = ActivityTable({
       srcPrefix: "tc:",
       storagePrefix: "tailcat-activity",
       emptyMessage: "No Tailcat-sourced requests yet",
     });
-    activityHost.appendChild(table.el);
+    activityHost.appendChild(activityTable.el);
   }
 
   (async () => {
@@ -108,6 +140,8 @@ export function TailcatPage() {
 
   return {
     el: root,
-    destroy() {},
+    destroy() {
+      if (activityTable) activityTable.destroy();
+    },
   };
 }

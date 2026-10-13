@@ -14,3 +14,5 @@ f1d38508742852af6316f07dc60e21231cf8c953:docs/kb/guides/operations/tailcat-playg
 8a06d56b5444e62eccb6cbdf3616b232487b1125:docs/kb/guides/operations/tailcat.md:generic-api-key:45
 8a06d56b5444e62eccb6cbdf3616b232487b1125:docs/config.example.yaml:generic-api-key:174
 8a06d56b5444e62eccb6cbdf3616b232487b1125:ui/src/lib/activitySource.test.ts:generic-api-key:8
+65b210fbf6203115e9b293c7680bda053c98a223:docs/config.example.yaml:generic-api-key:275
+65b210fbf6203115e9b293c7680bda053c98a223:docs/kb/guides/operations/tailcat.md:generic-api-key:45

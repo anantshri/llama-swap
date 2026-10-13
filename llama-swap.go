@@ -339,6 +339,14 @@ func main() {
 			return
 		}
 
+		// Re-run the Tailcat listener checks on the new config: the flag is
+		// startup-only, so this keeps tailcatEnabled true across reloads and
+		// rejects a reload that would leave the listener without models.
+		if err := configureTailcatListener(&newCfg, *flagListenTailcat); err != nil {
+			proxyLog.Warnf("invalid Tailcat listener configuration after reload: %v", err)
+			return
+		}
+
 		if perfMon != nil {
 			perfMon.UpdateConfig(newCfg.Performance)
 		}
