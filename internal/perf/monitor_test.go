@@ -274,12 +274,12 @@ func (f *fakeGpuCollector) wait(ctx context.Context, d time.Duration) bool {
 		f.waitDone <- struct{}{}
 		return false
 	}
-	select {
-	case <-ctx.Done():
-		return false
-	default:
-		return true
-	}
+	// Pace the restart loop (1ms instead of returning immediately): with an
+	// instant wait the six collectors cycle faster than the test goroutine
+	// drains, and the non-blocking publish (buffer 1, drop on full) can drop
+	// the single stat a test is waiting for. One millisecond per restart
+	// keeps the sequence deterministic while staying fast.
+	return waitOrDone(ctx, time.Millisecond)
 }
 
 func (f *fakeGpuCollector) waitHistory() []time.Duration {
@@ -302,7 +302,10 @@ func newGpuTestMonitor(t *testing.T, f *fakeGpuCollector) (*Monitor, chan []GpuS
 
 func waitGpuStat(t *testing.T, gpuCh chan []GpuStat, wantID int) {
 	t.Helper()
-	deadline := time.After(2 * time.Second)
+	// 10s rather than upstream's 2s: generous headroom for goroutine
+	// scheduling under a full parallel-suite load. (The deadline is not what
+	// fixed the flakes here — pacing fakeGpuCollector.wait did.)
+	deadline := time.After(10 * time.Second)
 	for {
 		select {
 		case g := <-gpuCh:
@@ -433,14 +436,14 @@ func TestStart_StopDuringRestartWaitEndsCollector(t *testing.T) {
 	waitGpuStat(t, gpuCh, 1)
 	select {
 	case <-f.waiting:
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for the restart wait to begin")
 	}
 
 	m.Stop()
 	select {
 	case <-f.waitDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("restart wait did not end after Stop")
 	}
 

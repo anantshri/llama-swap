@@ -5,6 +5,42 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+---
+
+## 2026-10-12 — perf GPU-collector restart loop (#1196 / 5dd7f88)
+
+First of the hand-merge batch. Only one hunk conflicted: our G104-motivated
+`_ = cmd.Wait()` vs upstream's error-logging variant. Took upstream's
+(their fix, user decision) — it checks the error, so gosec stays at zero
+and collector exits are no longer silently discarded. Everything else
+(monitor.go restart loop + 266 lines of tests) applied clean.
+
+### Post-port test-stability work
+
+The new tests flaked, then failed deterministically in multi-test runs
+(`TestStart_GpuRestartWaitResetsAfterStats`: timed out waiting for
+collector 6; `-count=5` failed iterations 1,3,4,5 while 2 passed in 0.00s).
+Root cause — an upstream test race, not load: `fakeGpuCollector.wait`
+returned instantly, so the restart loop cycled all six fake collectors
+faster than the test goroutine drained; the monitor's publish is
+non-blocking (buffer 1, drop on full), so the single stat the test awaited
+could be dropped. Fixes:
+
+- `fakeGpuCollector.wait` now waits 1ms via `waitOrDone` (or aborts on
+  ctx) — paces the loop, keeps wait-history semantics, total test time
+  still trivial.
+- Wait deadlines in the new tests carry load headroom (10s vs upstream's
+  2s); comments note the pacing fix — not the deadline — is what cured
+  the flakes.
+
+### Verification
+
+- `go test ./internal/perf/` 68 ok; `-count=10` of the flaky test 10/10;
+  the previously-failing pairs (`perf`+`process`, parallel and `-p 1`) green.
+- `go test -short ./...` ×3 consecutive: 1901 passed, 32 packages, zero
+  failures.
+- gosec 0 ×3 GOOS; aidc-scan clean; gofmt clean.
+
 ## 2026-10-12 — UI-only-conflict upstream picks (GB10, uptime, /audiocpp)
 
 ### What / why

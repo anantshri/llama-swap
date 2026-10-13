@@ -213,6 +213,17 @@ Long-form entries with full context live in
     reserved `audiocpp_auto` model, with the open-model link on the models
     table targeting it (upstream #1223, commit `fd49827`; G710 suppression
     carried over from comfyui.go — same fixed-prefix same-origin redirect).
+- perf: a GPU collector that stops (e.g. nvidia-smi crashing or being
+  absent while the monitor runs) is restarted with a doubling backoff
+  (5s→30s, reset after a collector delivers stats), and nvidia-smi exits are
+  logged instead of silently discarded (upstream #1196, commit `5dd7f88`;
+  their error-logging `cmd.Wait()` variant kept over our gosec-motivated
+  discard — it checks the error, so the zero-gosec bar holds). Two test
+  fixes on top: the fake restart-wait is paced by 1ms — with an instant
+  wait the restart loop cycled faster than the test could drain and the
+  drop-on-full publish lost the exact stat a test awaited (an upstream test
+  race that surfaced here under parallel-suite timing) — and the new tests'
+  wait deadlines carry load headroom.
 
 ### Changed
 
