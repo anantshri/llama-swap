@@ -673,7 +673,8 @@
                                     "enum": [
                                         "text",
                                         "audio",
-                                        "image"
+                                        "image",
+                                        "video"
                                     ]
                                 },
                                 "description": "List of input modalities understood by the model."

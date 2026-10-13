@@ -46,6 +46,14 @@ aidc-scan                     # clean
 
 ## Notes
 
+- Fresh-eyes review: no High/Medium findings; 2 Lows fixed in `cda4009` —
+  the doubled `---` separator reintroduced by the changelog commit, and the
+  pre-existing `capabilities.in` schema enum missing `video` (Go
+  `validModalities` allows it; `out` was already synced by this batch).
+  Verified by the reviewer: no dropped hunks beyond the documented tailcat
+  block and #1172 test hunk; no tailcat references remain; no double body
+  processing across chains; contenttype multipart skip and 413 path
+  correct; `validOutModalities` enforced and schema enums now match Go.
 - Upstream's 486376e also threaded `prepareModelBody` into their Tailcat
   handler — dropped with the tailcat block; nothing here references it.
 - The trimmed #1172 assertions are tracked to return with `bbdb55d`.

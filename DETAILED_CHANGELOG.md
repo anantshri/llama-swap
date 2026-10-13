@@ -5,8 +5,6 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
----
-
 ## 2026-10-12 — Hand-merge batch 1: content-type autofill, browser headers, decision models
 
 ### What / why
