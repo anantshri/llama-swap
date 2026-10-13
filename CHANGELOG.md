@@ -224,6 +224,20 @@ Long-form entries with full context live in
   drop-on-full publish lost the exact stat a test awaited (an upstream test
   race that surfaced here under parallel-suite timing) — and the new tests'
   wait deadlines carry load headroom.
+- Hand-merge batch 1 (one small manual resolution each):
+  - Requests without (or with a wrong) `Content-Type` to the model POST-JSON
+    routes are tolerated — the body is normalized before the model lookup and
+    filters parse it (upstream #1194, commit `486376e`; extended to the
+    Anthropic/Ollama translated chains so the same sloppy clients translate
+    too — covered by a no-content-type `/v1/messages` test).
+  - Browser-generated headers (`Sec-Fetch-*` and friends) are stripped before
+    proxying to peers (upstream #1215, commit `d34ddb2`; the conflicting test
+    hunk presupposed #1172's separate log-stream endpoints and was trimmed —
+    the assertions return when #1172 lands).
+  - Decision-model detection: llama-server models whose listing reports only
+    decision output are detected automatically (clef fixtures), and
+    `decisions` joins the valid output modalities (upstream #1220, commit
+    `b51dde4`).
 
 ### Changed
 

@@ -96,6 +96,37 @@ func TestServer_AnthropicMessages_BufferedTranslation(t *testing.T) {
 	}
 }
 
+func TestServer_AnthropicMessages_MissingContentTypeTolerated(t *testing.T) {
+	// The content-type middleware (upstream #1194) runs first in
+	// translatedDispatch, so a client that omits Content-Type still gets its
+	// Anthropic body parsed and translated (fork extension of #1194).
+	var gotBody []byte
+	local := newStubRouter([]string{"test-model"}, "")
+	local.serveHTTP = func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(openAIChatJSON))
+	}
+	s := newTranslateServer(t, oneModelConfig(), local)
+
+	body := `{"model":"test-model","max_tokens":10,"messages":[{"role":"user","content":"hello"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	// Deliberately no Content-Type header.
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", w.Code, w.Body.String())
+	}
+	if got := gjson.ParseBytes(w.Body.Bytes()); got.Get("type").String() != "message" {
+		t.Errorf("response type = %q, want message; body=%s", got.Get("type").String(), w.Body.String())
+	}
+	if !gjson.GetBytes(gotBody, "messages").Exists() {
+		t.Errorf("upstream body not OpenAI-shaped: %s", gotBody)
+	}
+}
+
 func TestServer_AnthropicMessages_StreamingTranslation(t *testing.T) {
 	sse := strings.Join([]string{
 		`data: {"id":"chatcmpl-x","choices":[{"delta":{"role":"assistant","content":"Hi"},"finish_reason":null}]}`,

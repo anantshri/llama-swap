@@ -5,6 +5,43 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+---
+
+## 2026-10-12 — Hand-merge batch 1: content-type autofill, browser headers, decision models
+
+### What / why
+
+Second set of hand-merged upstream picks (user-approved resolutions): each
+had exactly one small manual resolution.
+
+### Picks and resolutions
+
+- `0ab9b16` (upstream `486376e` #1194, content-type middleware) —
+  `contenttype.go` + tests applied clean; the model-chain wiring applied
+  clean (`modelMWs` gets `createContentTypeMiddleware()` right after auth).
+  The conflict was entirely upstream's Tailcat-context code (subsystem this
+  fork doesn't carry) — dropped. Fork extension per user call: the
+  middleware also runs first in `translatedDispatch`, so Anthropic
+  `/v1/messages` and the Ollama routes tolerate missing content-type too;
+  covered by `TestServer_AnthropicMessages_MissingContentTypeTolerated`.
+- `ce84b20` (upstream `d34ddb2` #1215, strip browser headers) — feature
+  (`router/peer.go`, `swaputil/cors.go`) and its tests applied clean. The
+  conflicting `apigroup_test.go` hunk was #1172's log-stream tests riding
+  along in upstream's context (`serveLogEvents` helper + three
+  `APILogEvents` tests + a logData assertion) — trimmed per user decision;
+  they return when #1172 lands. One now-unused import (`bytes`) removed.
+- `69e162b` (upstream `b51dde4` #1220, decision models) — additive splice
+  knot in `model_config.go`: kept both our #915 reasoning config and their
+  `validOutModalities` (+`decisions`), each with its own braces; schema
+  enum extended (`video`, `decisions` — valid per the merged Go maps); KB
+  doc tags merged. clef detection fixtures + capcompat changes applied
+  clean.
+
+### Verification
+
+- `go test -short ./...` → 1926 passed, 32 packages, zero failures.
+- gosec 0 ×3 GOOS; aidc-scan clean; gofmt clean; schema valid JSON.
+
 ## 2026-10-12 — perf GPU-collector restart loop (#1196 / 5dd7f88)
 
 First of the hand-merge batch. Only one hunk conflicted: our G104-motivated
