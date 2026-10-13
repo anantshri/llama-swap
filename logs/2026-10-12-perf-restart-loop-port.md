@@ -55,6 +55,11 @@ aidc-scan                                               # clean
 
 ## Notes
 
+- Fresh-eyes review: 2 Low findings — doubled `---` in DETAILED_CHANGELOG
+  (fixed); pacing-by-1ms is a heuristic, not synchronization (documented
+  here; if it ever reflakes, make the fake's delivery acknowledged instead
+  of paced). Everything else verified clean: upstream hunk byte-identical,
+  no dropped hunks, no sysfs/Stop interactions, gosec 0 ×3.
 - `nproc` is 16 here; the flake was NOT CPU starvation (failed with `-p 1`
   too) — worth remembering when a "flaky under load" test resists deadline
   bumps: look for drop-on-full publish + instant fakes.

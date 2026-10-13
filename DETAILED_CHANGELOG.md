@@ -5,8 +5,6 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
----
-
 ## 2026-10-12 — perf GPU-collector restart loop (#1196 / 5dd7f88)
 
 First of the hand-merge batch. Only one hunk conflicted: our G104-motivated
