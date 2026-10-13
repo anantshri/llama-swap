@@ -318,14 +318,15 @@ func (p *proxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if *flagRequireConfirm {
-			// never wake the upstream without the user's consent
-			if path == "/" || strings.HasPrefix(path, "/ui/") {
-				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				w.WriteHeader(http.StatusOK)
-				fmt.Fprint(w, confirmPageHTML)
-				return
-			}
+	if *flagRequireConfirm {
+		// never wake the upstream without the user's consent
+		if path == "/" || strings.HasPrefix(path, "/ui/") {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter -- writes the constant confirmPageHTML, not user input
+			fmt.Fprint(w, confirmPageHTML)
+			return
+		}
 
 			slog.Info("upstream not ready, confirmation required", "req", path, "from", r.RemoteAddr)
 			http.Error(w, "upstream is not running, open the root page to confirm starting it", http.StatusServiceUnavailable)
@@ -398,6 +399,7 @@ func (p *proxyServer) handleWakeProgress(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
+	// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter -- loadingPage interpolates only Go-side constants (flag values, wake duration)
 	fmt.Fprint(w, p.loadingPage())
 }
 

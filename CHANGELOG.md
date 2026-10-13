@@ -224,6 +224,28 @@ Long-form entries with full context live in
   drop-on-full publish lost the exact stat a test awaited (an upstream test
   race that surfaced here under parallel-suite timing) — and the new tests'
   wait deadlines carry load headroom.
+- Hand-merge batch 2:
+  - docker/unified: vllm-wrapper builds correctly on untagged commits via the
+    new shared `lib-release.sh` revision resolver (upstream #1156, commit
+    `e054c90`; the kubeswap stage from the upstream diff dropped — no
+    kubeswap here). sm_70 (V100) compiled into the CUDA 12 image, with
+    upstream's reworked `build-image.sh` adopted wholesale — two-image CUDA
+    12/13 layout with per-platform arch tables (upstream #1187, commit
+    `0ac43bb`, user-approved supersede; README GPU-support section updated
+    to match).
+  - Matrix orphan reference renamed and reworked onto upstream's evolution
+    of the same #1026 feature: `+undefined` becomes **`+auto:orphans`**,
+    with a shared `buildModelSet` root, `SynthesizedOrphans()` accessor and
+    richer startup logging (upstream commit `bea6428`). **Breaking** for
+    configs using `+undefined` — rename the reference; the semantics are
+    unchanged. Our two legacy `*_undefined_test.go` files were superseded
+    by upstream's `*_orphans_test.go` (same coverage plus YAML and
+    reference-validation cases).
+  - semgrep: whole-repo scan now reports zero findings — the #1213
+    wol-proxy confirm/loading pages and the capcompat test fixtures carry
+    inline `nosemgrep` markers with reasons; `docs/semgrep-suppressions.md`
+    updated with the new sites and the `django-no-csrf-token` misfire
+    category.
 - Hand-merge batch 1 (one small manual resolution each):
   - Requests without (or with a wrong) `Content-Type` to the model POST-JSON
     routes are tolerated — the body is normalized before the model lookup and

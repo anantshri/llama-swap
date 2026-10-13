@@ -84,6 +84,7 @@ func newUpstream(t *testing.T, routes map[string][]byte) *upstream {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- static test fixture bytes
 		w.Write(body)
 	})
 	u.server = httptest.NewServer(mux)
@@ -492,6 +493,7 @@ func TestCapcompat_ClientJoinsBasePathPrefix(t *testing.T) {
 	var gotPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
+		// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- static test fixture bytes
 		w.Write(fixture(t, "llama-server", "v1_models.json"))
 	}))
 	defer server.Close()

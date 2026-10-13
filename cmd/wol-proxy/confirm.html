@@ -90,6 +90,7 @@ form { margin: 0; }
     <h1>Server offline</h1>
     <p>The upstream server is asleep.</p>
     <p>Wake it up?</p>
+    <!-- nosemgrep: python.django.security.django-no-csrf-token.django-no-csrf-token -- not a Django template; a static embedded page whose form POST is the consent action itself (no cookies or session to forge) -->
     <form method="post" action="/wol-wake">
         <button class="btn" type="submit">&#9654; Start server</button>
     </form>

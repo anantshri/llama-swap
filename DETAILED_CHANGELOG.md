@@ -5,6 +5,54 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+---
+
+## 2026-10-12 — Hand-merge batch 2: vllm-wrapper build, sm_70 docker, auto:orphans
+
+### What / why
+
+Second hand-merge set (user approved all resolutions incl. adopting
+upstream's `build-image.sh` wholesale for the sm_70 pick).
+
+### Picks and resolutions
+
+- `c2c5106` (upstream `e054c90` #1156, vllm-wrapper untagged build) —
+  `lib-release.sh` (new) + installer fixes applied clean; the kubeswap
+  build stage in `runtime.Dockerfile` dropped (subsystem absent).
+- `2575683` (upstream `0ac43bb` #1187, sm_70 for V100) — `build-image.sh`
+  taken wholesale from upstream (supersedes our drifted copy; two-image
+  CUDA 12/13 layout, per-platform arch tables); README GPU-support section
+  taken from upstream to match; `base-cuda.Dockerfile` applied clean.
+- `6e5df33` (upstream `bea6428` #1026, auto:orphans) — our `+undefined`
+  port and upstream's `auto:orphans` turned out to be the same design at
+  different vintages; adopted upstream's wholesale (shared `buildModelSet`
+  root, `SynthesizedOrphans()`, orphanModes). `program.go` verified free of
+  fork-specific content beyond the old implementation before taking theirs.
+  `router/matrix.go` hand-merged (upstream's version uses the #1172-era
+  `logmon.Group` API we don't have — kept our wiring, adopted their
+  messages/names). Schema description and KB doc taken from upstream, minus
+  the kubeswap Helm paragraph. Legacy `matrix_undefined_test.go` and
+  `program_undefined_test.go` deleted — upstream's `*_orphans_test.go`
+  files cover the same cases plus YAML/reference-validation. **Breaking**:
+  `+undefined` in configs must be renamed to `+auto:orphans`.
+
+### Security cleanup (aidc-scan --all surfaced)
+
+Whole-repo semgrep now zero: inline markers with reasons on the #1213
+wol-proxy confirm/loading writes and form (django-no-csrf-token misfire on
+a static non-Django page), the capcompat httptest fixture writes, and the
+agentTools warning; `docs/semgrep-suppressions.md` updated with the new
+sites/categories. Note: markers must carry the exact reported rule id and
+sit on the finding's start line — two earlier attempts with a guessed rule
+id and off-line placement did not suppress.
+
+### Verification
+
+- `go test -short ./...` → 1942 passed, 32 packages, zero failures.
+- gosec 0 ×3 GOOS; aidc-scan and `--all`: semgrep 0 findings repo-wide,
+  gitleaks/gosec/shellcheck clean; schema valid JSON; `bash -n` +
+  shellcheck clean on the docker scripts.
+
 ## 2026-10-12 — Hand-merge batch 1: content-type autofill, browser headers, decision models
 
 ### What / why

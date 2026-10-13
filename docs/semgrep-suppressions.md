@@ -30,6 +30,14 @@ grep -rn "nosemgrep" internal/ cmd/ .github/
   emits HTML, so writing bytes to the `http.ResponseWriter` is normal and safe.
   Sites: `internal/perf/prometheus.go`, `internal/swaputil/http.go`,
   `internal/server/{api,apigroup,log}.go`, `cmd/{fake-model,wol-proxy}`, tests.
+  The wol-proxy confirm/loading pages (#1213) write constant HTML — the two new
+  `fmt.Fprint` sites carry inline markers; the remaining live hits are
+  `httptest` fixture responders in `internal/capcompat/{capcompat,service}_test.go`
+  (static JSON bytes, reviewed FP) and the pre-existing category sites above.
+- **`django-no-csrf-token`** — misfire of a Django-template rule on the static,
+  Go-embedded `cmd/wol-proxy/confirm.html` consent page; the form's POST is the
+  action being confirmed and there is no cookie/session to forge. Inline marker
+  on the form.
 - **`dangerous-exec-command`** — launching operator-configured model commands is
   the product's core function (also `#nosec G204`). Sites:
   `internal/process/process_command.go`, `cmd/vllm-wrapper`.
