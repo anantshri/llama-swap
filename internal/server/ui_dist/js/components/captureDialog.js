@@ -261,6 +261,17 @@ function requestPartsFor(rawBody) {
   return partsCache.value;
 }
 
+// Same memoization for the response chat split: render() re-runs on every
+// tab switch and copy click, and open()'s default-tab pick parses the same
+// body again.
+let chatCache = { raw: null, value: null };
+
+export function responseChatFor(rawBody) {
+  if (chatCache.raw === rawBody) return chatCache.value;
+  chatCache = { raw: rawBody, value: rawBody ? parseChatJson(rawBody) : null };
+  return chatCache.value;
+}
+
 function getContentType(headers) {
   if (!headers) return "";
   return (headers["Content-Type"] || headers["content-type"] || "").toLowerCase();
@@ -304,18 +315,39 @@ function parseSSEChat(text) {
 // parseChatJson extracts the assistant message of a buffered
 // /v1/chat/completions response into the same {reasoning, content} shape
 // the SSE chat view uses, so streamed and buffered responses render
-// identically. Returns null for anything that is not a chat completion
-// (embeddings, rerank, error payloads, …) or carries neither field.
+// identically. The *Path fields name where each value came from, so the
+// rendered labels match the body being inspected. Returns null for
+// anything that is not a chat completion (embeddings, rerank, error
+// payloads, …) or carries neither field.
 export function parseChatJson(text) {
   const parsed = parseJsonObject(text);
   if (!parsed || !Array.isArray(parsed.choices) || !parsed.choices[0]) return null;
-  const msg = parsed.choices[0].message ?? parsed.choices[0].delta;
+  const choice = parsed.choices[0];
+  const msg = choice.message ?? choice.delta;
   if (!msg || typeof msg !== "object") return null;
-  const reasoning = String(msg.reasoning_content ?? msg.reasoning ?? "");
+  // An empty-string reasoning_content must not shadow a populated
+  // `reasoning` alias (the SSE parser accumulates both).
+  const reasoning = firstText(msg.reasoning_content, msg.reasoning);
+  const reasoningPath = textOf(msg.reasoning_content) ? "reasoning_content" : textOf(msg.reasoning) ? "reasoning" : reasoning ? "reasoning_content" : "";
   // content can be a string or an array of typed parts; contentText flattens.
   const content = typeof msg.content === "string" ? msg.content : contentText(msg.content);
   if (!reasoning && !content) return null;
-  return { reasoning, content };
+  const prefix = choice.message ? "message" : "delta";
+  return {
+    reasoning,
+    content,
+    reasoningPath: reasoningPath ? `choices[0].${prefix}.${reasoningPath}` : "",
+    contentPath: content ? `choices[0].${prefix}.content` : "",
+  };
+}
+
+function textOf(v) {
+  return typeof v === "string" && v ? v : "";
+}
+
+function firstText(...values) {
+  for (const v of values) if (textOf(v)) return v;
+  return "";
 }
 
 // responseChatHTML renders the split reasoning/content view of a response:
@@ -423,7 +455,7 @@ export function CaptureDialogController() {
     const respBodyPretty = isRespJson ? formatJson(respBodyRaw) : respBodyRaw;
     // Streamed and buffered chat responses both split into the same
     // reasoning/content view; only the extraction differs.
-    const respChat = isSSE && respBodyRaw ? parseSSEChat(respBodyRaw) : isRespJson && respBodyRaw ? parseChatJson(respBodyRaw) : null;
+    const respChat = isSSE && respBodyRaw ? parseSSEChat(respBodyRaw) : isRespJson ? responseChatFor(respBodyRaw) : null;
     const respDisplay = state.respBodyTab === "pretty" ? respBodyPretty : respBodyRaw;
 
     // Build body section
@@ -474,10 +506,12 @@ export function CaptureDialogController() {
 
         let body;
         if (state.respBodyTab === "chat" && (isSSE || respChat)) {
-          body = responseChatHTML(respChat ?? { reasoning: "", content: "" }, {
-            reasoning: isSSE ? "reasoning deltas" : "choices[0].message.reasoning_content",
-            content: isSSE ? "content deltas" : "choices[0].message.content",
-          });
+          // Labels name where each value came from — the buffered parser
+          // reports the exact field, streams report their delta source.
+          const labels = isSSE
+            ? { reasoning: "reasoning deltas", content: "content deltas" }
+            : { reasoning: respChat?.reasoningPath || "reasoning", content: respChat?.contentPath || "content" };
+          body = responseChatHTML(respChat ?? { reasoning: "", content: "" }, labels);
         } else {
           body = `<pre class="capture-pre">${escapeHtml(respDisplay || "(empty)")}</pre>`;
         }
@@ -590,7 +624,7 @@ export function CaptureDialogController() {
   function defaultRespTab(capture, respCt) {
     if (respCt.includes("text/event-stream")) return "chat";
     if (!respCt.includes("json")) return "raw";
-    return parseChatJson(decodeBody(capture.resp_body)) ? "chat" : "pretty";
+    return responseChatFor(decodeBody(capture.resp_body)) ? "chat" : "pretty";
   }
 
   function open(capture) {

@@ -460,8 +460,6 @@ table td { padding: 0.5rem; }
 .capture-image-wrap { background: var(--color-background); border: 1px solid var(--color-card-border); border-radius: 0.25rem; overflow: auto; max-height: 24rem; padding: 0.75rem; text-align: center; margin-top: 0.5rem; }
 .capture-image-wrap img { max-width: 100%; height: auto; }
 .capture-binary { padding: 0.75rem; font-style: italic; font-size: 0.875rem; color: var(--color-txtsecondary); }
-.capture-chat { padding: 0.75rem; font-size: 0.875rem; display: flex; flex-direction: column; gap: 0.75rem; }
-.capture-chat-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: var(--color-txtsecondary); margin-bottom: 0.25rem; }
 .capture-foot { padding: 1rem; border-top: 1px solid var(--color-card-border); display: flex; justify-content: flex-end; }
 .capture-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 3rem; text-align: center; gap: 0.25rem; }
 .capture-empty-title { font-size: 1.125rem; color: var(--color-txtsecondary); }

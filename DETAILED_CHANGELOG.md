@@ -5,8 +5,6 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
----
-
 ## 2026-10-12 — Capture viewer: split reasoning/content blocks for buffered responses
 
 ### What / why

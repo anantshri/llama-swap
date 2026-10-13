@@ -27,6 +27,24 @@ request's parts view. Keep the vanilla-UI code simple.
   with both blocks, labels, stats; zero page errors.
 - Full short suite green; aidc-scan --all clean.
 
+## Pre-completion review outcome
+
+Fresh-eyes review: no High findings; M1 + 4 Lows, all fixed:
+
+- M1: parseChatJson ran unmemoized on every render() + again in
+  defaultRespTab (multi-MB bodies) — added responseChatFor() memo cache,
+  shared by both call sites (mirrors partsCache).
+- L2/L3: labels now report the actual source field (choices[0].message vs
+  .delta, reasoning_content vs reasoning); empty-string reasoning_content
+  no longer shadows a populated reasoning alias.
+- L1: dead .capture-chat CSS rules removed.
+- L4: +4 controller-level selftests (real dialog via CaptureDialogController:
+  buffered-chat lands on Chat with source labels, non-chat JSON keeps
+  Pretty with no Chat tab, SSE keeps Chat with delta labels) → 167/167.
+- L5: changelog separator dedup.
+
+Final gates: suite 1987/32 ok, aidc-scan --all clean, selftest 167/167.
+
 ## Notes
 
 - To find the capture opener in the browser: Activity row "View" button

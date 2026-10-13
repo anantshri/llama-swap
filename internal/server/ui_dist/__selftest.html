@@ -38,7 +38,7 @@
       import { parseStream } from "/ui/js/api/chat.js";
       import {
         countWords, estimateTokens, splitRequestParts, requestPartsHTML, requestPartsText,
-        prettyIfJson, parseChatJson, responseChatHTML,
+        prettyIfJson, parseChatJson, responseChatHTML, CaptureDialogController,
       } from "/ui/js/components/captureDialog.js";
       import {
         normalizeUsage, normalizeTimings, parseChatCompletionsLine,
@@ -334,23 +334,29 @@
           fail("collapsed render still contains open blocks");
         }
       });
-        group("prettyIfJson");
 
         group("parseChatJson — buffered chat responses");
-        test("splits reasoning_content and content", () => {
+        test("splits reasoning_content and content, labels name the source", () => {
           const chat = parseChatJson(
             JSON.stringify({ choices: [{ message: { role: "assistant", reasoning_content: "thinking...", content: "answer" } }] })
           );
-          expect(chat).toBeTruthy();
           expect(chat.reasoning).toBe("thinking...");
           expect(chat.content).toBe("answer");
+          expect(chat.reasoningPath).toBe("choices[0].message.reasoning_content");
+          expect(chat.contentPath).toBe("choices[0].message.content");
         });
-        test("acceptes reasoning alias and multimodal content arrays", () => {
+        test("accepts reasoning alias and multimodal content arrays, labels follow", () => {
           const chat = parseChatJson(
-            JSON.stringify({ choices: [{ message: { reasoning: "hmm", content: [{ type: "text", text: "part text" }] } }] })
+            JSON.stringify({ choices: [{ delta: { reasoning: "hmm", content: [{ type: "text", text: "part text" }] } }] })
           );
           expect(chat.reasoning).toBe("hmm");
           expect(chat.content).toBe("part text");
+          expect(chat.reasoningPath).toBe("choices[0].delta.reasoning");
+          expect(chat.contentPath).toBe("choices[0].delta.content");
+        });
+        test("empty reasoning_content does not shadow a populated reasoning alias", () => {
+          const chat = parseChatJson(JSON.stringify({ choices: [{ message: { reasoning_content: "", reasoning: "real" } }] }));
+          expect(chat.reasoning).toBe("real");
         });
         test("non-chat JSON and empty messages return null", () => {
           expect(parseChatJson(JSON.stringify({ data: [{ embedding: [1, 2] }] }))).toBe(null);
@@ -360,7 +366,6 @@
         });
         test("content-only responses parse with empty reasoning", () => {
           const chat = parseChatJson(JSON.stringify({ choices: [{ message: { content: "just text" } }] }));
-          expect(chat).toBeTruthy();
           expect(chat.reasoning).toBe("");
           expect(chat.content).toBe("just text");
         });
@@ -385,6 +390,53 @@
           expect(html).toContain("only content");
           expect(responseChatHTML({ reasoning: "", content: "" })).toBe('<pre class="capture-pre">(empty)</pre>');
         });
+
+        group("capture dialog — response chat wiring");
+        const b64 = (s) => btoa(unescape(encodeURIComponent(s)));
+        const chatCtl = CaptureDialogController();
+        await atest("buffered chat capture lands on Chat with source labels", () => {
+          chatCtl.open({
+            id: 0,
+            req_path: "/v1/chat/completions",
+            req_headers: { "Content-Type": "application/json" },
+            req_body: b64(JSON.stringify({ model: "m", messages: [{ role: "user", content: "hi" }] })),
+            resp_headers: { "Content-Type": "application/json" },
+            resp_body: b64(JSON.stringify({ choices: [{ message: { reasoning_content: "why", content: "thus" } }] })),
+          });
+          const dlg = document.querySelector(".capture-dlg[open]");
+          expect(dlg.querySelector("[data-tab='chat']").classList.contains("capture-tab-active")).toBe(true);
+          const labels = [...dlg.querySelectorAll(".capture-part-label")].map((e) => e.textContent);
+          expect(labels).toContain("choices[0].message.reasoning_content");
+          expect(labels).toContain("choices[0].message.content");
+        });
+        await atest("non-chat JSON keeps Pretty as the landing tab", () => {
+          chatCtl.open({
+            id: 1,
+            req_headers: { "Content-Type": "application/json" },
+            req_body: b64("{}"),
+            resp_headers: { "Content-Type": "application/json" },
+            resp_body: b64(JSON.stringify({ data: [{ embedding: [1] }] })),
+          });
+          const dlg = document.querySelector(".capture-dlg[open]");
+          expect(dlg.querySelector("[data-tab='chat']")).toBe(null);
+          expect(dlg.querySelector("[data-tab='pretty']").classList.contains("capture-tab-active")).toBe(true);
+        });
+        await atest("SSE capture keeps the Chat tab with delta labels", () => {
+          chatCtl.open({
+            id: 2,
+            req_headers: { "Content-Type": "application/json" },
+            req_body: b64("{}"),
+            resp_headers: { "Content-Type": "text/event-stream" },
+            resp_body: b64('data: {"choices":[{"delta":{"reasoning_content":"r1","content":"c1"}}]}\n\ndata: [DONE]\n\n'),
+          });
+          const dlg = document.querySelector(".capture-dlg[open]");
+          expect(dlg.querySelector("[data-tab='chat']").classList.contains("capture-tab-active")).toBe(true);
+          const labels = [...dlg.querySelectorAll(".capture-part-label")].map((e) => e.textContent);
+          expect(labels).toContain("reasoning deltas");
+          expect(dlg.innerHTML).toContain("r1");
+        });
+        chatCtl.close();
+        chatCtl.destroy();
 
         group("prettyIfJson");
       test("formats JSON-shaped text and leaves other text alone", () => {
