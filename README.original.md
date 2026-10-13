@@ -105,6 +105,7 @@ Built in Go for performance and simplicity, llama-swap has zero dependencies and
       - Stream endpoints send buffered history first by default; add `?no-history` to stream only new lines.
     - `GET /logs/stream/proxy` streams proxy logs only.
     - `GET /logs/stream/upstream` streams upstream process logs only.
+    - `GET /logs/stream/http` streams the HTTP access log only (post-#1172).
     - `GET /logs/stream/{model_id}` streams logs for one model (including IDs with slashes, like `author/model`).
   - `/health` - just returns "OK"
   - `/metrics` - system and GPU metrics for prometheus (NVIDIA via nvidia-smi, AMD via rocm-smi, Intel/others via kernel sysfs — fork addition)

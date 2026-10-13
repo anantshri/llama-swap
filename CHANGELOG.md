@@ -229,7 +229,7 @@ Long-form entries with full context live in
     `/api/events` onto its own `GET /api/events/logs?stream=proxy&stream=…`
     SSE endpoint, so a chatty model can no longer backpressure model-status
     updates. `Server` carries a single `logmon.Group` (proxy/upstream/http
-    streams) instead of three monitors; `logs.toStdout` copies selected
+    streams) instead of three monitors; `logToStdout` copies selected
     streams to stdout; per-stream and per-model `/logs/stream/{id}` tails
     are unchanged. The vanilla UI opens a second EventSource for the log
     stream with the same envelope — logs page behavior is identical.

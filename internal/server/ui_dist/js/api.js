@@ -30,6 +30,7 @@ export const versionInfo = observable({
 
 let apiEventSource = null;
 let logEventSource = null;
+let logRetryTimer = null;
 
 // Build metadata is static for the process lifetime; fetched once at boot so
 // the settings page and header tooltip can display it.
@@ -59,8 +60,7 @@ export function enableAPIEvents(enabled) {
   if (!enabled) {
     apiEventSource?.close();
     apiEventSource = null;
-    logEventSource?.close();
-    logEventSource = null;
+    stopLogEvents();
     activityRevision.set(0);
     inFlightRequests.set(0);
     inflightRequestEntries.set([]);
@@ -107,43 +107,60 @@ export function enableAPIEvents(enabled) {
       connectionState.set("disconnected");
       setTimeout(connect, delay);
     };
-
-    connectLogs();
-  };
-
-  // Log data moved off /api/events onto its own stream so a chatty model
-  // cannot backpressure model-status updates (upstream #1172). The message
-  // envelope is unchanged, and the server replays each stream's history on
-  // connect.
-  let logRetryCount = 0;
-  const connectLogs = () => {
-    logEventSource?.close();
-    logEventSource = new EventSource("/api/events/logs?stream=proxy&stream=upstream");
-    logEventSource.onopen = () => {
-      proxyLogs.set("");
-      upstreamLogs.set("");
-      logRetryCount = 0;
-    };
-    logEventSource.onmessage = (e) => {
-      try {
-        const message = JSON.parse(e.data);
-        if (message.type !== "logData") return;
-        const logData = JSON.parse(message.data);
-        if (logData.source === "proxy") appendLog(logData.data, proxyLogs);
-        else if (logData.source === "upstream") appendLog(logData.data, upstreamLogs);
-      } catch (err) {
-        console.error(e.data, err);
-      }
-    };
-    logEventSource.onerror = () => {
-      logEventSource?.close();
-      logRetryCount++;
-      const delay = Math.min(initialDelay * Math.pow(2, logRetryCount - 1), 5000);
-      setTimeout(connectLogs, delay);
-    };
   };
 
   connect();
+  // The log stream's lifecycle is deliberately decoupled from the main
+  // /api/events connection: a flap on one must not tear down or clear the
+  // other (each replays its state on reconnect).
+  startLogEvents();
+}
+
+// Log data moved off /api/events onto its own stream so a chatty model
+// cannot backpressure model-status updates (upstream #1172). The message
+// envelope is unchanged, and the server replays each stream's history on
+// connect.
+let logRetryCount = 0;
+
+function startLogEvents() {
+  if (logEventSource) return; // already connected (or reconnect pending)
+  logRetryCount = 0;
+  connectLogs();
+}
+
+function stopLogEvents() {
+  clearTimeout(logRetryTimer);
+  logRetryTimer = null;
+  logEventSource?.close();
+  logEventSource = null;
+}
+
+function connectLogs() {
+  const initialDelay = 1000;
+  logEventSource = new EventSource("/api/events/logs?stream=proxy&stream=upstream");
+  logEventSource.onopen = () => {
+    proxyLogs.set("");
+    upstreamLogs.set("");
+    logRetryCount = 0;
+  };
+  logEventSource.onmessage = (e) => {
+    try {
+      const message = JSON.parse(e.data);
+      if (message.type !== "logData") return;
+      const logData = JSON.parse(message.data);
+      if (logData.source === "proxy") appendLog(logData.data, proxyLogs);
+      else if (logData.source === "upstream") appendLog(logData.data, upstreamLogs);
+    } catch (err) {
+      console.error(e.data, err);
+    }
+  };
+  logEventSource.onerror = () => {
+    logEventSource?.close();
+    logEventSource = null;
+    logRetryCount++;
+    const delay = Math.min(initialDelay * Math.pow(2, logRetryCount - 1), 5000);
+    logRetryTimer = setTimeout(connectLogs, delay);
+  };
 }
 
 export function handleAPIEventMessage(data) {

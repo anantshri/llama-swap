@@ -3,7 +3,7 @@
 ## Goal
 
 Port the logging rework: log data off /api/events onto
-/api/events/logs?stream=…, one logmon.Group on the Server, logs.toStdout
+/api/events/logs?stream=…, one logmon.Group on the Server, logToStdout
 config. Then adapt the vanilla UI's SSE layer.
 
 ## Change

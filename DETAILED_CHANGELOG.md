@@ -5,17 +5,13 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
----
-
----
-
 ## 2026-10-12 — Hand-merge batch 3: multi-stream logging (#1172 / bbdb55d)
 
 ### What / why
 
 The logging rework the earlier batches deferred: log data leaves
 `/api/events` for its own SSE endpoint, the server carries one
-`logmon.Group`, and configs gain `logs.toStdout` stream selection.
+`logmon.Group`, and configs gain `logToStdout` stream selection.
 
 ### Resolutions
 
