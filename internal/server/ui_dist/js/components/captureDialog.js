@@ -414,10 +414,19 @@ export function CaptureDialogController() {
     respBodyTab: "pretty",
     copiedReq: false,
     copiedResp: false,
+    // Section collapse state survives the full re-render that every tab
+    // switch and copy click performs; undefined means open (the default).
+    sectionOpen: {},
   };
 
   function close() {
     if (dlg.open) dlg.close();
+  }
+
+  // sectionAttr renders the open attribute for a collapsible section:
+  // open unless the user collapsed it (state survives re-renders).
+  function sectionAttr(name) {
+    return state.sectionOpen[name] === false ? 'data-section="' + name + '"' : 'open data-section="' + name + '"';
   }
 
   function render() {
@@ -530,19 +539,19 @@ export function CaptureDialogController() {
           <button class="capture-close" data-close>&times;</button>
         </div>
         <div class="capture-body">
-          <details open>
+          <details ${sectionAttr("reqHeaders")}>
             <summary class="capture-summary">Request Headers</summary>
             <div class="capture-scroll capture-scroll-short">${headersTable(c.req_headers)}</div>
           </details>
-          <details open>
+          <details ${sectionAttr("reqBody")}>
             <summary class="capture-summary">Request Body</summary>
             ${reqBodySection()}
           </details>
-          <details open>
+          <details ${sectionAttr("respHeaders")}>
             <summary class="capture-summary">Response Headers</summary>
             <div class="capture-scroll capture-scroll-short">${headersTable(c.resp_headers)}</div>
           </details>
-          <details open>
+          <details ${sectionAttr("respBody")}>
             <summary class="capture-summary">Response Body</summary>
             ${respBodySection()}
           </details>
@@ -554,6 +563,13 @@ export function CaptureDialogController() {
     `;
 
     dlg.querySelectorAll("[data-close]").forEach((btn) => btn.addEventListener("click", close));
+    // Remember manual collapse/expand across the re-renders that tab
+    // switches and copy clicks trigger.
+    dlg.querySelectorAll("details[data-section]").forEach((d) => {
+      d.addEventListener("toggle", () => {
+        state.sectionOpen[d.getAttribute("data-section")] = d.open;
+      });
+    });
     dlg.querySelectorAll("[data-tab]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const tab = btn.getAttribute("data-tab");
@@ -639,6 +655,7 @@ export function CaptureDialogController() {
       // A fresh capture starts with every part expanded; collapse state is
       // per-capture, not carried across dialogs.
       state.partsOpen = undefined;
+      state.sectionOpen = {};
     }
     render();
     if (!dlg.open) dlg.showModal();

@@ -12,6 +12,11 @@ Long-form entries with full context live in
 
 ### Added
 
+- Capture dialog sections remember their collapse state: switching the
+  response Chat/Pretty/Raw tabs (or copying, or the parts collapse/expand
+  controls) re-renders the whole dialog, but a manually collapsed Request
+  Headers/Body or Response Headers section now stays collapsed; a fresh
+  capture opens everything again.
 - Activity capture viewer: buffered (non-streaming) chat-completion
   responses now get the same split view streamed responses have — a
   **Chat** tab with separate collapsible `reasoning` and `content` blocks

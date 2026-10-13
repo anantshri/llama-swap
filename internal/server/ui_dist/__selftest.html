@@ -435,6 +435,30 @@
           expect(labels).toContain("reasoning deltas");
           expect(dlg.innerHTML).toContain("r1");
         });
+        await atest("collapsed sections stay collapsed across tab switches", async () => {
+          chatCtl.open({
+            id: 3,
+            req_headers: { "Content-Type": "application/json" },
+            req_body: b64(JSON.stringify({ model: "m", messages: [{ role: "user", content: "hi" }] })),
+            resp_headers: { "Content-Type": "application/json" },
+            resp_body: b64(JSON.stringify({ choices: [{ message: { reasoning_content: "why", content: "thus" } }] })),
+          });
+          let dlg = document.querySelector(".capture-dlg[open]");
+          // Collapse the two request sections (setting .open fires the
+          // toggle event the dialog records; it is queued as a task, so
+          // let it run before the re-render below).
+          for (const name of ["reqHeaders", "reqBody"]) {
+            dlg.querySelector(`details[data-section="${name}"]`).open = false;
+          }
+          await new Promise((r) => setTimeout(r, 10));
+          // Switching the response tab re-renders the whole dialog; the
+          // collapsed sections must stay collapsed.
+          dlg.querySelector("[data-tab='raw']").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+          dlg = document.querySelector(".capture-dlg[open]");
+          expect(dlg.querySelector('details[data-section="reqHeaders"]').open).toBe(false);
+          expect(dlg.querySelector('details[data-section="reqBody"]').open).toBe(false);
+          expect(dlg.querySelector('details[data-section="respBody"]').open).toBe(true);
+        });
         chatCtl.close();
         chatCtl.destroy();
 

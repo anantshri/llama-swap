@@ -5,6 +5,40 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+---
+
+## 2026-10-13 — Capture dialog: section collapse state survives re-renders
+
+### What / why
+
+User report: clicking the response section's Chat/Pretty/Raw tabs expanded
+the (collapsed) Request sections. Cause: every tab click re-renders the
+whole dialog from a template with hardcoded `<details open>`, wiping manual
+collapses. Same applied to Copy clicks and the parts collapse/expand
+controls.
+
+### Change
+
+`captureDialog.js`: sections carry `data-section` names; `sectionAttr()`
+renders `open` unless the user collapsed that section; a `toggle` listener
+records each section's state into `state.sectionOpen`; `open()` resets the
+map per capture (fresh captures start expanded, matching the parts-view
+convention). Note: the `toggle` event is queued as a task, so a collapse
+and a re-render in the same tick would race — not reachable by real users
+(clicks are separate tasks), and the selftest awaits the toggle first.
+
+### Verification
+
+- Selftest +1 (`collapsed sections stay collapsed across tab switches`) →
+  **168/168**. First version failed for the right reason: `await` inside a
+  non-async test callback broke the module (SyntaxError → "Running…"
+  forever); fixed by making the callback async and letting the queued
+  toggle run (`setTimeout 10ms`) before the tab click.
+- Playwright E2E of the exact report: collapse Request Body in a live
+  dialog, click response Raw → Pretty → Chat — Request Body stays collapsed
+  through all three, Response Body stays open, no page errors.
+- `go test -short ./...` 1991/32 ok; aidc-scan --all clean.
+
 ## 2026-10-13 — Hand-merge batch 5: voices override + gopsutil panic fix
 
 ### What / why
