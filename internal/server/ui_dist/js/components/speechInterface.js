@@ -67,7 +67,6 @@ export function SpeechInterface() {
     voiceWrap.innerHTML = `
       <select class="pg-input" data-voice ${isGenerating || isLoadingVoices || !selectedModel.get() ? "disabled" : ""}>
         ${availableVoices.map((v) => `<option value="${v}" ${v === selectedVoice.get() ? "selected" : ""}>${escapeHtml(v)}</option>`).join("")}
-        <option value="(refresh)">(refresh)</option>
       </select>
       ${showRefresh ? `
         <button class="btn pg-speech-refresh" data-refresh title="${isLoadingVoices ? "Loading voices..." : "Load voices for this model"}" ${isLoadingVoices ? "disabled" : ""}>
@@ -79,9 +78,7 @@ export function SpeechInterface() {
   voiceWrap.addEventListener("change", (e) => {
     const sel = e.target.closest("[data-voice]");
     if (!sel) return;
-    const v = sel.value;
-    if (v === "(refresh)") refreshVoices();
-    else selectedVoice.set(v);
+    selectedVoice.set(sel.value);
   });
   voiceWrap.addEventListener("click", (e) => {
     if (e.target.closest("[data-refresh]")) refreshVoices();

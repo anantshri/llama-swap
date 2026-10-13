@@ -2,8 +2,8 @@
 title: Model capabilities and model listings
 summary: Advertise images, tools and context length in /v1/models, automatically or by hand.
 category: guides
-tags: [capabilities, models, tools, vision, context, autodetect, llama-server, vllm, halogen, playground, decisions]
-config_keys: [models.*.capabilities, models.*.capabilities.disableAuto, store.path]
+tags: [capabilities, voices, speech, models, tools, vision, context, autodetect, llama-server, vllm, halogen, playground, decisions]
+config_keys: [models.*.capabilities, models.*.capabilities.disableAuto, models.*.capabilities.voices, store.path]
 updated: 2026-10-10
 ---
 
@@ -116,6 +116,56 @@ models:
 
 With `disableAuto: true` the model advertises exactly what you wrote, and
 nothing else. On its own, with no other fields, it advertises nothing.
+
+## Setting the voice list for a speech model
+
+`GET /v1/audio/voices?model={id}` normally goes to the upstream server.
+`capabilities.voices` is an override: set it to answer the request from the
+config instead:
+
+```yaml
+models:
+  tts:
+    cmd: my-tts-server --port ${PORT}
+    capabilities:
+      in: [text]
+      out: [audio]
+      voices: ["voicea", "voiceb", "voicec"]
+```
+
+```bash
+curl -s 'localhost:8080/v1/audio/voices?model=tts'
+# {"model":"tts","voices":["voicea","voiceb","voicec"]}
+```
+
+The response is a JSON object with a `voices` array and the `model` id. OpenAI
+has no endpoint for listing voices, so this is a llama-swap convention, not an
+OpenAI format. The Playground's speech tab reads it. The model is not started to
+answer, and voices are not shown in `/v1/models`.
+When `voices` is empty or unset there is no override, and the request goes to
+the upstream server as before, which starts the model if it is not running.
+This applies to local models only, not peers.
+
+## How the Playground uses this
+
+Each Playground tab looks for the modalities it needs and lists those models
+first, under "Matching Capabilities":
+
+| tab | wants |
+| --- | --- |
+| Chat | `in` has `text` or `image`, `out` has `text` |
+| Images | `out` has `image` |
+| Speech | `in` has `text`, `out` has `audio` |
+| Transcription | `in` has `audio`, `out` has `text` |
+| Rerank | `reranker: true` |
+| Help's Docs agent | `tools: true` |
+
+Discovery fills most of this in on its own once a model has been loaded, so a
+llama-server model usually sorts itself. Models that report nothing are still
+listed, further down under "Local", so nothing disappears from the selector for
+want of configuration. Image, speech and transcription servers are the ones
+worth setting by hand: nothing is read from them, so without an `in`/`out` block
+they never sort to the top of their own tab.
 
 ## What goes wrong
 
