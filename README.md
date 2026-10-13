@@ -127,6 +127,8 @@ reference; issues and pull requests are welcome but may sit untouched.
   makes many parallel asset/API requests)
 - `POST /models/unload` — llama.cpp-compatible named unload used by Open WebUI
 - `/v1/systemone` routed through the POST-JSON model dispatch (decision models)
+- `capabilities.voices` override — `GET /v1/audio/voices?model={id}` answered
+  from config without starting the model
 - Configurable CORS controls; forwarded-header client tracking in activity records
 
 ### Documentation & tooling
