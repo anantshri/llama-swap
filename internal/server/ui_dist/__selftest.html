@@ -38,7 +38,7 @@
       import { parseStream } from "/ui/js/api/chat.js";
       import {
         countWords, estimateTokens, splitRequestParts, requestPartsHTML, requestPartsText,
-        prettyIfJson,
+        prettyIfJson, parseChatJson, responseChatHTML,
       } from "/ui/js/components/captureDialog.js";
       import {
         normalizeUsage, normalizeTimings, parseChatCompletionsLine,
@@ -334,7 +334,59 @@
           fail("collapsed render still contains open blocks");
         }
       });
-      group("prettyIfJson");
+        group("prettyIfJson");
+
+        group("parseChatJson — buffered chat responses");
+        test("splits reasoning_content and content", () => {
+          const chat = parseChatJson(
+            JSON.stringify({ choices: [{ message: { role: "assistant", reasoning_content: "thinking...", content: "answer" } }] })
+          );
+          expect(chat).toBeTruthy();
+          expect(chat.reasoning).toBe("thinking...");
+          expect(chat.content).toBe("answer");
+        });
+        test("acceptes reasoning alias and multimodal content arrays", () => {
+          const chat = parseChatJson(
+            JSON.stringify({ choices: [{ message: { reasoning: "hmm", content: [{ type: "text", text: "part text" }] } }] })
+          );
+          expect(chat.reasoning).toBe("hmm");
+          expect(chat.content).toBe("part text");
+        });
+        test("non-chat JSON and empty messages return null", () => {
+          expect(parseChatJson(JSON.stringify({ data: [{ embedding: [1, 2] }] }))).toBe(null);
+          expect(parseChatJson(JSON.stringify({ choices: [{ message: {} }] }))).toBe(null);
+          expect(parseChatJson("not json")).toBe(null);
+          expect(parseChatJson(JSON.stringify({ choices: [] }))).toBe(null);
+        });
+        test("content-only responses parse with empty reasoning", () => {
+          const chat = parseChatJson(JSON.stringify({ choices: [{ message: { content: "just text" } }] }));
+          expect(chat).toBeTruthy();
+          expect(chat.reasoning).toBe("");
+          expect(chat.content).toBe("just text");
+        });
+
+        group("responseChatHTML — split blocks with stats");
+        test("renders one collapsible block per field with counts", () => {
+          const html = responseChatHTML(
+            { reasoning: "because", content: "so" },
+            { reasoning: "choices[0].message.reasoning_content", content: "choices[0].message.content" }
+          );
+          expect(html).toContain('capture-part-role--system">reasoning');
+          expect(html).toContain('capture-part-role--assistant">content');
+          expect(html).toContain("choices[0].message.reasoning_content");
+          expect(html).toContain("capture-pre-reasoning");
+          expect((html.match(/<details/g) || []).length).toBe(2);
+          expect(html).toContain("chars");
+          expect(html).toContain("≈"); // token estimate marker
+        });
+        test("skips empty fields; empty chat renders (empty)", () => {
+          const html = responseChatHTML({ reasoning: "", content: "only content" });
+          expect((html.match(/<details/g) || []).length).toBe(1);
+          expect(html).toContain("only content");
+          expect(responseChatHTML({ reasoning: "", content: "" })).toBe('<pre class="capture-pre">(empty)</pre>');
+        });
+
+        group("prettyIfJson");
       test("formats JSON-shaped text and leaves other text alone", () => {
         expect(prettyIfJson('{"a":1}')).toBe('{\n  "a": 1\n}');
         expect(prettyIfJson("[1, 2]")).toBe('[\n  1,\n  2\n]');

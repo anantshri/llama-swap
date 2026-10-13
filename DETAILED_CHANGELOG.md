@@ -5,6 +5,48 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+---
+
+## 2026-10-12 — Capture viewer: split reasoning/content blocks for buffered responses
+
+### What / why
+
+User request: the response section of the Activity capture viewer should
+show a clear reasoning block and content block "just like we have parts in
+request". Streamed responses already had that (the SSE Chat tab); buffered
+JSON chat completions only had Pretty/Raw, burying `reasoning_content`
+inside the JSON.
+
+### Change (vanilla UI only, kept simple)
+
+`internal/server/ui_dist/js/components/captureDialog.js`:
+
+- `parseChatJson(text)` — extracts `choices[0].message` (or `.delta`) into
+  the same `{reasoning, content}` shape `parseSSEChat` produces; accepts the
+  `reasoning` alias, flattens multimodal content arrays via `contentText`,
+  returns null for non-chat JSON or empty messages.
+- `responseChatHTML(chat, labels)` — renders one collapsible part-style
+  block per field (role chip, field label, char/word/≈token estimate),
+  reusing the request parts CSS; reasoning keeps the tinted
+  `capture-pre-reasoning` style; empty fields are skipped; empty chat
+  renders `(empty)`.
+- Dialog wiring: the Chat tab is offered for any chat-shaped response
+  (SSE or buffered JSON), `defaultRespTab` lands chat-shaped JSON on Chat,
+  and the chat-tab Copy concatenates reasoning + content for both kinds.
+  The old SSE-only inline chat markup is gone (one shared renderer).
+
+### Verification
+
+- Selftest +6 (parseChatJson ×4: split, alias+multimodal, null cases,
+  content-only; responseChatHTML ×2: blocks/labels/stats, empty handling)
+  → **163/163**.
+- Browser E2E with a fake upstream returning
+  `{"choices":[{"message":{"reasoning_content":"…","content":"…"}}]}`:
+  opening the capture from the Activity page lands on Chat with both
+  blocks, correct labels (`choices[0].message.reasoning_content`),
+  stats visible, no page errors.
+- `go test -short ./...` green; aidc-scan --all clean.
+
 ## 2026-10-12 — Hand-merge batch 4: loading progress (#1212 / d3ab665)
 
 ### What / why

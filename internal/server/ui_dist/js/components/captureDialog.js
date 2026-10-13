@@ -301,6 +301,53 @@ function parseSSEChat(text) {
   return out;
 }
 
+// parseChatJson extracts the assistant message of a buffered
+// /v1/chat/completions response into the same {reasoning, content} shape
+// the SSE chat view uses, so streamed and buffered responses render
+// identically. Returns null for anything that is not a chat completion
+// (embeddings, rerank, error payloads, …) or carries neither field.
+export function parseChatJson(text) {
+  const parsed = parseJsonObject(text);
+  if (!parsed || !Array.isArray(parsed.choices) || !parsed.choices[0]) return null;
+  const msg = parsed.choices[0].message ?? parsed.choices[0].delta;
+  if (!msg || typeof msg !== "object") return null;
+  const reasoning = String(msg.reasoning_content ?? msg.reasoning ?? "");
+  // content can be a string or an array of typed parts; contentText flattens.
+  const content = typeof msg.content === "string" ? msg.content : contentText(msg.content);
+  if (!reasoning && !content) return null;
+  return { reasoning, content };
+}
+
+// responseChatHTML renders the split reasoning/content view of a response:
+// one collapsible part block per field, in the same shape as the request
+// parts view (role chip, label, char/word/token estimate).
+export function responseChatHTML(chat, labels = {}) {
+  if (!chat) return "";
+  const block = (field, roleClass) => {
+    const text = String(chat[field] ?? "");
+    if (!text) return "";
+    const part = {
+      role: field,
+      label: labels[field] ?? field,
+      text,
+      chars: text.length,
+      words: countWords(text),
+      tokens: estimateTokens(text),
+    };
+    return `
+      <details class="capture-part" open>
+        <summary class="capture-part-head">
+          <span class="capture-part-role capture-part-role--${roleClass}">${escapeHtml(field)}</span>
+          <span class="capture-part-label">${escapeHtml(part.label)}</span>
+          <span class="capture-part-stats">${escapeHtml(statsText(part))}</span>
+        </summary>
+        <pre class="capture-pre capture-part-body${field === "reasoning" ? " capture-pre-reasoning" : ""}">${escapeHtml(text)}</pre>
+      </details>`;
+  };
+  const html = block("reasoning", "system") + block("content", "assistant");
+  return html ? `<div class="capture-parts">${html}</div>` : `<pre class="capture-pre">(empty)</pre>`;
+}
+
 // Build a headers table HTML fragment
 function headersTable(headers) {
   const rows = Object.entries(headers || {})
@@ -374,7 +421,9 @@ export function CaptureDialogController() {
 
     const respBodyRaw = decodeBody(c.resp_body);
     const respBodyPretty = isRespJson ? formatJson(respBodyRaw) : respBodyRaw;
-    const sseChat = isSSE && respBodyRaw ? parseSSEChat(respBodyRaw) : null;
+    // Streamed and buffered chat responses both split into the same
+    // reasoning/content view; only the extraction differs.
+    const respChat = isSSE && respBodyRaw ? parseSSEChat(respBodyRaw) : isRespJson && respBodyRaw ? parseChatJson(respBodyRaw) : null;
     const respDisplay = state.respBodyTab === "pretty" ? respBodyPretty : respBodyRaw;
 
     // Build body section
@@ -412,7 +461,7 @@ export function CaptureDialogController() {
       }
       if (isSSE || isRespText) {
         const tabOptions = [];
-        if (isSSE) tabOptions.push("chat");
+        if (isSSE || respChat) tabOptions.push("chat");
         if (isRespJson) tabOptions.push("pretty");
         if (isSSE || isRespJson) tabOptions.push("raw");
         const tabsHTML =
@@ -424,15 +473,11 @@ export function CaptureDialogController() {
             : `<div class="capture-tab-row"><span></span><button class="capture-tab" data-copy="resp">${state.copiedResp ? "Copied!" : "Copy"}</button></div>`;
 
         let body;
-        if (state.respBodyTab === "chat" && sseChat) {
-          body = `<div class="capture-chat">`;
-          if (sseChat.reasoning) {
-            body += `<div class="capture-chat-label">Reasoning</div><pre class="capture-pre capture-pre-reasoning">${escapeHtml(sseChat.reasoning)}</pre>`;
-            if (sseChat.content) body += `<div class="capture-chat-label">Response</div>`;
-          }
-          if (sseChat.content) body += `<pre class="capture-pre">${escapeHtml(sseChat.content)}</pre>`;
-          if (!sseChat.reasoning && !sseChat.content) body += `<pre class="capture-pre">(empty)</pre>`;
-          body += `</div>`;
+        if (state.respBodyTab === "chat" && (isSSE || respChat)) {
+          body = responseChatHTML(respChat ?? { reasoning: "", content: "" }, {
+            reasoning: isSSE ? "reasoning deltas" : "choices[0].message.reasoning_content",
+            content: isSSE ? "content deltas" : "choices[0].message.content",
+          });
         } else {
           body = `<pre class="capture-pre">${escapeHtml(respDisplay || "(empty)")}</pre>`;
         }
@@ -499,8 +544,9 @@ export function CaptureDialogController() {
         let text;
         if (which === "req") text = reqCopyText;
         else {
-          if (state.respBodyTab === "chat" && sseChat) {
-            text = (sseChat.reasoning ? sseChat.reasoning + "\n\n" : "") + sseChat.content;
+          if (state.respBodyTab === "chat" && (isSSE || respChat)) {
+            const chat = respChat ?? { reasoning: "", content: "" };
+            text = (chat.reasoning ? chat.reasoning + "\n\n" : "") + chat.content;
           } else {
             text = respDisplay;
           }
@@ -538,17 +584,22 @@ export function CaptureDialogController() {
     return parts && parts.parts.length > 1 ? "parts" : "pretty";
   }
 
+  // defaultRespTab picks the landing tab for the response body: streamed and
+  // buffered chat completions open on the split reasoning/content view, other
+  // JSON keeps pretty, everything else raw.
+  function defaultRespTab(capture, respCt) {
+    if (respCt.includes("text/event-stream")) return "chat";
+    if (!respCt.includes("json")) return "raw";
+    return parseChatJson(decodeBody(capture.resp_body)) ? "chat" : "pretty";
+  }
+
   function open(capture) {
     state.capture = capture;
     // Reset tabs based on content types
     if (capture) {
       const respCt = getContentType(capture.resp_headers);
       state.reqBodyTab = defaultReqTab(capture);
-      state.respBodyTab = respCt.includes("text/event-stream")
-        ? "chat"
-        : respCt.includes("json")
-        ? "pretty"
-        : "raw";
+      state.respBodyTab = defaultRespTab(capture, respCt);
       state.copiedReq = false;
       state.copiedResp = false;
       // A fresh capture starts with every part expanded; collapse state is

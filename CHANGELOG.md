@@ -12,6 +12,15 @@ Long-form entries with full context live in
 
 ### Added
 
+- Activity capture viewer: buffered (non-streaming) chat-completion
+  responses now get the same split view streamed responses have — a
+  **Chat** tab with separate collapsible `reasoning` and `content` blocks
+  in the request parts-view style (role chip, field label, char/word/≈token
+  counts; reasoning keeps its tinted style and the block collapses, so long
+  reasoning no longer buries the answer in pretty-JSON). Chat-shaped JSON
+  responses land on the Chat tab by default; embeddings/errors and other
+  JSON keep Pretty/Raw. Copy on the Chat tab concatenates reasoning +
+  content as before.
 - Docs: new KB guide `guides/api-integration/opik` — running Opik (open-source
   LLM observability/evaluation) against llama-swap's OpenAI-compatible `/v1`
   endpoint: the AI Providers "vLLM / Custom provider" setup for the Playground
