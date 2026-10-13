@@ -5,8 +5,6 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
----
-
 ## 2026-10-13 — Hand-merge batch 5: voices override + gopsutil panic fix
 
 ### What / why

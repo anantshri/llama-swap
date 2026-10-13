@@ -62,8 +62,10 @@ export function SpeechInterface() {
   toolbar.appendChild(voiceWrap);
 
   function renderVoices() {
-    const cache = getVoicesCache();
-    const showRefresh = selectedModel.get() && !cache[selectedModel.get()];
+    // Always show the refresh button while a model is selected (upstream
+    // #1225): the voice list can change server-side (capabilities.voices
+    // config edits) and a failed first load must be retryable.
+    const showRefresh = Boolean(selectedModel.get());
     voiceWrap.innerHTML = `
       <select class="pg-input" data-voice ${isGenerating || isLoadingVoices || !selectedModel.get() ? "disabled" : ""}>
         ${availableVoices.map((v) => `<option value="${v}" ${v === selectedVoice.get() ? "selected" : ""}>${escapeHtml(v)}</option>`).join("")}

@@ -149,16 +149,17 @@ This applies to local models only, not peers.
 ## How the Playground uses this
 
 Each Playground tab looks for the modalities it needs and lists those models
-first, under "Matching Capabilities":
+first, under "Matching Capabilities". The exact matching differs by UI: the
+table below describes this fork's vanilla UI, where the Chat tab and the
+Docs agent list every model (no capability filter) and the capability-bound
+tabs match as:
 
 | tab | wants |
 | --- | --- |
-| Chat | `in` has `text` or `image`, `out` has `text` |
-| Images | `out` has `image` |
-| Speech | `in` has `text`, `out` has `audio` |
-| Transcription | `in` has `audio`, `out` has `text` |
+| Images | `out` has `image`, or `image_generation` / `image_to_image` |
+| Speech | `audio_speech: true`, or `out` has `audio` |
+| Transcription | `in` has `audio`, or `audio_transcriptions` / `audio_speech` |
 | Rerank | `reranker: true` |
-| Help's Docs agent | `tools: true` |
 
 Discovery fills most of this in on its own once a model has been loaded, so a
 llama-server model usually sorts itself. Models that report nothing are still
