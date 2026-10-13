@@ -84,7 +84,8 @@ reference; issues and pull requests are welcome but may sit untouched.
   when a model becomes ready, caches it, advertises it via `/v1/models`
 - `setParams`/`setParamsByID` keys ending in `?` are set-if-undefined;
   `setParamsByMatch` conditional filters; per-model output-token caps;
-  matrix `+undefined` reference
+  matrix `+auto:orphans` reference (renamed from `+undefined` with the
+  upstream #1026 rework)
 - `POST /models/unload` — llama.cpp-compatible named unload used by Open WebUI
 - Configurable CORS controls; forwarded-header client tracking in activity records
 

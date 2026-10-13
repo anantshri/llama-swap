@@ -53,6 +53,25 @@ id and off-line placement did not suppress.
   gitleaks/gosec/shellcheck clean; schema valid JSON; `bash -n` +
   shellcheck clean on the docker scripts.
 
+### Post-review fixes (fresh-eyes review catch)
+
+- **H1** — the wholesale `build-image.sh` adoption was incomplete: it builds
+  `-f rootless.Dockerfile` (absent here), probes via upstream's `run.sh`
+  entrypoint (absent), and our fork-diverged `runtime.Dockerfile` still
+  used a `repo-docs` build context the script never passes. Completed the
+  adoption: `rootless.Dockerfile` and `run.sh` extracted from upstream
+  `0ac43bb`; `runtime.Dockerfile` taken wholesale from upstream too, minus
+  the kubeswap build stage and binary COPY (consistent with #1156's drop).
+  Cross-checked every `SCRIPT_DIR` file reference, `-f` Dockerfile, and
+  build-arg/FROM-stage pairing — all resolve. (No docker daemon in this
+  container, so verification is structural, not a real build.)
+- **M2** — README still advertised the `+undefined` matrix reference;
+  updated to `+auto:orphans` with a rename note.
+- **M3** — semgrep ledger gained the `unsafe-formatstring` entry and a note
+  that ui_dist markers are covered by the inventory grep.
+- **M4** — `gofmt -w cmd/wol-proxy/wol-proxy.go` (marker edit had dedented
+  a block).
+
 ## 2026-10-12 — Hand-merge batch 1: content-type autofill, browser headers, decision models
 
 ### What / why

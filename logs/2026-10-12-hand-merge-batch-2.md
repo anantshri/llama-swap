@@ -56,6 +56,13 @@ python3 -c json.load(config-schema.json)      # valid
 
 ## Notes
 
+- Fresh-eyes review caught **H1**: wholesale build-image.sh without its
+  companion files (rootless.Dockerfile, run.sh) and with our diverged
+  runtime.Dockerfile could never complete a build. Fixed by completing the
+  adoption (both files from upstream; runtime.Dockerfile wholesale minus
+  kubeswap). Structural verification only — no docker daemon here; first
+  real image build should re-check. Also fixed: README +undefined mention,
+  ledger unsafe-formatstring entry, gofmt on wol-proxy.
 - The two remaining big queue items (bbdb55d logging, d3ab665 loading
   progress) still need their dedicated sessions; d34ddb2's trimmed #1172
   test assertions return with bbdb55d; router/matrix.go will want
