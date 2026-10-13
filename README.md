@@ -18,8 +18,8 @@ reference; issues and pull requests are welcome but may sit untouched.
 - **Going forward, upstream changes are adopted by cherry-picking** selected commits
   and adapting them. The fork does not track or merge upstream main. As of
   2026-10-13 every portable upstream commit since the baseline is landed
-  (only tailcat, kubeswap, and upstream's changelog/release tooling are
-  intentionally not carried).
+  (only kubeswap and upstream's changelog/release tooling are intentionally
+  not carried; tailcat was pulled in on 2026-10-13).
 - The upstream README is preserved at [README.original.md](README.original.md).
   Everything not listed below — installation channels (Docker, Homebrew, MacPorts,
   WinGet, release binaries), the full configuration reference, nginx reverse-proxy
@@ -43,6 +43,12 @@ reference; issues and pull requests are welcome but may sit untouched.
 - **Anthropic Messages API** — `/v1/messages` translated to OpenAI
   `v1/chat/completions` and responses translated back; `/v1/messages/count_tokens`
   is a raw pass-through. `passthroughAnthropic: true` forwards unchanged.
+- **Tailcat** — private end-to-end encrypted serving without a Tailscale
+  account: `-listen-tailcat` + the `tailcat:` block (client allow-list,
+  exposed model IDs, admin/debug); peers can route through another
+  llama-swap with `proxy: tailcat://<connection-token>`; `/api/tailcat`
+  status; UI page with the connection token and a shareable peer-config
+  snippet; Tailcat-sourced requests show a `tc:` source in activity.
 
 ### Web UI (no npm)
 

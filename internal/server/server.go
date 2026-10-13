@@ -82,9 +82,29 @@ type Server struct {
 	// the outer route chain, not here.
 	translatedDispatch http.Handler
 
-	shutdownCtx  context.Context
-	shutdownFn   context.CancelFunc
-	shuttingDown atomic.Bool
+	shutdownCtx    context.Context
+	shutdownFn     context.CancelFunc
+	shuttingDown   atomic.Bool
+	tailcatAddress atomic.Pointer[string]
+}
+
+func (s *Server) SetTailcatAddress(address string) {
+	value := address
+	s.tailcatAddress.Store(&value)
+}
+
+func (s *Server) TailcatAddress() string {
+	if value := s.tailcatAddress.Load(); value != nil {
+		return *value
+	}
+	return ""
+}
+
+type tailcatRequestContextKey struct{}
+
+func isTailcatRequest(ctx context.Context) bool {
+	marked, _ := ctx.Value(tailcatRequestContextKey{}).(bool)
+	return marked
 }
 
 // ActiveProfile returns the active runtime profile, or an empty string when no
@@ -463,6 +483,7 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/performance", apiChain.ThenFunc(s.handleAPIPerformance))
 	mux.Handle("GET /api/version", apiChain.ThenFunc(s.handleAPIVersion))
 	mux.Handle("GET /api/hardware", apiChain.ThenFunc(s.handleAPIHardware))
+	mux.Handle("GET /api/tailcat", apiChain.ThenFunc(s.handleAPITailcat))
 	mux.Handle("GET /api/captures/{id}", apiChain.ThenFunc(s.handleAPICapture))
 	mux.Handle("POST /api/captures/{id}/pin", apiChain.ThenFunc(s.handleAPICapturePin))
 	mux.Handle("DELETE /api/captures/{id}/pin", apiChain.ThenFunc(s.handleAPICaptureUnpin))

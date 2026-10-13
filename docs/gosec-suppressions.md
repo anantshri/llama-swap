@@ -23,7 +23,7 @@ To list the live markers at any time:
 grep -rn "#nosec" internal/
 ```
 
-Total: **93** suppressions across **12** rules (G115 ×29, G103 ×27, G304 ×10, G204 ×8, G404 ×4, G202 ×5, G117 ×2, G120 ×2, G710 ×3, G118 ×1, G703 ×1, G705 ×1).
+Total: **94** suppressions across **12** rules (G115 ×29, G103 ×27, G304 ×11, G204 ×8, G404 ×4, G202 ×5, G117 ×2, G120 ×2, G710 ×3, G118 ×1, G703 ×1, G705 ×1).
 
 ---
 
@@ -64,10 +64,12 @@ Files: `internal/process/{process_command,runtime_windows}.go`,
 `internal/process/process_command.go` account for two of the sites, and
 `cmd/vllm-wrapper/main.go` carries two more outside the audit test's scope.
 
-## G304 — file inclusion via variable · 10 sites · MEDIUM
+## G304 — file inclusion via variable · 11 sites · MEDIUM
 
 **Verdict: false positive.** Every path is either the operator-supplied config
-file (`internal/config/{config,merge,load_windows}.go`) or an internally
+file (`internal/config/{config,merge,load_windows}.go`), the operator-supplied
+Tailcat key file from the `-listen-tailcat` flag
+(`internal/tailcat/transport.go`), or an internally
 constructed sysfs/hwmon path enumerated by the kernel
 (`internal/hw/{detect_linux,amd_linux}.go`, `internal/perf/monitor_sysfs.go` —
 the GPU telemetry provider reads `/sys/class/drm/*/` + `/proc/<pid>/fdinfo/`

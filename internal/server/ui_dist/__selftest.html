@@ -51,6 +51,7 @@
       } from "/ui/js/util/modelUtils.js";
       import { formatUptime } from "/ui/js/util/format.js";
       import { loadingPercent, loadingMessage } from "/ui/js/util/modelUtils.js";
+      import { yamlQuote, peerConfigYaml } from "/ui/js/util/tailcatPeerConfig.js";
       import { ModelsPanel } from "/ui/js/components/modelsPanel.js";
       import { ModelSelector } from "/ui/js/components/modelSelector.js";
       import { ModelDetailPage } from "/ui/js/pages/modelDetail.js";
@@ -817,6 +818,21 @@
         modelsStore.set([]);
         dpage.destroy();
         dpage.el.remove();
+
+        group("tailcat peer config (Tailcat series)");
+        test("yamlQuote keeps YAML-special ids plain strings", () => {
+          expect(yamlQuote("model_a")).toBe('"model_a"');
+          expect(yamlQuote("foo: bar")).toBe('"foo: bar"');
+          expect(yamlQuote("#anchor")).toBe('"#anchor"');
+        });
+        test("peerConfigYaml builds a paste-ready peers entry", () => {
+          const yaml = peerConfigYaml("tcTOKEN", ["model_a", "peer/model_b"]);
+          expect(yaml.startsWith("peers:\n  friend:\n    proxy: tailcat://tcTOKEN\n")).toBe(true);
+          expect(yaml).toContain("# tailcatKey: /path/to/client.private.json");
+          expect(yaml).toContain('      - "model_a"');
+          expect(yaml).toContain('      - "peer/model_b"');
+          expect(yaml.endsWith("\n")).toBe(true);
+        });
 
         group("model picker — capability default");
         modelsStore.set([

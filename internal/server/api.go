@@ -334,6 +334,19 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sort.Slice(data, func(i, j int) bool { return data[i].ID < data[j].ID })
+	// A Tailcat caller only sees the models the listener may serve.
+	if isTailcatRequest(r.Context()) {
+		exposed := s.cfg.Tailcat
+		filtered := data[:0]
+		if exposed != nil {
+			for _, record := range data {
+				if tailcatModelAllowed(exposed.Models, record.ID) {
+					filtered = append(filtered, record)
+				}
+			}
+		}
+		data = filtered
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{

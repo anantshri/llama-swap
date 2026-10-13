@@ -29,6 +29,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/server"
 	"github.com/mostlygeek/llama-swap/internal/store"
 	"github.com/mostlygeek/llama-swap/internal/swaputil"
+	"github.com/mostlygeek/llama-swap/internal/tailcat"
 	"github.com/mostlygeek/llama-swap/internal/watcher"
 )
 
@@ -73,6 +74,32 @@ func configStorePath(cfg config.Config) string {
 	return strings.TrimSpace(cfg.Store.Path)
 }
 
+func configureTailcatListener(cfg *config.Config, keyPath string) error {
+	enabled := keyPath != ""
+	cfg.SetTailcatEnabled(enabled)
+	if !enabled {
+		return nil
+	}
+	if cfg.Tailcat == nil || len(cfg.Tailcat.Models) == 0 {
+		return fmt.Errorf("-listen-tailcat requires tailcat.models to define at least one exposed model")
+	}
+	if len(cfg.Tailcat.Allow) == 0 {
+		slog.Warn(`tailcat.allow is empty: every Tailcat client will get 403 Forbidden; add client node keys, or "*" to allow any client`)
+	}
+	return nil
+}
+
+func loadTailcatListenerKey(keyPath string, enabled bool) (*tailcat.PrivateKey, error) {
+	if !enabled {
+		return nil, nil
+	}
+	privateKey, err := tailcat.LoadPrivateKey(keyPath, true)
+	if err != nil {
+		return nil, fmt.Errorf("load -listen-tailcat key: %w", err)
+	}
+	return privateKey, nil
+}
+
 // runValidate loads the configuration from the given sources and prints a
 // short human-readable result to out. It returns 0 when the config loads
 // without error and 1 otherwise. It does not start the server, detect
@@ -91,6 +118,7 @@ func main() {
 	flagConfig := flag.String("config", "", "path to config file")
 	flagConfigDir := flag.String("config-dir", "", "directory of *.yml/*.yaml config files (additive to -config)")
 	flagListen := flag.String("listen", "", "listen address (default :8080 or :8443 for TLS)")
+	flagListenTailcat := flag.String("listen-tailcat", "", "path to Tailcat server PrivateKey JSON file")
 	flagCertFile := flag.String("tls-cert-file", "", "TLS certificate file")
 	flagKeyFile := flag.String("tls-key-file", "", "TLS key file")
 	flagVersion := flag.Bool("version", false, "show version and exit")
@@ -131,6 +159,16 @@ func main() {
 	cfg, err := config.LoadConfigSources(*flagConfig, *flagConfigDir)
 	if err != nil {
 		slog.Error("failed to load config", "config", *flagConfig, "config-dir", *flagConfigDir, "error", err)
+		os.Exit(1)
+	}
+
+	if err := configureTailcatListener(&cfg, *flagListenTailcat); err != nil {
+		slog.Error("invalid Tailcat listener configuration", "error", err)
+		os.Exit(1)
+	}
+	tailcatPrivateKey, err := loadTailcatListenerKey(*flagListenTailcat, cfg.TailcatEnabled())
+	if err != nil {
+		slog.Error("failed to load -listen-tailcat key", "error", err)
 		os.Exit(1)
 	}
 
@@ -223,6 +261,44 @@ func main() {
 	activeStore := initialStore
 	activeStorePath := initialStorePath
 
+	tailcatHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		activeMu.RLock()
+		srv := activeSrv
+		activeMu.RUnlock()
+		srv.ServeTailcatHTTP(w, r)
+	})
+	tailcatLogger := func(cfg config.Config) tailcat.Logger {
+		if cfg.Tailcat != nil && cfg.Tailcat.Debug {
+			return proxyLog
+		}
+		return nil
+	}
+	startTailcat := func(cfg config.Config) (*tailcat.Server, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		return tailcat.Start(ctx, tailcat.ServerOptions{
+			PrivateKey: tailcatPrivateKey,
+			Handler:    tailcatHandler,
+			Logger:     tailcatLogger(cfg),
+		})
+	}
+
+	var activeTailcat *tailcat.Server
+	if cfg.TailcatEnabled() {
+		activeTailcat, err = startTailcat(cfg)
+		if err != nil {
+			slog.Error("failed to start Tailcat server", "error", err)
+			// Best-effort cleanup on the way out; errors here are not actionable.
+			_ = initialSrv.Shutdown(shutdownTimeout)
+			_ = initialStore.Close()
+			os.Exit(1)
+		}
+	}
+	if activeTailcat != nil {
+		initialSrv.SetTailcatAddress(activeTailcat.Address())
+		proxyLog.Infof("Tailcat listening on virtual TCP port 80: %s", activeTailcat.Address())
+	}
+
 	httpServer := &http.Server{
 		Addr: listenAddr,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -271,6 +347,7 @@ func main() {
 		activeMu.RLock()
 		currentStore := activeStore
 		currentStorePath := activeStorePath
+		currentTailcat := activeTailcat
 		activeMu.RUnlock()
 
 		newStore := currentStore
@@ -290,6 +367,14 @@ func main() {
 				_ = newStore.Close()
 			}
 			return
+		}
+
+		if currentTailcat != nil {
+			newSrv.SetTailcatAddress(currentTailcat.Address())
+			// The listener is never restarted: connected Tailcat clients do not
+			// reconnect to a restarted server. tailcat.allow is enforced by
+			// newSrv per request; only the debug logger needs updating here.
+			currentTailcat.SetLogger(tailcatLogger(newCfg))
 		}
 
 		activeMu.Lock()
@@ -405,6 +490,7 @@ func main() {
 				activeMu.RLock()
 				srv := activeSrv
 				st := activeStore
+				tailcatRuntime := activeTailcat
 				activeMu.RUnlock()
 
 				// Close long-lived SSE streams first so httpServer.Shutdown can
@@ -418,6 +504,11 @@ func main() {
 				defer cancel()
 				if err := httpServer.Shutdown(shutdownCtx); err != nil {
 					proxyLog.Warnf("http server shutdown error: %v", err)
+				}
+				if tailcatRuntime != nil {
+					if err := tailcatRuntime.Close(shutdownCtx); err != nil {
+						proxyLog.Warnf("Tailcat server shutdown error: %v", err)
+					}
 				}
 
 				// Clamp the remaining budget to a small positive value: a

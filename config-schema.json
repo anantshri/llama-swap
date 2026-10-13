@@ -874,6 +874,11 @@
                         "default": "",
                         "description": "A string key to be injected into the request. If blank, no key will be added. Key will be injected into headers: Authorization: Bearer <key> and x-api-key: <key>."
                     },
+                    "tailcatKey": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Optional Tailcat client PrivateKey JSON file, or 'ephemeral'. Valid only when proxy uses tailcat://. Omitted and 'ephemeral' both create a process-lifetime identity per peer."
+                    },
                     "models": {
                         "type": "array",
                         "items": {
@@ -896,49 +901,11 @@
                                 "additionalProperties": true,
                                 "default": {},
                                 "description": "Dictionary of parameters to set/override in requests to this peer. Useful for injecting provider-specific settings. A key ending in '?' (e.g. 'max_tokens?') is set-if-undefined: it is only applied when the request does not already contain that parameter. Protected params like 'model' cannot be overridden. Values can be strings, numbers, booleans, arrays, or objects."
-                            },
-                            "setParamsByMatch": {
-                                "oneOf": [
-                                    {
-                                        "type": "array",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "key": {
-                                                    "type": "string",
-                                                    "pattern": "^[A-Za-z0-9_-]+$",
-                                                    "description": "Top-level request field to inspect (e.g. reasoning_effort). Must not be 'model' and may only contain letters, digits, underscores, and hyphens."
-                                                },
-                                                "match": {
-                                                    "type": "string",
-                                                    "description": "Value the key must equal for the rule to apply. Non-string JSON values are compared by their string form, so booleans and numbers must be quoted."
-                                                },
-                                                "set": {
-                                                    "type": "object",
-                                                    "additionalProperties": true,
-                                                    "minProperties": 1,
-                                                    "description": "Parameters to apply when the rule matches. Object values are merged into an existing request object rather than replacing it. Protected params like 'model' cannot be overridden."
-                                                }
-                                            },
-                                            "required": [
-                                                "key",
-                                                "match",
-                                                "set"
-                                            ],
-                                            "additionalProperties": false
-                                        }
-                                    },
-                                    {
-                                        "$ref": "#/definitions/macroReference"
-                                    }
-                                ],
-                                "default": [],
-                                "description": "List of rules that set parameters when a request field equals a value, or a whole-value macro reference (e.g. ${my_rules}) expanding to such a list. Rules are evaluated in order and every matching rule applies, so a later rule overrides an earlier one. Applied after stripParams and before setParams."
                             }
                         },
                         "additionalProperties": false,
                         "default": {},
-                        "description": "Dictionary of filter settings for peer requests. Supports stripParams, setParams, and setParamsByMatch."
+                        "description": "Dictionary of filter settings for peer requests. Supports stripParams and setParams."
                     },
                     "timeouts": {
                         "type": "object",
@@ -958,8 +925,8 @@
                             "responseHeader": {
                                 "type": "integer",
                                 "minimum": 0,
-                                "default": 0,
-                                "description": "Time to wait for response headers in seconds."
+                                "default": 60,
+                                "description": "Time to wait for response headers in seconds. Defaults to 300 for Tailcat peers and 60 for other peers."
                             },
                             "tlsHandshake": {
                                 "type": "integer",
@@ -1119,7 +1086,8 @@
                 }
             },
             "additionalProperties": false,
-            "default": {}        },
+            "default": {}
+        },
         "routing": {
             "type": "object",
             "description": "Canonical routing/scheduling configuration. Alternative to the legacy top-level 'groups'/'matrix' keys; a config must not use both styles.",
@@ -1188,6 +1156,41 @@
                 }
             },
             "additionalProperties": false
+        },
+        "tailcat": {
+            "type": "object",
+            "properties": {
+                "allow": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "pattern": "^(\\*|nodekey:[0-9a-f]{64})$"
+                    },
+                    "default": [],
+                    "description": "Client node public keys allowed to make requests. Other clients receive HTTP 403. Empty (the default) denies every client; '*' allows any client possessing the connection token. Updates on config reload."
+                },
+                "models": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "default": [],
+                    "description": "Exact public model request IDs exposed through Tailcat. The -listen-tailcat flag requires at least one entry; '*' exposes every callable model."
+                },
+                "admin": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Expose llama-swap's complete HTTP surface through Tailcat. False exposes only health, model listings, and allowlisted inference endpoints."
+                },
+                "debug": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Include verbose Tailcat transport diagnostics in the proxy log. Updates on config reload."
+                }
+            },
+            "additionalProperties": false,
+            "description": "Tailcat HTTP policy. A Tailcat listener starts only when -listen-tailcat supplies a server PrivateKey JSON file."
         }
     },
     "allOf": [

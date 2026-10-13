@@ -259,6 +259,25 @@ security:
     # - optional, default: 86400
     maxAge: 86400
 
+# tailcat: configure models exposed over Tailcat virtual TCP port 80
+# - requires -listen-tailcat /path/to/server.private.json to start the listener
+# - when -listen-tailcat is set, models must contain at least one public ID
+# - allow denies by default: clients whose node key is not listed get HTTP 403
+# - an empty allow denies every client; "*" permits any client holding the
+#   case-sensitive connection token
+# - "*" exposes every callable public ID
+# - admin defaults false and keeps the UI, /api, logs, metrics and operations private
+# - debug defaults false; set true to include verbose Tailcat transport logs in proxy logs
+# - allow, models, admin and debug all update on config reload without
+#   restarting the listener; changing the -listen-tailcat key requires a restart
+tailcat:
+  allow:
+    - nodekey:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  models:
+    - model_a
+    - llama-swap-peer/model_a
+  admin: false
+  debug: false
 
 # upstream: controls behaviour of the /upstream passthrough endpoint
 # - optional, default: empty dictionary
@@ -924,6 +943,16 @@ peers:
       - model_a
       - model_b
       - embeddings/model_c
+  # Tailcat peers use the case-sensitive connection token as their proxy.
+  # Virtual TCP port 80 is fixed and must not be included in the URL.
+  tailcat-peer:
+    proxy: tailcat://tcREPLACE_WITH_CONNECTION_TOKEN
+    # Optional. Omit (or use "ephemeral") for a process-lifetime client key.
+    tailcatKey: /path/to/client.private.json
+    # Tailcat peers wait 300s for response headers by default so cold starts
+    # can finish; override with timeouts.responseHeader when needed.
+    models:
+      - model_a
   openrouter:
     proxy: https://openrouter.ai/api
     # apiKey: a string key to be injected into the request

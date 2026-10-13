@@ -17,6 +17,7 @@ import { ActivityPage } from "./pages/activity.js";
 import { PerformancePage } from "./pages/performance.js";
 import { HardwarePage } from "./pages/hardware.js";
 import { SettingsPage } from "./pages/settings.js";
+import { TailcatPage } from "./pages/tailcat.js";
 import { StatsPage } from "./pages/stats.js";
 import { currentPath } from "./router.js";
 
@@ -34,6 +35,7 @@ const routes = {
   "/activity": ActivityPage,
   "/performance": PerformancePage,
   "/hardware": HardwarePage,
+  "/tailcat": TailcatPage,
   "/settings": SettingsPage,
   "/stats": StatsPage,
 };

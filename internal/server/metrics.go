@@ -18,6 +18,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/store"
 	"github.com/mostlygeek/llama-swap/internal/swaputil"
+	"github.com/mostlygeek/llama-swap/internal/tailcat"
 	"github.com/tidwall/gjson"
 )
 
@@ -128,6 +129,9 @@ func (mp *metricsMonitor) Close() error {
 // a proxy header is client-supplied and can be spoofed), and finally the raw
 // connection address.
 func activitySource(r *http.Request) string {
+	if source, ok := tailcat.SourceFromContext(r.Context()); ok {
+		return source
+	}
 	if ip, ok := forwardedIP(r); ok {
 		return "xff:" + ip
 	}

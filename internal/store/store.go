@@ -56,6 +56,10 @@ type ActivityFilter struct {
 	End    time.Time // inclusive upper bound on ts_created; zero is unbounded
 	MinID  int       // inclusive lower bound on id; 0 is unbounded
 	MaxID  int       // inclusive upper bound on id; 0 is unbounded
+	// SrcPrefix is a literal prefix match on src (e.g. "tc:" for Tailcat
+	// sources). A bounded lexical range keeps SQL wildcard characters as
+	// data and can use idx_activity_src_created_id.
+	SrcPrefix string
 }
 
 type ActivityQuery struct {
@@ -803,6 +807,12 @@ func activityWhere(filter ActivityFilter) (string, []any) {
 	if filter.MaxID > 0 {
 		conditions = append(conditions, "id <= ?")
 		args = append(args, filter.MaxID)
+	}
+	if filter.SrcPrefix != "" {
+		// A bounded lexical range is a literal prefix match (SQL wildcard
+		// characters remain data) and can use idx_activity_src_created_id.
+		conditions = append(conditions, "src >= ? AND src < ?")
+		args = append(args, filter.SrcPrefix, filter.SrcPrefix+"\U0010FFFF")
 	}
 
 	if len(conditions) == 0 {

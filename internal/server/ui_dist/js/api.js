@@ -336,8 +336,15 @@ export async function getActivity(params = {}) {
   if (params.order) query.set("order", params.order);
   if (params.minID) query.set("min_id", String(params.minID));
   if (params.maxID) query.set("max_id", String(params.maxID));
+  if (params.srcPrefix) query.set("src_prefix", params.srcPrefix);
   const url = query.size > 0 ? `/api/metrics/activity?${query}` : "/api/metrics/activity";
   const response = await fetch(url);
+  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+  return await response.json();
+}
+
+export async function getTailcatStatus() {
+  const response = await fetch("/api/tailcat");
   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
   return await response.json();
 }

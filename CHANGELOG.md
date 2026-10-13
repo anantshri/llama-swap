@@ -12,6 +12,36 @@ Long-form entries with full context live in
 
 ### Added
 
+- **Tailcat subsystem** (upstream #1074/#1098/#1166/#1169/#1183, previously
+  the intentionally-skipped set): private, end-to-end encrypted access
+  without a Tailscale account or control plane.
+  - Serve over Tailcat's virtual TCP port 80 with
+    `-listen-tailcat <server.private.json>`; the `tailcat:` config block
+    gates which clients (`allow`, deny-by-default node keys or `*`) and
+    which public model IDs (`models`) are reachable; `admin: true` unlocks
+    the normal surface, `debug` adds transport logs. All policy updates on
+    config reload without restarting the listener.
+  - Peers can route through another llama-swap via
+    `proxy: tailcat://<connection-token>` (+ optional persistent
+    `tailcatKey`); tailcat peers default to a 300s response-header timeout
+    for remote cold starts.
+  - `/api/tailcat` reports listener status; activity records carry
+    Tailcat's authenticated source (`tc:` prefix), and the activity API
+    gains a literal `src_prefix` filter (wildcard-safe bounded-range
+    match, new src index).
+  - New Tailcat page in the UI: masked/revealable connection token, a
+    copy-paste `peers` config snippet for sharing, and a Tailcat-sourced
+    activity table.
+  - Fork adaptations: `internal/server/tailcat.go` extracted (upstream
+    keeps the handlers in server.go), `peer.go` + `peer_test.go` taken
+    wholesale (no fork-specific content), store `SrcPrefix` filter +
+    index ported onto this fork's store API, gosec hardening on the
+    imported code (explicit error handling + one ledgered G304 marker for
+    the operator-supplied key path), `redactString` scrubs `tailcat://`
+    proxies, config-schema/example/KB guide added. Live-listener E2E was
+    not possible in this container (needs the `tailcat` CLI / relay
+    network); coverage is the upstream in-memory transport tests, server
+    policy tests, config validation tests, and store filter tests.
 - Capture dialog sections remember their collapse state: switching the
   response Chat/Pretty/Raw tabs (or copying, or the parts collapse/expand
   controls) re-renders the whole dialog, but a manually collapsed Request

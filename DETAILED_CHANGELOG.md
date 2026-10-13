@@ -5,6 +5,58 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+---
+
+## 2026-10-13 — Tailcat subsystem port (upstream #1074 → #1183)
+
+### What / why
+
+The last intentionally-skipped subsystem, pulled in by user decision.
+Tailcat is llama-swap's private connectivity layer (Tailscale-derived, no
+account/control plane): serve llama-swap over an encrypted virtual TCP
+port 80, and route peers through connection tokens.
+
+### Approach
+
+The whole series is post-baseline, so instead of replaying five commits,
+the final upstream state was snapshotted and integrated:
+
+- Copied: `internal/tailcat/{transport,transport_test}.go`,
+  `internal/config/{tailcat,tailcat_test}.go`,
+  `internal/server/tailcat_test.go`, KB guide, `peer.go`/`peer_test.go`
+  (verified free of fork-specific content first).
+- Hand-merged: `llama-swap.go` (flag, configure/load key, listener
+  lifecycle incl. reload-address handoff and shutdown close),
+  `server.go` (tailcatAddress field + accessors, request context key,
+  `/api/tailcat` route), `apigroup.go` (handleAPITailcat +
+  tailcatExposedModelIDs), `api.go` (/v1/models filters to exposed IDs for
+  tailcat-marked requests), `metrics.go` (authenticated source preferred
+  over xff/ip), `redact.go` (`tailcat://` proxy scrubbing),
+  `load.go` (validateTailcatConfig call), config-schema + example config.
+- Ported onto this fork's store API: `ActivityFilter.SrcPrefix` with the
+  upstream bounded-range literal prefix match + `idx_activity_src_created_id`
+  migration (00005); upstream's sqlite-package test adapted.
+- gosec hardening on imported code (fork bar: zero): explicit `_ =` on
+  fatal-path/cleanup calls, encode error checked, one ledgered G304
+  marker (operator key path); ledger 93 → 94 (G304 ×11).
+- Vanilla UI: `/tailcat` page (token reveal/copy, peer-config YAML copy,
+  tc:-filtered ActivityTable), `tailcatPeerConfig.js` util (direct port),
+  `getTailcatStatus` + `srcPrefix` on `getActivity`/ActivityTable, nav
+  entry. +2 selftests (yamlQuote, peerConfigYaml).
+
+### Verification
+
+- Full short suite green (26 ok packages incl. internal/tailcat's
+  in-memory transport tests); server policy tests (22) + config validation
+  green; gosec 0 ×3; aidc-scan --all clean (gitleaks fine with the
+  placeholder nodekey in the example config).
+- Browser: `/api/tailcat` answers `{"enabled":false,…}`; the Tailcat page
+  renders the not-enabled notice; selftest 170/170.
+- NOT verified live: an actual `-listen-tailcat` boot needs the `tailcat`
+  CLI (key generation) and relay reachability, neither available in this
+  container. First real deployment should smoke: boot with a generated
+  key, connect a client, check `tc:` activity rows appear.
+
 ## 2026-10-13 — Capture dialog: section collapse state survives re-renders
 
 ### What / why
