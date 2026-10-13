@@ -5,6 +5,39 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+---
+
+## 2026-10-13 — Hand-merge batch 5: voices override + gopsutil panic fix
+
+### What / why
+
+Upstream catch-up after the full-drain audit: the one new feature commit
+(#1225) and the one missed fix (#1180).
+
+### Picks and resolutions
+
+- `163fd1d` #1225 (`capabilities.voices`): model_config/server/tests
+  applied clean; schema conflict was both-additive (our #915 fields +
+  their `voices` — one missing `},` from the splice fixed); KB section
+  taken from theirs; Svelte file dropped and its substance ported: the
+  speech tab's `(refresh)` dropdown pseudo-entry removed (a dedicated
+  refresh button already existed upstream and here).
+- `a2bf16e` #1180 (gopsutil panic): their go.mod hunks carried the tailcat
+  dependency, so the conflict was resolved by hand — keep our go.mod, add
+  only the `replace gopsutil => hsdfat/gopsutil v4.26.9-0.20260925…`
+  directive, `go mod tidy` regenerates go.sum for our dependency set.
+
+### Verification
+
+- `go test -short ./...` → 1991/32 ok; selftest 167/167; gosec 0 ×3;
+  aidc-scan --all clean.
+- E2E (after remembering to rebuild the binary): config with
+  `capabilities.voices: [alloy, echo, fable]` →
+  `GET /v1/audio/voices?model=tts` answers `{"model":"tts","voices":[…]}`
+  from config and the log confirms the model never started. (The first
+  smoke hung: the running binary predated the pick — rebuild before smoke
+  tests.)
+
 ## 2026-10-12 — Capture viewer: split reasoning/content blocks for buffered responses
 
 ### What / why

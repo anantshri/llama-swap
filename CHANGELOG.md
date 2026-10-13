@@ -233,6 +233,16 @@ Long-form entries with full context live in
   drop-on-full publish lost the exact stat a test awaited (an upstream test
   race that surfaced here under parallel-suite timing) — and the new tests'
   wait deadlines carry load headroom.
+- Hand-merge batch 5 (upstream catch-up):
+  - `models.capabilities.voices` override: set a voice list in the config
+    and `GET /v1/audio/voices?model={id}` is answered from it — the model
+    is not started and the upstream is not contacted. The speech tab's
+    dropdown drops its `(refresh)` pseudo-entry (a dedicated refresh button
+    already existed) (upstream #1225, commit `163fd1d`).
+  - go.mod carries upstream's temporary gopsutil replace
+    (`hsdfat/gopsutil v4.26.9-0.20260925…`) for the gopsutil panic fix —
+    hand-applied without the tailcat dependency their commit carried
+    (upstream #1180, commit `a2bf16e`).
 - Hand-merge batch 4:
   - Loading progress from the health check (upstream #1212, commit
     `d3ab665`): an upstream that answers its not-yet-ready health check
