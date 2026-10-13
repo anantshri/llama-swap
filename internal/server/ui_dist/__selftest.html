@@ -451,10 +451,12 @@
             dlg.querySelector(`details[data-section="${name}"]`).open = false;
           }
           await new Promise((r) => setTimeout(r, 10));
-          // Switching the response tab re-renders the whole dialog; the
-          // collapsed sections must stay collapsed.
-          dlg.querySelector("[data-tab='raw']").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+          // Switching a response tab re-renders the whole dialog; the
+          // collapsed sections must stay collapsed. Scope the selector to
+          // the response section — the request section has a Raw tab too.
+          dlg.querySelector('details[data-section="respBody"] [data-tab="raw"]').dispatchEvent(new MouseEvent("click", { bubbles: true }));
           dlg = document.querySelector(".capture-dlg[open]");
+          expect(dlg.querySelector('details[data-section="respBody"] [data-tab="raw"]').classList.contains("capture-tab-active")).toBe(true);
           expect(dlg.querySelector('details[data-section="reqHeaders"]').open).toBe(false);
           expect(dlg.querySelector('details[data-section="reqBody"]').open).toBe(false);
           expect(dlg.querySelector('details[data-section="respBody"]').open).toBe(true);

@@ -5,8 +5,6 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
----
-
 ## 2026-10-13 — Capture dialog: section collapse state survives re-renders
 
 ### What / why
