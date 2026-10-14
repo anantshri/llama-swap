@@ -42,3 +42,35 @@ func TestStore_ActivitySourcePrefixSortAndLegacyDefault(t *testing.T) {
 		t.Fatalf("legacy source = %+v, %v", legacy, err)
 	}
 }
+
+// TestStore_ActivityStatsModelFilterCountsInterleavedRows covers the
+// model-filtered TotalRequests path (upstream PR #1147): activity ids are
+// global across models, so MAX(id) overcounts a filtered model and the
+// filtered query must count rows instead.
+func TestStore_ActivityStatsModelFilterCountsInterleavedRows(t *testing.T) {
+	st, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	for _, model := range []string{"m1", "m2", "m1", "m2", "m1"} {
+		if _, err := st.InsertActivity(ctx, ActivityLogEntry{Model: model}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stats, err := st.ActivityStats(ctx, ActivityStatsQuery{Model: "m1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.TotalRequests != 3 {
+		t.Fatalf("filtered total requests = %d, want 3", stats.TotalRequests)
+	}
+	all, err := st.ActivityStats(ctx, ActivityStatsQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.TotalRequests != 5 {
+		t.Fatalf("unfiltered total requests = %d, want 5 (MAX(id) survives pruning)", all.TotalRequests)
+	}
+}

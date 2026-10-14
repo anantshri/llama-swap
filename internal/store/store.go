@@ -428,17 +428,24 @@ func (s *Store) ListActivity(ctx context.Context, query ActivityQuery) (Activity
 
 func (s *Store) ActivityStats(ctx context.Context, query ActivityStatsQuery) (ActivityStats, error) {
 	filter := ActivityFilter{}
-	if model := strings.TrimSpace(query.Model); model != "" {
+	model := strings.TrimSpace(query.Model)
+	if model != "" {
 		filter.Models = []string{model}
 	}
 	where, args := activityWhere(filter)
 	// TotalRequests is MAX(id), not COUNT(*): pruning deletes old rows, and
 	// the monotonic id keeps the all-time request total stable across prunes.
+	// With a model filter, ids are interleaved across models and MAX(id)
+	// would overcount that model's requests, so count the filtered rows.
+	requestTotal := "COALESCE(MAX(id), 0)"
+	if model != "" {
+		requestTotal = "COUNT(*)"
+	}
 	// #nosec G202 -- `where` uses ? placeholders bound via args; no user input
 	// is concatenated into the SQL text.
 	row := s.db.QueryRowContext(ctx, `
 		SELECT
-			COALESCE(MAX(id), 0),
+		`+requestTotal+`,
 			COALESCE(SUM(input_tokens), 0),
 			COALESCE(SUM(output_tokens), 0),
 			COALESCE(SUM(CASE WHEN cache_tokens > 0 THEN cache_tokens ELSE 0 END), 0)
