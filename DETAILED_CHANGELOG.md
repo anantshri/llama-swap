@@ -5,6 +5,53 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+---
+
+## 2026-10-13 — Video generation API + model-filtered stats fix (PRs #991, #1147)
+
+### What / why
+
+Two open upstream PRs pulled ahead of merge, per user decision: #1147
+(store stats counting bug — we had the bug) and #991 (video generation
+API — Go + a vanilla UI port).
+
+### #1147 (fix, commit 8fc8591)
+
+`ActivityStats` used `COALESCE(MAX(id),0)` for `TotalRequests` so the
+all-time total survives pruning — but activity ids are global, so with a
+`?model=` filter MAX(id) counts interleaved rows from other models.
+Model-filtered queries now use `COUNT(*)`. The pre-existing prune test's
+`modelStats.TotalRequests == 5` assertion encoded the bug (upstream's PR
+flips it to 2); corrected. Regression test covers interleaved rows and
+the unfiltered MAX(id) path.
+
+### #991 (feature)
+
+Go: `/v1/videos` + `/v1/videos/sync` POST routes (form/multipart —
+llama-swap reads only the model field, everything else passes through);
+`/v1/videos/{id}` + `/v1/videos/{id}/content` GET and `{id}` DELETE
+dispatched via the required `?model=` query param; `modelInQuery` (GET +
+DELETE) in swaputil with the query kept in sync on JSON-body model
+rewrites; video capability mappings; vLLM-omni example model. Ported
+tests: route dispatch (multipart/query/delete), profile+selector DELETE
+rewrites, swaputil ReplaceRequestModel cases (query-delete,
+json-with-query), caps table cases.
+Vanilla UI: `api/video.js` (form builder with advanced-JSON extension
+fields, async poll loop with abort + timeout), Video tab (model picker
+matching the video caps, async/sync, reference image, size/seconds/fps/
+negative/advanced, live job cards, in-browser playback, delete).
+Selftest +3 (form builder, poll loop with mocked fetch, terminal
+statuses) → 173/173.
+
+### Verification
+
+- E2E against a fake vLLM-omni backend: async create → poll → completed →
+  blob playback in the browser; sync mode returns video bytes; DELETE
+  removes the job; `/v1/models` reports the video capabilities; picker
+  shows the model as fitting the Video tab. No page errors.
+- Full short suite green (26 pkgs); gosec 0 ×3; aidc-scan --all clean;
+  gofmt clean.
+
 ## 2026-10-13 — Tailcat subsystem port (upstream #1074 → #1183)
 
 ### What / why

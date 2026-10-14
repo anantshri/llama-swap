@@ -796,3 +796,11 @@ table td { padding: 0.5rem; }
 .stats-td-num { text-align: right; font-family: ui-monospace, monospace; }
 .stats-td-model { font-weight: 500; }
 .stats-empty { padding: 2rem; text-align: center; font-size: 0.875rem; color: var(--color-txtsecondary); }
+
+/* Video playground tab */
+.pg-video { display: flex; flex-direction: column; height: 100%; gap: 0.5rem; }
+.pg-video-stage { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; }
+.pg-video-empty { padding: 2rem; text-align: center; }
+.pg-video-job { border: 1px solid var(--color-border, #444); border-radius: 6px; padding: 0.5rem; }
+.pg-video-job-head { display: flex; align-items: center; gap: 0.5rem; justify-content: flex-end; }
+.pg-video-player { width: 100%; max-height: 22rem; margin-top: 0.5rem; border-radius: 4px; background: #000; }

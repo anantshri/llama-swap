@@ -431,3 +431,30 @@ func TestServer_Selector_ModelListingPinUsesFirstTarget(t *testing.T) {
 	}
 	t.Fatal("public selector missing from model listing")
 }
+
+func TestServer_SelectorMiddleware_RewriteDeleteQueryModel(t *testing.T) {
+	cfg := selectorTestConfig(t)
+	local := newStubRouter([]string{"a", "b", "c"}, "")
+	var received swaputil.ReqContextData
+	var gotQueryModel string
+	var gotContentLength int64
+	var gotBody []byte
+	local.serveHTTP = func(w http.ResponseWriter, r *http.Request) {
+		received, _ = swaputil.ReadContext(r.Context())
+		gotQueryModel = r.URL.Query().Get("model")
+		gotContentLength = r.ContentLength
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}
+	s := selectorTestServer(t, cfg, local)
+
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/v1/videos/video-123?model=public", nil))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	assert.Equal(t, "variant", gotQueryModel)
+	assert.Equal(t, "variant", received.Model)
+	assert.Equal(t, "a", received.ModelID)
+	assert.Zero(t, gotContentLength)
+	assert.Empty(t, gotBody)
+}

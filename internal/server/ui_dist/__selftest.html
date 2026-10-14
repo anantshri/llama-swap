@@ -52,6 +52,7 @@
       import { formatUptime } from "/ui/js/util/format.js";
       import { loadingPercent, loadingMessage } from "/ui/js/util/modelUtils.js";
       import { yamlQuote, peerConfigYaml } from "/ui/js/util/tailcatPeerConfig.js";
+      import { buildVideoFormData, generateVideoAsync, TERMINAL_FAILURE_STATUSES } from "/ui/js/api/video.js";
       import { ModelsPanel } from "/ui/js/components/modelsPanel.js";
       import { ModelSelector } from "/ui/js/components/modelSelector.js";
       import { ModelDetailPage } from "/ui/js/pages/modelDetail.js";
@@ -832,6 +833,57 @@
           expect(yaml).toContain('      - "model_a"');
           expect(yaml).toContain('      - "peer/model_b"');
           expect(yaml.endsWith("\n")).toBe(true);
+        });
+
+        group("video API (#991)");
+        test("buildVideoFormData carries basics, file, and advanced fields", () => {
+          const fd = buildVideoFormData("vid-model", "a prompt", {
+            size: "1280x720",
+            seconds: 5,
+            fps: 24,
+            negativePrompt: "blurry",
+            advanced: { num_frames: 121, extra_params: { a: 1 }, model: "evil", skip: undefined },
+          }, new File(["x"], "ref.png", { type: "image/png" }));
+          expect(fd.get("model")).toBe("vid-model");
+          expect(fd.get("prompt")).toBe("a prompt");
+          expect(fd.get("size")).toBe("1280x720");
+          expect(fd.get("seconds")).toBe("5");
+          expect(fd.get("negative_prompt")).toBe("blurry");
+          expect(fd.get("num_frames")).toBe("121");
+          expect(fd.get("extra_params")).toBe('{"a":1}');
+          expect(fd.get("model")).toBe("vid-model"); // advanced cannot override model
+          expect(fd.get("skip")).toBe(null);
+          expect(fd.get("input_reference").name).toBe("ref.png");
+        });
+        await atest("generateVideoAsync polls until completed and fetches content", async () => {
+          const calls = [];
+          const origFetch = globalThis.fetch;
+          globalThis.fetch = async (url, opts) => {
+            calls.push(url);
+            if (url === "/v1/videos" && opts?.method === "POST") {
+              return new Response(JSON.stringify({ id: "job-1", status: "queued" }), { status: 200 });
+            }
+            if (url.startsWith("/v1/videos/job-1?")) {
+              const done = calls.filter((c) => c.startsWith("/v1/videos/job-1?")).length >= 2;
+              return new Response(JSON.stringify({ id: "job-1", status: done ? "completed" : "in_progress" }), { status: 200 });
+            }
+            if (url.startsWith("/v1/videos/job-1/content")) {
+              return new Response(new Blob(["vid"]));
+            }
+            return new Response("nope", { status: 404 });
+          };
+          try {
+            const seen = [];
+            const blob = await generateVideoAsync("m", "p", {}, null, new AbortController().signal, (j) => seen.push(j.status), { pollIntervalMs: 1, timeoutMs: 5000 });
+            expect(seen).toEqual(["queued", "in_progress", "completed"]);
+            expect(await blob.text()).toBe("vid");
+          } finally {
+            globalThis.fetch = origFetch;
+          }
+        });
+        test("terminal failure statuses abort the poll loop", () => {
+          expect(TERMINAL_FAILURE_STATUSES.has("failed")).toBe(true);
+          expect(TERMINAL_FAILURE_STATUSES.has("queued")).toBe(false);
         });
 
         group("model picker — capability default");

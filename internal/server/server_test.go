@@ -1,10 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"io/fs"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -161,6 +163,22 @@ func chatRequest(model string) *http.Request {
 	body := strings.NewReader(`{"model":"` + model + `"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
 	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+// multipartRequest builds a multipart POST carrying the given model field,
+// like the /v1/videos create endpoints accept (upstream PR #991).
+func multipartRequest(path, model string) *http.Request {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if err := mw.WriteField("model", model); err != nil {
+		panic(err)
+	}
+	if err := mw.Close(); err != nil {
+		panic(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, path, &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
 	return req
 }
 
@@ -384,6 +402,56 @@ func TestServer_UnknownPathReturns404(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status=%d want 404", w.Code)
+	}
+}
+
+func TestServer_RouteVideoCreate_MultipartModelField(t *testing.T) {
+	s := newTestServer(
+		newStubRouter([]string{"local-model"}, `{"id":"video-123","status":"queued"}`),
+		newStubRouter(nil, ""),
+	)
+
+	for _, path := range []string{"/v1/videos", "/v1/videos/sync"} {
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, multipartRequest(path, "local-model"))
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status=%d body=%q", path, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestServer_RouteVideoStatus_QueryParamModel(t *testing.T) {
+	s := newTestServer(
+		newStubRouter([]string{"local-model"}, `{"id":"video-123","status":"completed"}`),
+		newStubRouter(nil, ""),
+	)
+
+	for _, path := range []string{
+		"/v1/videos?model=local-model",
+		"/v1/videos/video-123?model=local-model",
+		"/v1/videos/video-123/content?model=local-model",
+	} {
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+
+		if w.Code != http.StatusOK {
+			t.Errorf("%s: status=%d body=%q", path, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestServer_RouteVideoDelete_QueryParamModel(t *testing.T) {
+	s := newTestServer(
+		newStubRouter([]string{"local-model"}, ""),
+		newStubRouter(nil, ""),
+	)
+
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/v1/videos/video-123?model=local-model", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", w.Code, w.Body.String())
 	}
 }
 

@@ -176,6 +176,8 @@ var modelPostJSONRoutes = []string{
 var modelPostFormRoutes = []string{
 	"/v1/audio/transcriptions",
 	"/v1/images/edits",
+	"/v1/videos",
+	"/v1/videos/sync",
 }
 
 // modelGetRoutes are model-dispatched GET endpoints (the model arrives as a
@@ -184,6 +186,16 @@ var modelGetRoutes = []string{
 	"/v1/audio/voices",
 	"/sdapi/v1/loras",
 	"/props",
+	"/v1/videos",
+	"/v1/videos/{video_id}",
+	"/v1/videos/{video_id}/content",
+}
+
+// modelDeleteRoutes are model-dispatched DELETE endpoints. Like modelGetRoutes,
+// the model arrives as a query parameter since the resource id alone (e.g. a
+// video job id) doesn't identify which backend created it.
+var modelDeleteRoutes = []string{
+	"/v1/videos/{video_id}",
 }
 
 // isMetricsRecordPath reports whether path is one of the model-dispatched
@@ -400,6 +412,10 @@ func (s *Server) routes() {
 	}
 	for _, path := range modelGetRoutes {
 		mux.Handle("GET "+path, modelChain.Then(dispatch))
+	}
+
+	for _, path := range modelDeleteRoutes {
+		mux.Handle("DELETE "+path, modelChain.Then(dispatch))
 	}
 
 	// Ollama-compatible API surface (see internal/ollama). llama-swap already

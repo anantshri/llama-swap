@@ -12,6 +12,25 @@ Long-form entries with full context live in
 
 ### Added
 
+- **Video generation API** (`/v1/videos`, upstream PR #991, unmerged
+  upstream): async job creation (`POST /v1/videos`), blocking generation
+  (`POST /v1/videos/sync`), job status (`GET /v1/videos/{id}`), content
+  download (`GET /v1/videos/{id}/content`), and deletion
+  (`DELETE /v1/videos/{id}`) — the GET/DELETE routes dispatch by the
+  required `?model=` query parameter (DELETE joins GET in the
+  query-model convention), and profile/selector rewrites keep the query
+  model in sync. New `video` capability mappings
+  (`video_generation`, `image_to_video`, `video_to_video`,
+  `video_understanding`) feed `/v1/models` and the pickers; a vLLM-omni
+  example model is in the config example. The Playground gains a **Video**
+  tab (async jobs with live status polling, sync mode, reference image,
+  size/seconds/fps/negative prompt plus an advanced-JSON field for
+  backend-specific parameters, in-browser playback and job deletion).
+- **Activity stats fix** (upstream PR #1147, unmerged upstream): a
+  model-filtered stats query over-counted — `TotalRequests` used the
+  global `MAX(id)`, which counts interleaved rows from other models.
+  Filtered queries now count their own rows; the unfiltered all-time
+  total still uses `MAX(id)` so it survives pruning.
 - **Tailcat subsystem** (upstream #1074/#1098/#1166/#1169/#1183, previously
   the intentionally-skipped set): private, end-to-end encrypted access
   without a Tailscale account or control plane.

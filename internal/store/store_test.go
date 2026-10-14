@@ -539,8 +539,10 @@ func TestStore_PruneActivity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("model ActivityStats: %v", err)
 	}
-	if modelStats.TotalRequests != 5 {
-		t.Fatalf("model total requests after prune = %d, want 5", modelStats.TotalRequests)
+	// Model-filtered totals count that model's rows (#1147): MAX(id) would
+	// report the interleaved global id (5) and overcount this model.
+	if modelStats.TotalRequests != 2 {
+		t.Fatalf("model total requests after prune = %d, want 2", modelStats.TotalRequests)
 	}
 	ids, err := store.PinnedCaptureIDs(ctx)
 	if err != nil {
