@@ -314,6 +314,14 @@ func ReplaceRequestModel(r *http.Request, model, replacement string) (*http.Requ
 		return invalidateRequestContext(r), nil
 	}
 
+	// Body-carrying methods may also pass the model in the query: extractContext
+	// resolves them through r.Form, which merges the URL query into the parsed
+	// body. Keep both in sync so nothing downstream sees the original id.
+	if query := r.URL.Query(); query.Get("model") == model {
+		query.Set("model", replacement)
+		r.URL.RawQuery = query.Encode()
+	}
+
 	contentType := r.Header.Get("Content-Type")
 	switch {
 	case strings.Contains(contentType, "application/json"):
@@ -325,13 +333,6 @@ func ReplaceRequestModel(r *http.Request, model, replacement string) (*http.Requ
 		body, err = sjson.SetBytes(body, "model", replacement)
 		if err != nil {
 			return r, fmt.Errorf("could not rewrite model in JSON body: %w", err)
-		}
-		// Body-carrying methods may also pass the model in the query: extractContext
-		// resolves them through r.Form, which merges the URL query into the parsed
-		// body. Keep both in sync so nothing downstream sees the original id.
-		if query := r.URL.Query(); query.Get("model") == model {
-			query.Set("model", replacement)
-			r.URL.RawQuery = query.Encode()
 		}
 		replaceRequestBody(r, body)
 	case strings.Contains(contentType, "multipart/form-data"):

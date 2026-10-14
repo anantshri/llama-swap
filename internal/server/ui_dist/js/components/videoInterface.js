@@ -3,8 +3,7 @@
 import { el, escapeHtml } from "../dom.js";
 import { persistent } from "../store.js";
 import { ModelSelector } from "./modelSelector.js";
-import { playgroundModels } from "../api.js";
-import { generateVideoAsync, createVideoSync, deleteVideo } from "../api/video.js";
+import { generateVideoAsync, createVideoSync, deleteVideo, TERMINAL_FAILURE_STATUSES as TERMINAL } from "../api/video.js";
 
 export function VideoInterface() {
   const selectedModel = persistent("playground-video-model", "");
@@ -123,25 +122,37 @@ export function VideoInterface() {
       return;
     }
     for (const job of jobs) {
+      // Sync responses carry no server job id, so there is nothing to
+      // DELETE upstream; failed/aborted jobs are local-only too. Both get
+      // a dismiss control instead.
+      const deletable = job.done && !job.id.startsWith("sync-");
+      const dismissible = !deletable && (job.done || TERMINAL(job.status) || job.id.startsWith("sync-"));
       const card = el(`
         <div class="pg-video-job" data-job="${escapeHtml(job.id)}">
           <div class="pg-video-job-head">
             <span class="model-tag">${escapeHtml(job.status)}</span>
             ${job.error ? `<span class="pg-error">${escapeHtml(job.error)}</span>` : ""}
-            ${job.done ? `<button class="btn btn--sm" data-del title="Delete job">✕</button>` : ""}
+            ${deletable ? `<button class="btn btn--sm" data-del title="Delete job">✕</button>` : ""}
+            ${dismissible ? `<button class="btn btn--sm" data-dismiss title="Dismiss">✕</button>` : ""}
           </div>
           ${job.url ? `<video class="pg-video-player" controls src="${job.url}"></video>` : ""}
         </div>`);
       card.querySelector("[data-del]")?.addEventListener("click", async () => {
         try {
           await deleteVideo(job.id, job.model);
-          jobs = jobs.filter((j) => j.id !== job.id);
-          if (job.url) URL.revokeObjectURL(job.url);
-          renderStage();
         } catch (e) {
           error = e.message;
           renderStage();
+          return;
         }
+        jobs = jobs.filter((j) => j.id !== job.id);
+        if (job.url) URL.revokeObjectURL(job.url);
+        renderStage();
+      });
+      card.querySelector("[data-dismiss]")?.addEventListener("click", () => {
+        jobs = jobs.filter((j) => j.id !== job.id);
+        if (job.url) URL.revokeObjectURL(job.url);
+        renderStage();
       });
       stageEl.appendChild(card);
     }
@@ -213,13 +224,12 @@ export function VideoInterface() {
     }
   }
 
-  const sub = playgroundModels.subscribe(() => modelSel.render?.());
   renderStage();
 
   return {
     el: root,
     destroy() {
-      sub.unsubscribe?.();
+      modelSel.destroy();
       for (const job of jobs) if (job.url) URL.revokeObjectURL(job.url);
       abortController?.abort();
     },

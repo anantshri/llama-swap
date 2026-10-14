@@ -216,6 +216,11 @@ func isMetricsRecordPath(path string) bool {
 			return true
 		}
 	}
+	for _, p := range modelDeleteRoutes {
+		if p == path {
+			return true
+		}
+	}
 	return false
 }
 

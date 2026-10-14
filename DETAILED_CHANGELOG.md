@@ -5,8 +5,6 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
----
-
 ## 2026-10-13 — Video generation API + model-filtered stats fix (PRs #991, #1147)
 
 ### What / why
