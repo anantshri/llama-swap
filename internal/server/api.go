@@ -460,7 +460,6 @@ func handleUpstreamRedirect(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/ui/models", http.StatusFound)
 }
 
-
 // handleUpstream proxies ANY request under /upstream/<model>/<path> directly to
 // the model's process, bypassing model dispatch by body/query inspection.
 func (s *Server) handleUpstream(w http.ResponseWriter, r *http.Request) {

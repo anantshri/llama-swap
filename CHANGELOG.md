@@ -90,6 +90,12 @@ Long-form entries with full context live in
 
 ### Fixed
 
+- Playground → Images: opening the SDAPI **Settings** panel no longer throws
+  `ReferenceError: escapeHtml is not defined` and render nothing. The panel's
+  negative-prompt textarea escaped through `escapeHtml()` without importing it
+  from `js/dom.js`, so the settings grid stayed empty and the LoRA controls
+  were unreachable until the page was reloaded. The import is now present
+  (`js/components/imageInterface.js`).
 - perf sysfs GPU provider (Linux): GPU/VRAM temperature, fan and power
   charts no longer saw-tooth to zero while a model is busy. On cards that
   runtime-suspend between generation bursts (observed on Intel Arc B70 /

@@ -1,6 +1,6 @@
 // Image generation tab: OpenAI / SDAPI modes, persistent settings, LoRA support.
 // Ported from components/playground/ImageInterface.svelte.
-import { el, cleanupAll } from "../dom.js";
+import { el, cleanupAll, escapeHtml } from "../dom.js";
 import { models } from "../api.js";
 import { playgroundStores } from "../playgroundActivity.js";
 import { persistent } from "../store.js";

@@ -5,6 +5,52 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-10-16 — Playground Images: fix `escapeHtml` ReferenceError in SDAPI settings
+
+### What
+
+`internal/server/ui_dist/js/components/imageInterface.js` called
+`escapeHtml()` when rendering the SDAPI settings panel (negative-prompt
+textarea) but only imported `{ el, cleanupAll }` from `../dom.js`. Any click
+on **Settings** threw
+
+```
+imageInterface.js:122 Uncaught ReferenceError: escapeHtml is not defined
+    at renderSettings (...)
+    at HTMLButtonElement.<anonymous> (...)
+```
+
+and `settingsEl.innerHTML` was never assigned, so the grid (steps/cfg/seed/
+batch/sampler/scheduler/LoRA controls) stayed empty. Reported on issue #27
+(line 117 there — the file has since moved down a few lines).
+
+### Fix
+
+Import the shared helper: `import { el, cleanupAll, escapeHtml } from
+"../dom.js";` — the same form the other ported playground interfaces
+(`audioInterface.js`, `speechInterface.js`, `rerankInterface.js`) already use.
+
+### Verification
+
+- `node --check` on the module (ESM syntax).
+- Static import/export audit of every module under `ui_dist/js/`: names
+  imported from relative paths must exist as exports, and any `escape*()`
+  call must be imported or locally declared. With the one-line import
+  reverted the audit reports exactly one finding
+  (`imageInterface.js uses escapeHtml() with no import/declaration`); with the
+  fix in place it reports clean.
+- `gofmt -l internal/` (clean), `go vet ./internal/server/`,
+  `go test ./internal/server/` (ok).
+
+### Notes
+
+The rest of issue #27 (upload an image as input when the model reports edit
+capability) is a feature, not part of this fix: `/v1/images/edits` and
+`/sdapi/v1/img2img` are already routed by the proxy, so it is a UI-only
+follow-up gated on `capabilities.image_to_image`.
+
+---
+
 ## 2026-09-26 — UI upgrades (models/search, capability pickers, stats split, log concerns) and upstream-review fixes (hw + perf)
 
 ### Addendum (same day): GPU telemetry saw-tooth fix
