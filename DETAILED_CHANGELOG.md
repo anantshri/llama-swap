@@ -5,6 +5,71 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-10-16 — oMLX upstream guide and config example
+
+### What / why
+
+User report: with an MLX backend, Activity shows no prompt-processing or
+generation speed. Root cause is the backend, not llama-swap: the stock
+`mlx-lm server` emits a usage block with token counts only — no
+llama-server `timings`, no vLLM `metrics`, no TabbyAPI/oMLX rate fields —
+and in streaming mode even the counts only arrive when the client sends
+`stream_options: {"include_usage": true}` (verified against mlx-lm
+`server.py`: `generate_response`/`completion_usage_response` build usage
+from `prompt_tokens`/`completion_tokens`/`cached_tokens` alone; prefill
+progress is SSE comment lines). `buildMetrics` has no proxy-side rate
+fallback, so both columns read unknown. oMLX (`jundot/omlx`) reports
+`usage.prompt_tokens_per_second` (uncached prompt ÷ prefill) and
+`usage.generation_tokens_per_second` (completion ÷ generation), which this
+fork already parses (upstream #1199, cherry-picked as `783c323`).
+
+User decision: config-level workaround plus an oMLX config entry, no
+metrics code change; deployment target is an Apple Silicon Mac.
+
+### Change
+
+- `docs/kb/guides/upstreams/omlx.md` (new): why stock mlx-lm reads unknown,
+  oMLX install + one-entry-many-models pattern, what lands in Activity, and
+  failure modes (no shell in `cmd` so `~`/brew path needs absolutes,
+  alias routing, whole-process swapping, admin UI via `/upstream/`).
+- `docs/config.example.yaml`: oMLX example model after the vLLM-omni one —
+  `omlx serve --model-dir <abs> --port ${PORT}` with `aliases` for sibling
+  model directories (requested names pass through unchanged when
+  `useModelName` is unset, so oMLX resolves them itself; verified in
+  `internal/server/filters.go`).
+
+Facts verified against oMLX source (`omlx/server.py` @ main): `GET /health`
+exists (503 while preloading → default `checkEndpoint` works);
+`--model-dir`/`--host`/`--port` CLI flags; usage timing fields in every
+non-streaming response, and in streams behind
+`stream_options.include_usage` — llama-swap injects that flag automatically
+for Anthropic `/v1/messages` (`internal/apiconv/anthropic_req.go`) and
+Ollama (`internal/ollama/translate.go`) clients. `cmd` runs via
+`exec.CommandContext` with no shell
+(`internal/process/process_command.go`), so the example and guide use
+absolute paths.
+
+### Verification
+
+- `go test ./internal/docagent/ -run TestKB` — 28 passed (frontmatter and
+  `config_keys` validation of the new article).
+- `go test ./internal/config/ -run "Example|Schema"` —
+  `TestConfig_ExampleMatchesSchema` passes (new example entry validates
+  against `config-schema.json`).
+- `go build ./...` — clean (docs are go:embed'ed).
+
+### Notes
+
+- The deeper fix — proxy-side TTFT measurement in `responseBodyCopier` with
+  wall-clock rate derivation in `buildMetrics` for backends that report no
+  rates (sousekd's fork ships this as "stream rate estimation") — was
+  proposed and declined for now; revisit if stock mlx-lm must stay.
+- Headless Chromium installed for JS-rendered doc fetching
+  (`~/.local/bin/chromium`, Chrome for Testing 155 arm64) per user request;
+  `/opt/toolchains` is read-only so it lives under `~/.local/share`.
+
+---
+
 ## 2026-10-13 — Video generation API + model-filtered stats fix (PRs #991, #1147)
 
 ### What / why

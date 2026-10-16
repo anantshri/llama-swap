@@ -12,6 +12,13 @@ Long-form entries with full context live in
 
 ### Added
 
+- **oMLX upstream guide and config example**: new KB article
+  `guides/upstreams/omlx` explaining why the stock `mlx-lm server` leaves
+  Activity prompt/generation speeds unknown (usage carries token counts only,
+  and streaming usage needs `stream_options.include_usage`) and how oMLX
+  fixes it by reporting `prompt_tokens_per_second` /
+  `generation_tokens_per_second`; the config example gains an oMLX model
+  entry with one process serving a whole `--model-dir` via `aliases`.
 - **Video generation API** (`/v1/videos`, upstream PR #991, unmerged
   upstream): async job creation (`POST /v1/videos`), blocking generation
   (`POST /v1/videos/sync`), job status (`GET /v1/videos/{id}`), content

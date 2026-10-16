@@ -747,6 +747,27 @@ models:
       --served-model-name wan2.2-ti2v-5b
     cmdStop: docker stop ${MODEL_ID}
 
+  # MLX on Apple Silicon example (oMLX):
+  # oMLX serves every model directory under --model-dir from one process and
+  # reports real throughput in its usage block (prompt_tokens_per_second,
+  # generation_tokens_per_second), so the Activity page shows prompt and
+  # generation speeds - non-streaming always, streams when the client sends
+  # stream_options.include_usage. The stock "mlx-lm server" reports only
+  # token counts, which leaves both speed columns unknown - see
+  # docs/kb/guides/upstreams/omlx.md
+  # See: https://github.com/jundot/omlx
+  "qwen3-coder-next-8bit":
+    description: "Qwen3 Coder Next 8-bit - MLX via oMLX"
+    # cmd is not run through a shell: use absolute paths (~/ does not expand)
+    cmd: |
+      /opt/homebrew/bin/omlx serve
+      --model-dir /Users/yourname/models --port ${PORT}
+    # sibling model directories served by the same oMLX process; requested
+    # names pass through unchanged, so oMLX resolves them itself
+    aliases:
+      - gpt-oss-120b-mxfp4-q8
+      - step-3.5-flash-8bit
+
 # hooks: a dictionary of event triggers and actions
 # - optional, default: empty dictionary
 # - the only supported hook is on_startup
