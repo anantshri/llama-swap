@@ -38,7 +38,7 @@
       import { parseStream } from "/ui/js/api/chat.js";
       import {
         countWords, estimateTokens, splitRequestParts, requestPartsHTML, requestPartsText,
-        prettyIfJson,
+        prettyIfJson, parseChatJson, responseChatHTML, CaptureDialogController,
       } from "/ui/js/components/captureDialog.js";
       import {
         normalizeUsage, normalizeTimings, parseChatCompletionsLine,
@@ -49,12 +49,17 @@
       import {
         buildModelOptions, filterModelOptions,
       } from "/ui/js/util/modelUtils.js";
+      import { formatUptime } from "/ui/js/util/format.js";
+      import { loadingPercent, loadingMessage } from "/ui/js/util/modelUtils.js";
+      import { yamlQuote, peerConfigYaml } from "/ui/js/util/tailcatPeerConfig.js";
+      import { buildVideoFormData, generateVideoAsync, TERMINAL_FAILURE_STATUSES } from "/ui/js/api/video.js";
       import { ModelsPanel } from "/ui/js/components/modelsPanel.js";
       import { ModelSelector } from "/ui/js/components/modelSelector.js";
+      import { ModelDetailPage } from "/ui/js/pages/modelDetail.js";
       import { LogPanel } from "/ui/js/components/logPanel.js";
       import { StatsPage } from "/ui/js/pages/stats.js";
       import { observable } from "/ui/js/store.js";
-      import { models as modelsStore } from "/ui/js/api.js";
+      import { models as modelsStore, playgroundModels as playgroundModelsStore } from "/ui/js/api.js";
 
       // ---- tiny test harness ----
       const groups = [];
@@ -331,7 +336,137 @@
           fail("collapsed render still contains open blocks");
         }
       });
-      group("prettyIfJson");
+
+        group("parseChatJson — buffered chat responses");
+        test("splits reasoning_content and content, labels name the source", () => {
+          const chat = parseChatJson(
+            JSON.stringify({ choices: [{ message: { role: "assistant", reasoning_content: "thinking...", content: "answer" } }] })
+          );
+          expect(chat.reasoning).toBe("thinking...");
+          expect(chat.content).toBe("answer");
+          expect(chat.reasoningPath).toBe("choices[0].message.reasoning_content");
+          expect(chat.contentPath).toBe("choices[0].message.content");
+        });
+        test("accepts reasoning alias and multimodal content arrays, labels follow", () => {
+          const chat = parseChatJson(
+            JSON.stringify({ choices: [{ delta: { reasoning: "hmm", content: [{ type: "text", text: "part text" }] } }] })
+          );
+          expect(chat.reasoning).toBe("hmm");
+          expect(chat.content).toBe("part text");
+          expect(chat.reasoningPath).toBe("choices[0].delta.reasoning");
+          expect(chat.contentPath).toBe("choices[0].delta.content");
+        });
+        test("empty reasoning_content does not shadow a populated reasoning alias", () => {
+          const chat = parseChatJson(JSON.stringify({ choices: [{ message: { reasoning_content: "", reasoning: "real" } }] }));
+          expect(chat.reasoning).toBe("real");
+        });
+        test("non-chat JSON and empty messages return null", () => {
+          expect(parseChatJson(JSON.stringify({ data: [{ embedding: [1, 2] }] }))).toBe(null);
+          expect(parseChatJson(JSON.stringify({ choices: [{ message: {} }] }))).toBe(null);
+          expect(parseChatJson("not json")).toBe(null);
+          expect(parseChatJson(JSON.stringify({ choices: [] }))).toBe(null);
+        });
+        test("content-only responses parse with empty reasoning", () => {
+          const chat = parseChatJson(JSON.stringify({ choices: [{ message: { content: "just text" } }] }));
+          expect(chat.reasoning).toBe("");
+          expect(chat.content).toBe("just text");
+        });
+
+        group("responseChatHTML — split blocks with stats");
+        test("renders one collapsible block per field with counts", () => {
+          const html = responseChatHTML(
+            { reasoning: "because", content: "so" },
+            { reasoning: "choices[0].message.reasoning_content", content: "choices[0].message.content" }
+          );
+          expect(html).toContain('capture-part-role--system">reasoning');
+          expect(html).toContain('capture-part-role--assistant">content');
+          expect(html).toContain("choices[0].message.reasoning_content");
+          expect(html).toContain("capture-pre-reasoning");
+          expect((html.match(/<details/g) || []).length).toBe(2);
+          expect(html).toContain("chars");
+          expect(html).toContain("≈"); // token estimate marker
+        });
+        test("skips empty fields; empty chat renders (empty)", () => {
+          const html = responseChatHTML({ reasoning: "", content: "only content" });
+          expect((html.match(/<details/g) || []).length).toBe(1);
+          expect(html).toContain("only content");
+          expect(responseChatHTML({ reasoning: "", content: "" })).toBe('<pre class="capture-pre">(empty)</pre>');
+        });
+
+        group("capture dialog — response chat wiring");
+        const b64 = (s) => btoa(unescape(encodeURIComponent(s)));
+        const chatCtl = CaptureDialogController();
+        await atest("buffered chat capture lands on Chat with source labels", () => {
+          chatCtl.open({
+            id: 0,
+            req_path: "/v1/chat/completions",
+            req_headers: { "Content-Type": "application/json" },
+            req_body: b64(JSON.stringify({ model: "m", messages: [{ role: "user", content: "hi" }] })),
+            resp_headers: { "Content-Type": "application/json" },
+            resp_body: b64(JSON.stringify({ choices: [{ message: { reasoning_content: "why", content: "thus" } }] })),
+          });
+          const dlg = document.querySelector(".capture-dlg[open]");
+          expect(dlg.querySelector("[data-tab='chat']").classList.contains("capture-tab-active")).toBe(true);
+          const labels = [...dlg.querySelectorAll(".capture-part-label")].map((e) => e.textContent);
+          expect(labels).toContain("choices[0].message.reasoning_content");
+          expect(labels).toContain("choices[0].message.content");
+        });
+        await atest("non-chat JSON keeps Pretty as the landing tab", () => {
+          chatCtl.open({
+            id: 1,
+            req_headers: { "Content-Type": "application/json" },
+            req_body: b64("{}"),
+            resp_headers: { "Content-Type": "application/json" },
+            resp_body: b64(JSON.stringify({ data: [{ embedding: [1] }] })),
+          });
+          const dlg = document.querySelector(".capture-dlg[open]");
+          expect(dlg.querySelector("[data-tab='chat']")).toBe(null);
+          expect(dlg.querySelector("[data-tab='pretty']").classList.contains("capture-tab-active")).toBe(true);
+        });
+        await atest("SSE capture keeps the Chat tab with delta labels", () => {
+          chatCtl.open({
+            id: 2,
+            req_headers: { "Content-Type": "application/json" },
+            req_body: b64("{}"),
+            resp_headers: { "Content-Type": "text/event-stream" },
+            resp_body: b64('data: {"choices":[{"delta":{"reasoning_content":"r1","content":"c1"}}]}\n\ndata: [DONE]\n\n'),
+          });
+          const dlg = document.querySelector(".capture-dlg[open]");
+          expect(dlg.querySelector("[data-tab='chat']").classList.contains("capture-tab-active")).toBe(true);
+          const labels = [...dlg.querySelectorAll(".capture-part-label")].map((e) => e.textContent);
+          expect(labels).toContain("reasoning deltas");
+          expect(dlg.innerHTML).toContain("r1");
+        });
+        await atest("collapsed sections stay collapsed across tab switches", async () => {
+          chatCtl.open({
+            id: 3,
+            req_headers: { "Content-Type": "application/json" },
+            req_body: b64(JSON.stringify({ model: "m", messages: [{ role: "user", content: "hi" }] })),
+            resp_headers: { "Content-Type": "application/json" },
+            resp_body: b64(JSON.stringify({ choices: [{ message: { reasoning_content: "why", content: "thus" } }] })),
+          });
+          let dlg = document.querySelector(".capture-dlg[open]");
+          // Collapse the two request sections (setting .open fires the
+          // toggle event the dialog records; it is queued as a task, so
+          // let it run before the re-render below).
+          for (const name of ["reqHeaders", "reqBody"]) {
+            dlg.querySelector(`details[data-section="${name}"]`).open = false;
+          }
+          await new Promise((r) => setTimeout(r, 10));
+          // Switching a response tab re-renders the whole dialog; the
+          // collapsed sections must stay collapsed. Scope the selector to
+          // the response section — the request section has a Raw tab too.
+          dlg.querySelector('details[data-section="respBody"] [data-tab="raw"]').dispatchEvent(new MouseEvent("click", { bubbles: true }));
+          dlg = document.querySelector(".capture-dlg[open]");
+          expect(dlg.querySelector('details[data-section="respBody"] [data-tab="raw"]').classList.contains("capture-tab-active")).toBe(true);
+          expect(dlg.querySelector('details[data-section="reqHeaders"]').open).toBe(false);
+          expect(dlg.querySelector('details[data-section="reqBody"]').open).toBe(false);
+          expect(dlg.querySelector('details[data-section="respBody"]').open).toBe(true);
+        });
+        chatCtl.close();
+        chatCtl.destroy();
+
+        group("prettyIfJson");
       test("formats JSON-shaped text and leaves other text alone", () => {
         expect(prettyIfJson('{"a":1}')).toBe('{\n  "a": 1\n}');
         expect(prettyIfJson("[1, 2]")).toBe('[\n  1,\n  2\n]');
@@ -561,6 +696,195 @@
         modelsStore.set([]);
         panel.destroy();
         panel.el.remove();
+
+        group("formatUptime (#1173)");
+        await atest("two largest units at each scale", () => {
+          expect(formatUptime(-5)).toBe("0s"); // clamped
+          expect(formatUptime(42_000)).toBe("42s");
+          expect(formatUptime(5 * 60_000 + 12_000)).toBe("5m 12s");
+          expect(formatUptime(2 * 3_600_000 + 5 * 60_000)).toBe("2h 5m");
+          expect(formatUptime((3 * 24 + 4) * 3_600_000)).toBe("3d 4h");
+        });
+
+        group("models panel — uptime (#1173)");
+        modelsStore.set([
+          { id: "ready1", name: "", description: "", state: "ready", unlisted: false, peerID: "", aliases: [],
+            uptimeMs: 5 * 60_000 + 12_000, readySince: "2026-10-12T10:00:00Z" },
+          { id: "stopped1", name: "", description: "", state: "stopped", unlisted: false, peerID: "", aliases: [] },
+        ]);
+        const upanel = ModelsPanel();
+        document.body.appendChild(upanel.el);
+        await atest("ready model shows uptime cell with tick attributes", () => {
+          const cell = upanel.el.querySelector("[data-uptime-base]");
+          expect(cell).toBeTruthy();
+          expect(cell.textContent).toBe("5m 12s");
+          expect(Number(cell.getAttribute("data-uptime-base"))).toBe(5 * 60_000 + 12_000);
+          expect(cell.getAttribute("title")).toContain("2026-10-12T10:00:00Z");
+        });
+        await atest("non-ready models show no uptime", () => {
+          expect(upanel.el.querySelectorAll("[data-uptime-base]").length).toBe(1);
+        });
+        await atest("uptime survives the playground capabilities merge", () => {
+          // mergedModels() spreads the live SSE record first; uptimeMs must
+          // still be present after capabilities are attached. Populate the
+          // playground store so the merge branch actually runs.
+          playgroundModelsStore.set([{ id: "ready1", capabilities: { chat: true }, context_length: 8192 }]);
+          modelsStore.set(modelsStore.get().slice());
+          expect(upanel.el.querySelector("[data-uptime-base]").textContent).toBe("5m 12s");
+          playgroundModelsStore.set([]);
+        });
+        await atest("re-render keeps the anchor; new uptimeMs re-anchors", () => {
+          const before = upanel.el.querySelector("[data-uptime-base]");
+          const atBefore = before.getAttribute("data-uptime-at");
+          // Unchanged uptimeMs: anchor must not reset on an unrelated re-render.
+          modelsStore.set(modelsStore.get().slice());
+          const after = upanel.el.querySelector("[data-uptime-base]");
+          expect(after.getAttribute("data-uptime-at")).toBe(atBefore);
+          // A newer event (uptimeMs changed) re-anchors from the new value.
+          const bumped = modelsStore.get().map((m) => (m.id === "ready1" ? { ...m, uptimeMs: m.uptimeMs + 60_000 } : m));
+          modelsStore.set(bumped);
+          const reanchored = upanel.el.querySelector("[data-uptime-base]");
+          expect(Number(reanchored.getAttribute("data-uptime-base"))).toBe(6 * 60_000 + 12_000);
+          expect(Number(reanchored.getAttribute("data-uptime-at"))).toBeGreaterThanOrEqual(Number(atBefore));
+        });
+        modelsStore.set([]);
+        upanel.destroy();
+        upanel.el.remove();
+
+        group("models panel — audiocpp link (#1223)");
+        modelsStore.set([
+          { id: "audiocpp_auto", name: "", description: "", state: "stopped", unlisted: false, peerID: "", aliases: [] },
+        ]);
+        const apanel = ModelsPanel();
+        document.body.appendChild(apanel.el);
+        await atest("audiocpp_auto open-model link targets /audiocpp/", () => {
+          expect(apanel.el.querySelector(".models-open").getAttribute("href")).toBe("/audiocpp/");
+        });
+        modelsStore.set([]);
+        apanel.destroy();
+        apanel.el.remove();
+
+        group("models panel — loading progress (#1212)");
+        await atest("loadingPercent clamps, floors, and only fires while starting", () => {
+          expect(loadingPercent({ state: "starting", loadingProgress: 0.42 })).toBe(42);
+          expect(loadingPercent({ state: "starting", loadingProgress: 1.2 })).toBe(100);
+          expect(loadingPercent({ state: "starting", loadingProgress: -3 })).toBe(0);
+          expect(loadingPercent({ state: "starting" })).toBe(undefined);
+          expect(loadingPercent({ state: "ready", loadingProgress: 0.9 })).toBe(undefined);
+          expect(loadingPercent(undefined)).toBe(undefined);
+        });
+        await atest("loadingMessage only fires while starting", () => {
+          expect(loadingMessage({ state: "starting", loadingMessage: "loading tensors" })).toBe("loading tensors");
+          expect(loadingMessage({ state: "ready", loadingMessage: "loading tensors" })).toBe("");
+          expect(loadingMessage(undefined)).toBe("");
+        });
+        modelsStore.set([
+          { id: "big", name: "", description: "", state: "starting", unlisted: false, peerID: "", aliases: [],
+            loadingProgress: 0.42, loadingMessage: "loading tensors" },
+          { id: "idle", name: "", description: "", state: "stopped", unlisted: false, peerID: "", aliases: [] },
+        ]);
+        const lpanel = ModelsPanel();
+        document.body.appendChild(lpanel.el);
+        await atest("starting model shows percent, message, and a bar; others show none", () => {
+          const pct = lpanel.el.querySelector(".model-loadpct");
+          expect(pct?.textContent).toBe("42%");
+          expect(lpanel.el.querySelector(".model-loadmsg").getAttribute("title")).toBe("loading tensors");
+          const fill = lpanel.el.querySelector(".model-loadbar-fill");
+          expect(fill?.getAttribute("style")).toContain("width:42%");
+          expect(lpanel.el.querySelectorAll(".model-loadbar").length).toBe(1);
+        });
+        await atest("progress update re-renders via the modelStatus store", () => {
+          modelsStore.set([
+            { id: "big", name: "", description: "", state: "starting", unlisted: false, peerID: "", aliases: [],
+              loadingProgress: 0.9, loadingMessage: "almost there" },
+          ]);
+          expect(lpanel.el.querySelector(".model-loadpct").textContent).toBe("90%");
+          expect(lpanel.el.querySelector(".model-loadbar-fill").getAttribute("style")).toContain("width:90%");
+        });
+        modelsStore.set([]);
+        lpanel.destroy();
+        lpanel.el.remove();
+
+        group("model detail — loading progress header (#1212)");
+        modelsStore.set([
+          { id: "big", name: "Big Model", description: "", state: "starting", unlisted: false, peerID: "", aliases: [],
+            loadingProgress: 0.42, loadingMessage: "loading tensors" },
+        ]);
+        const dpage = ModelDetailPage(() => "big");
+        document.body.appendChild(dpage.el);
+        await atest("detail head shows percent and message while starting", () => {
+          expect(dpage.el.querySelector(".model-loadpct")?.textContent).toBe("42%");
+          expect(dpage.el.querySelector(".model-loadmsg")?.getAttribute("title")).toBe("loading tensors");
+        });
+        modelsStore.set([]);
+        dpage.destroy();
+        dpage.el.remove();
+
+        group("tailcat peer config (Tailcat series)");
+        test("yamlQuote keeps YAML-special ids plain strings", () => {
+          expect(yamlQuote("model_a")).toBe('"model_a"');
+          expect(yamlQuote("foo: bar")).toBe('"foo: bar"');
+          expect(yamlQuote("#anchor")).toBe('"#anchor"');
+        });
+        test("peerConfigYaml builds a paste-ready peers entry", () => {
+          const yaml = peerConfigYaml("tcTOKEN", ["model_a", "peer/model_b"]);
+          expect(yaml.startsWith("peers:\n  friend:\n    proxy: tailcat://tcTOKEN\n")).toBe(true);
+          expect(yaml).toContain("# tailcatKey: /path/to/client.private.json");
+          expect(yaml).toContain('      - "model_a"');
+          expect(yaml).toContain('      - "peer/model_b"');
+          expect(yaml.endsWith("\n")).toBe(true);
+        });
+
+        group("video API (#991)");
+        test("buildVideoFormData carries basics, file, and advanced fields", () => {
+          const fd = buildVideoFormData("vid-model", "a prompt", {
+            size: "1280x720",
+            seconds: 5,
+            fps: 24,
+            negativePrompt: "blurry",
+            advanced: { num_frames: 121, extra_params: { a: 1 }, model: "evil", skip: undefined },
+          }, new File(["x"], "ref.png", { type: "image/png" }));
+          expect(fd.get("model")).toBe("vid-model");
+          expect(fd.get("prompt")).toBe("a prompt");
+          expect(fd.get("size")).toBe("1280x720");
+          expect(fd.get("seconds")).toBe("5");
+          expect(fd.get("negative_prompt")).toBe("blurry");
+          expect(fd.get("num_frames")).toBe("121");
+          expect(fd.get("extra_params")).toBe('{"a":1}');
+          expect(fd.get("model")).toBe("vid-model"); // advanced cannot override model
+          expect(fd.get("skip")).toBe(null);
+          expect(fd.get("input_reference").name).toBe("ref.png");
+        });
+        await atest("generateVideoAsync polls until completed and fetches content", async () => {
+          const calls = [];
+          const origFetch = globalThis.fetch;
+          globalThis.fetch = async (url, opts) => {
+            calls.push(url);
+            if (url === "/v1/videos" && opts?.method === "POST") {
+              return new Response(JSON.stringify({ id: "job-1", status: "queued" }), { status: 200 });
+            }
+            if (url.startsWith("/v1/videos/job-1?")) {
+              const done = calls.filter((c) => c.startsWith("/v1/videos/job-1?")).length >= 2;
+              return new Response(JSON.stringify({ id: "job-1", status: done ? "completed" : "in_progress" }), { status: 200 });
+            }
+            if (url.startsWith("/v1/videos/job-1/content")) {
+              return new Response(new Blob(["vid"]));
+            }
+            return new Response("nope", { status: 404 });
+          };
+          try {
+            const seen = [];
+            const blob = await generateVideoAsync("m", "p", {}, null, new AbortController().signal, (j) => seen.push(j.status), { pollIntervalMs: 1, timeoutMs: 5000 });
+            expect(seen).toEqual(["queued", "in_progress", "completed"]);
+            expect(await blob.text()).toBe("vid");
+          } finally {
+            globalThis.fetch = origFetch;
+          }
+        });
+        test("terminal failure statuses abort the poll loop", () => {
+          expect(TERMINAL_FAILURE_STATUSES.has("failed")).toBe(true);
+          expect(TERMINAL_FAILURE_STATUSES.has("queued")).toBe(false);
+        });
 
         group("model picker — capability default");
         modelsStore.set([

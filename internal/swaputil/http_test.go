@@ -55,6 +55,46 @@ func TestReplaceRequestModel(t *testing.T) {
 		assertContextInvalidated(t, updated)
 	})
 
+	t.Run("query delete", func(t *testing.T) {
+		r := withContext(httptest.NewRequest(http.MethodDelete, "/v1/videos/video-123?model=public", nil))
+		updated, err := ReplaceRequestModel(r, "public", "target")
+		if err != nil {
+			t.Fatalf("ReplaceRequestModel: %v", err)
+		}
+		if got := updated.URL.Query().Get("model"); got != "target" {
+			t.Fatalf("model = %q, want target", got)
+		}
+		body, err := io.ReadAll(updated.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		if len(body) != 0 || updated.ContentLength != 0 || updated.Header.Get("Content-Length") != "" {
+			t.Fatalf("delete body = %q ContentLength = %d, want untouched empty", body, updated.ContentLength)
+		}
+		assertContextInvalidated(t, updated)
+	})
+
+	t.Run("json with query model", func(t *testing.T) {
+		r := withContext(httptest.NewRequest(http.MethodPost, "/?model=public", strings.NewReader(`{"model":"public"}`)))
+		r.Header.Set("Content-Type", "application/json")
+		updated, err := ReplaceRequestModel(r, "public", "target")
+		if err != nil {
+			t.Fatalf("ReplaceRequestModel: %v", err)
+		}
+		if got := updated.URL.Query().Get("model"); got != "target" {
+			t.Fatalf("query model = %q, want target", got)
+		}
+		body, err := io.ReadAll(updated.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		if !strings.Contains(string(body), `"model":"target"`) {
+			t.Fatalf("body = %s, want model target", body)
+		}
+		assertBodyLength(t, updated, body)
+		assertContextInvalidated(t, updated)
+	})
+
 	t.Run("json", func(t *testing.T) {
 		r := withContext(httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"model":"public","prompt":"hello"}`)))
 		r.Header.Set("Content-Type", "application/json")

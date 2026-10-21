@@ -6,11 +6,14 @@ import { observable } from "../store.js";
 import { LogPanel } from "../components/logPanel.js";
 import { ActivityTable } from "../components/activityTable.js";
 import { capabilityLabels } from "../util/capabilities.js";
+import { formatUptime } from "../util/format.js";
+import { loadingPercent, loadingMessage } from "../util/modelUtils.js";
 
 const LOG_LENGTH_LIMIT = 1024 * 100; // 100KB
 
 function modelServerPath(modelId) {
   if (modelId === "comfyui_auto") return "/comfyui/";
+  if (modelId === "audiocpp_auto") return "/audiocpp/";
   return `/upstream/${encodeURIComponent(modelId)}/`;
 }
 
@@ -110,6 +113,12 @@ export function ModelDetailPage(getModelId) {
       return;
     }
     const desc = m.description ? `<p class="muted model-detail-desc"><em>${escapeHtml(m.description)}</em></p>` : "";
+    // Loading progress from the upstream's health check (upstream #1212);
+    // updates arrive as modelStatus SSE events.
+    const pct = loadingPercent(m);
+    const loadPctHtml = pct !== undefined ? ` <span class="model-loadpct">${pct}%</span>` : "";
+    const msg = loadingMessage(m);
+    const loadMsgHtml = msg ? `<span class="model-loadmsg muted" title="${escapeHtml(msg)}">${escapeHtml(msg)}</span>` : "";
     const aliases =
       m.aliases && m.aliases.length
         ? `<p class="muted model-detail-aliases">Aliases: ${escapeHtml(m.aliases.join(", "))}</p>`
@@ -123,7 +132,8 @@ export function ModelDetailPage(getModelId) {
         <span class="${statusDotClass(m)}" title="${escapeHtml(m.state)}"></span>
         <h2 class="model-detail-title">${escapeHtml(m.name || m.id)}</h2>
         <span class="muted model-detail-id">(${escapeHtml(m.id)})</span>
-        <span class="status status--${escapeHtml(m.state)}">${escapeHtml(m.state)}</span>
+        <span class="status status--${escapeHtml(m.state)}">${escapeHtml(m.state)}${loadPctHtml}</span>
+        ${loadMsgHtml}
         <div class="model-detail-head-actions">
           ${
             !m.peerID
@@ -143,6 +153,12 @@ export function ModelDetailPage(getModelId) {
     const playground = playgroundModels.get().find((p) => p.id === (m?.id ?? id));
     const caps = Object.entries(playground?.capabilities ?? {}).filter(([, v]) => v);
     const ctx = playground?.context_length ?? 0;
+    // Uptime snapshot (upstream #1173): age of the ready state as of the
+    // latest modelStatus event, plus the server-side ready timestamp.
+    const uptimeRow =
+      m?.state === "ready" && m.uptimeMs > 0
+        ? `<div class="model-detail-row"><span class="muted">Uptime</span><span>${formatUptime(m.uptimeMs)}${m.readySince ? ` <span class="muted">(since ${escapeHtml(new Date(m.readySince).toLocaleString())})</span>` : ""}</span></div>`
+        : "";
 
     panes.details.innerHTML = `
       <div class="card model-detail-details">
@@ -158,6 +174,7 @@ export function ModelDetailPage(getModelId) {
                 }</div>`
           }
         </div>
+        ${uptimeRow}
       </div>
     `;
   }

@@ -6,6 +6,7 @@ import { el, cleanupAll } from "../dom.js";
 import { persistent } from "../store.js";
 import { ChatInterface } from "../components/chatInterface.js";
 import { ImageInterface } from "../components/imageInterface.js";
+import { VideoInterface } from "../components/videoInterface.js";
 import { SpeechInterface } from "../components/speechInterface.js";
 import { AudioInterface } from "../components/audioInterface.js";
 import { RerankInterface } from "../components/rerankInterface.js";
@@ -15,6 +16,7 @@ import { DocsInterface } from "../components/docsInterface.js";
 const TABS = [
   { id: "chat", label: "Chat", factory: () => ChatInterface() },
   { id: "images", label: "Images", factory: () => ImageInterface() },
+  { id: "video", label: "Video", factory: () => VideoInterface() },
   { id: "speech", label: "Speech", factory: () => SpeechInterface() },
   { id: "audio", label: "Transcription", factory: () => AudioInterface() },
   { id: "rerank", label: "Rerank", factory: () => RerankInterface() },

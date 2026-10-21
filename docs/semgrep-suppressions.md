@@ -22,6 +22,7 @@ To list the live markers:
 grep -rn "nosemgrep" internal/ cmd/ .github/
 ```
 
+(ui_dist markers are included by the `internal/` prefix above.)
 ## Rule categories suppressed
 
 - **`no-fprintf-to-responsewriter`, `no-direct-write-to-responsewriter`,
@@ -30,6 +31,19 @@ grep -rn "nosemgrep" internal/ cmd/ .github/
   emits HTML, so writing bytes to the `http.ResponseWriter` is normal and safe.
   Sites: `internal/perf/prometheus.go`, `internal/swaputil/http.go`,
   `internal/server/{api,apigroup,log}.go`, `cmd/{fake-model,wol-proxy}`, tests.
+  The wol-proxy confirm/loading pages (#1213) write constant HTML — the two new
+  `fmt.Fprint` sites carry inline markers; the remaining live hits are
+  `httptest` fixture responders in `internal/capcompat/{capcompat,service}_test.go`
+  and `internal/process/loading_progress_test.go` (#1212 port)
+  (static JSON bytes, reviewed FP) and the pre-existing category sites above.
+- **`django-no-csrf-token`** — misfire of a Django-template rule on the static,
+  Go-embedded `cmd/wol-proxy/confirm.html` consent page; the form's POST is the
+  action being confirmed and there is no cookie/session to forge. Inline marker
+  on the form.
+- **`unsafe-formatstring`** — misfire of a Python-style format-string audit on
+  a JavaScript template literal. Site: `internal/server/ui_dist/js/agent/
+  agentTools.js` (warning text built from internal tool names). Inline marker
+  on the statement.
 - **`dangerous-exec-command`** — launching operator-configured model commands is
   the product's core function (also `#nosec G204`). Sites:
   `internal/process/process_command.go`, `cmd/vllm-wrapper`.

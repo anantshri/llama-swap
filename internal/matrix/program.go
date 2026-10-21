@@ -5,6 +5,9 @@ import (
 	"sort"
 )
 
+// OrphanSetName is the reserved reference target for automatic orphan models.
+const OrphanSetName = "auto:orphans"
+
 // Definition is one named matrix DSL expression.
 type Definition struct {
 	Name string
@@ -26,11 +29,11 @@ type compiledSet struct {
 
 // Program is an immutable, compiled matrix DSL program.
 type Program struct {
-	sets            []compiledSet
-	modelBits       map[string]int
-	words           int
-	undefinedModels []string
-	undefinedMode   string
+	sets         []compiledSet
+	modelBits    map[string]int
+	words        int
+	orphanModels []string
+	orphanMode   string
 }
 
 // Decision describes the selected matrix set and the running models it evicts.
@@ -58,7 +61,7 @@ func Compile(definitions []Definition, resolve Resolver, allModels []string) (*P
 	}
 
 	seenModels := make(map[string]bool)
-	undefinedReferenced := false
+	orphansReferenced := false
 	for _, definition := range definitions {
 		root, err := parseDSL(definition.DSL)
 		if err != nil {
@@ -77,10 +80,10 @@ func Compile(definitions []Definition, resolve Resolver, allModels []string) (*P
 				n.name = model
 				seenModels[model] = true
 			case nodeRef:
-				if n.name == "undefined" {
-					undefinedReferenced = true
+				if n.name == OrphanSetName {
+					orphansReferenced = true
 				}
-				if n.name != "undefined" || setNames["undefined"] {
+				if n.name != OrphanSetName || setNames[OrphanSetName] {
 					if !setNames[n.name] {
 						return fmt.Errorf("set %q references undefined set %q", definition.Name, n.name)
 					}
@@ -101,9 +104,13 @@ func Compile(definitions []Definition, resolve Resolver, allModels []string) (*P
 	}
 
 	program := &Program{}
-	if undefinedReferenced {
-		if setNames["undefined"] {
-			program.undefinedMode = "user-defined"
+	// Orphan membership must be computed from resolved user-authored leaves,
+	// before any other automatic sets are synthesized. Keep this phase outside
+	// reference walks: it registers at most one shared root per Compile call.
+	// Future automatic-set registration must not replace OrphanSetName.
+	if orphansReferenced {
+		if setNames[OrphanSetName] {
+			program.orphanMode = "user-defined"
 		} else {
 			orphans := make([]string, 0, len(allModels))
 			for _, model := range allModels {
@@ -112,19 +119,14 @@ func Compile(definitions []Definition, resolve Resolver, allModels []string) (*P
 				}
 			}
 			sort.Strings(orphans)
-			setNames["undefined"] = true
-			deps["undefined"] = nil
+			setNames[OrphanSetName] = true
+			deps[OrphanSetName] = nil
+			roots[OrphanSetName] = buildModelSet(orphans)
 			if len(orphans) == 0 {
-				roots["undefined"] = &node{kind: nodeEmpty}
-				program.undefinedMode = "empty"
+				program.orphanMode = "empty"
 			} else {
-				children := make([]*node, len(orphans))
-				for i, model := range orphans {
-					children[i] = &node{kind: nodeLeaf, name: model}
-				}
-				roots["undefined"] = &node{kind: nodeOr, children: children}
-				program.undefinedModels = orphans
-				program.undefinedMode = "synthesized"
+				program.orphanModels = orphans
+				program.orphanMode = "synthesized"
 			}
 		}
 	}
@@ -134,7 +136,7 @@ func Compile(definitions []Definition, resolve Resolver, allModels []string) (*P
 		return nil, err
 	}
 
-	if undefinedReferenced {
+	if orphansReferenced {
 		for _, name := range order {
 			roots[name] = simplifyEmptyRefs(roots[name], roots)
 		}
@@ -152,7 +154,7 @@ func Compile(definitions []Definition, resolve Resolver, allModels []string) (*P
 
 	sets := make([]compiledSet, 0, len(order))
 	for _, name := range order {
-		if name == "undefined" && (program.undefinedMode == "synthesized" || program.undefinedMode == "empty") {
+		if name == OrphanSetName && (program.orphanMode == "synthesized" || program.orphanMode == "empty") {
 			continue
 		}
 		sets = append(sets, compiledSet{
@@ -165,6 +167,22 @@ func Compile(definitions []Definition, resolve Resolver, allModels []string) (*P
 	program.sets = sets
 	program.computeSupport()
 	return program, nil
+}
+
+// buildModelSet constructs alternatives from already-resolved model IDs without
+// parsing DSL or changing the input slice. Membership, reference registration,
+// and the treatment of empty sets belong to the caller.
+func buildModelSet(models []string) *node {
+	if len(models) == 0 {
+		return &node{kind: nodeEmpty}
+	}
+	models = append([]string(nil), models...)
+	sort.Strings(models)
+	children := make([]*node, len(models))
+	for i, model := range models {
+		children[i] = &node{kind: nodeLeaf, name: model}
+	}
+	return &node{kind: nodeOr, children: children}
 }
 
 // computeSupport builds the program-wide model registry and, for each set, a
@@ -261,9 +279,9 @@ func simplifyEmptyRefs(root *node, roots map[string]*node) *node {
 	return root
 }
 
-// SynthesizedUndefined reports the opt-in +undefined compilation result.
-func (p *Program) SynthesizedUndefined() ([]string, string) {
-	return append([]string(nil), p.undefinedModels...), p.undefinedMode
+// SynthesizedOrphans reports the opt-in +auto:orphans compilation result.
+func (p *Program) SynthesizedOrphans() ([]string, string) {
+	return append([]string(nil), p.orphanModels...), p.orphanMode
 }
 
 func topologicalOrder(definitions []Definition, deps map[string][]string) ([]string, error) {

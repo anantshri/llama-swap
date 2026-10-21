@@ -12,6 +12,82 @@ Long-form entries with full context live in
 
 ### Added
 
+- **oMLX upstream guide and config example**: new KB article
+  `guides/upstreams/omlx` explaining why the stock `mlx-lm server` leaves
+  Activity prompt/generation speeds unknown (usage carries token counts only,
+  and streaming usage needs `stream_options.include_usage`) and how oMLX
+  fixes it by reporting `prompt_tokens_per_second` /
+  `generation_tokens_per_second`; the config example gains an oMLX model
+  entry with one process serving a whole `--model-dir` via `aliases`.
+- **Video generation API** (`/v1/videos`, upstream PR #991, unmerged
+  upstream): async job creation (`POST /v1/videos`), blocking generation
+  (`POST /v1/videos/sync`), job status (`GET /v1/videos/{id}`), content
+  download (`GET /v1/videos/{id}/content`), and deletion
+  (`DELETE /v1/videos/{id}`) — the GET/DELETE routes dispatch by the
+  required `?model=` query parameter (DELETE joins GET in the
+  query-model convention), and profile/selector rewrites keep the query
+  model in sync. New `video` capability mappings
+  (`video_generation`, `image_to_video`, `video_to_video`,
+  `video_understanding`) feed `/v1/models` and the pickers; a vLLM-omni
+  example model is in the config example. The Playground gains a **Video**
+  tab (async jobs with live status polling, sync mode, reference image,
+  size/seconds/fps/negative prompt plus an advanced-JSON field for
+  backend-specific parameters, in-browser playback and job deletion).
+- **Activity stats fix** (upstream PR #1147, unmerged upstream): a
+  model-filtered stats query over-counted — `TotalRequests` used the
+  global `MAX(id)`, which counts interleaved rows from other models.
+  Filtered queries now count their own rows; the unfiltered all-time
+  total still uses `MAX(id)` so it survives pruning.
+- **Tailcat subsystem** (upstream #1074/#1098/#1166/#1169/#1183, previously
+  the intentionally-skipped set): private, end-to-end encrypted access
+  without a Tailscale account or control plane.
+  - Serve over Tailcat's virtual TCP port 80 with
+    `-listen-tailcat <server.private.json>`; the `tailcat:` config block
+    gates which clients (`allow`, deny-by-default node keys or `*`) and
+    which public model IDs (`models`) are reachable; `admin: true` unlocks
+    the normal surface, `debug` adds transport logs. All policy updates on
+    config reload without restarting the listener.
+  - Peers can route through another llama-swap via
+    `proxy: tailcat://<connection-token>` (+ optional persistent
+    `tailcatKey`); tailcat peers default to a 300s response-header timeout
+    for remote cold starts.
+  - `/api/tailcat` reports listener status; activity records carry
+    Tailcat's authenticated source (`tc:` prefix), and the activity API
+    gains a literal `src_prefix` filter (wildcard-safe bounded-range
+    match, new src index).
+  - New Tailcat page in the UI: masked/revealable connection token, a
+    copy-paste `peers` config snippet for sharing, and a Tailcat-sourced
+    activity table.
+  - Fork adaptations: `internal/server/tailcat.go` extracted (upstream
+    keeps the handlers in server.go), `peer.go` + `peer_test.go` taken
+    wholesale (no fork-specific content), store `SrcPrefix` filter +
+    index ported onto this fork's store API, gosec hardening on the
+    imported code (explicit error handling + one ledgered G304 marker for
+    the operator-supplied key path), `redactString` scrubs `tailcat://`
+    proxies, config-schema/example/KB guide added. Live-listener E2E was
+    not possible in this container (needs the `tailcat` CLI / relay
+    network); coverage is the upstream in-memory transport tests, server
+    policy tests, config validation tests, and store filter tests.
+- Capture dialog sections remember their collapse state: switching the
+  response Chat/Pretty/Raw tabs (or copying, or the parts collapse/expand
+  controls) re-renders the whole dialog, but a manually collapsed Request
+  Headers/Body or Response Headers section now stays collapsed; a fresh
+  capture opens everything again.
+- Activity capture viewer: buffered (non-streaming) chat-completion
+  responses now get the same split view streamed responses have — a
+  **Chat** tab with separate collapsible `reasoning` and `content` blocks
+  in the request parts-view style (role chip, field label, char/word/≈token
+  counts; reasoning keeps its tinted style and the block collapses, so long
+  reasoning no longer buries the answer in pretty-JSON). Chat-shaped JSON
+  responses land on the Chat tab by default; embeddings/errors and other
+  JSON keep Pretty/Raw. Copy on the Chat tab concatenates reasoning +
+  content as before.
+- Docs: new KB guide `guides/api-integration/opik` — running Opik (open-source
+  LLM observability/evaluation) against llama-swap's OpenAI-compatible `/v1`
+  endpoint: the AI Providers "vLLM / Custom provider" setup for the Playground
+  and Online Evaluation (including the Docker host networking gotcha), and the
+  Python SDK LLM-as-judge configuration via `OPENAI_BASE_URL` + the LiteLLM
+  `openai/` model prefix.
 - Models dashboard: model descriptions now start collapsed to their first
   line with an expandable chevron (expanded state survives the frequent SSE
   re-renders), and a filter box matches model id, name, alias, and
@@ -160,6 +236,137 @@ Long-form entries with full context live in
   client. Replaces the old hardcoded permissive middleware; the redundant
   `/api/tags` Origin echo was removed (it would have bypassed the
   restriction).
+- Clean upstream cherry-pick batch (no hand merges required):
+  - ComfyUI models' `concurrencyLimit` floor raised from 50 to 999 — one
+    open ComfyUI tab makes many parallel asset and API requests, so the old
+    floor was still throttling it (upstream #1189, commit `7e18554`).
+  - `/v1/systemone` is routed through the POST-JSON model dispatch
+    (upstream #1197, commit `45b78e2`).
+  - Capability discovery gained a `defaultProber` fallback that works off
+    plain `/v1/models` JSON, replacing the vllm-specific prober in the
+    chain so unknown upstreams still get context length and text in/out
+    capabilities detected (upstream #1198, commit `9db37d0`).
+  - oMLX usage fields (`prompt_tokens_per_second`,
+    `generation_tokens_per_second`) are extracted into activity metrics
+    (upstream #1199, commit `783c323`).
+  - Per-model `disableKeepAlives` option: llama-server advertises
+    `Keep-Alive` on streamed responses and then closes the connection, so a
+    POST right after a stream could hit `proxy error: EOF` (502) on the
+    pooled connection; the option disables upstream connection pooling for
+    models that need it (upstream #1205, commit `d60d084`).
+  - wol-proxy: `-require-confirm` flag with a confirmation page and wake
+    progress tracking, so monitoring probes don't restart the target server
+    (upstream #1213, commit `8db9566`).
+  - docker/unified audio.cpp: download and mp3 support (upstream #1157,
+    commit `aa8031f`); static eSpeak-ng build with phoneme data installed
+    (upstream #1182, commit `a6f3b09`).
+- Upstream picks whose only conflicts were the deleted Svelte UI — resolved
+  by dropping `ui/src` and porting the user-visible half to the vanilla UI:
+  - DGX Spark (GB10) hardware detection (upstream #1163, commit `ccccb20`),
+    with the Svelte Hardware-page changes ported to the vanilla page: a
+    Device row (`system.vendor/model/family` — e.g. "NVIDIA DGX Spark
+    (GB10)") in the System card and text summary, and Power now falls back
+    to `nominal_power_watts` ("W (nominal SoC)") when no power limit is
+    reported.
+  - Model uptime tracking: `modelStatus` entries carry `readySince` (RFC
+    3339) and `uptimeMs`; the models table's State cell shows a
+    live-ticking uptime (updated in place once a second, computed from the
+    server-provided `uptimeMs` so browser clock skew cannot skew it, and
+    anchored per uptime value so unrelated re-renders never reset the
+    displayed age) and the model detail Details tab shows uptime +
+    ready-since. The playground marks interrupted turns — aborted turns
+    keep a "Cancelled" turn with its Retry, failed turns mark their error
+    and retry (upstream #1173, commit `85a109b`; sidebar resize and
+    middle-truncated IDs are Svelte-shell specifics with no vanilla
+    equivalent, and the docs-agent variant was left as-is).
+  - `/audiocpp/` passthrough endpoint serving audio.cpp's own web UI via the
+    reserved `audiocpp_auto` model, with the open-model link on the models
+    table targeting it (upstream #1223, commit `fd49827`; G710 suppression
+    carried over from comfyui.go — same fixed-prefix same-origin redirect).
+- perf: a GPU collector that stops (e.g. nvidia-smi crashing or being
+  absent while the monitor runs) is restarted with a doubling backoff
+  (5s→30s, reset after a collector delivers stats), and nvidia-smi exits are
+  logged instead of silently discarded (upstream #1196, commit `5dd7f88`;
+  their error-logging `cmd.Wait()` variant kept over our gosec-motivated
+  discard — it checks the error, so the zero-gosec bar holds). Two test
+  fixes on top: the fake restart-wait is paced by 1ms — with an instant
+  wait the restart loop cycled faster than the test could drain and the
+  drop-on-full publish lost the exact stat a test awaited (an upstream test
+  race that surfaced here under parallel-suite timing) — and the new tests'
+  wait deadlines carry load headroom.
+- Hand-merge batch 5 (upstream catch-up):
+  - `models.capabilities.voices` override: set a voice list in the config
+    and `GET /v1/audio/voices?model={id}` is answered from it — the model
+    is not started and the upstream is not contacted. The speech tab's
+    dropdown drops its `(refresh)` pseudo-entry (a dedicated refresh button
+    already existed) (upstream #1225, commit `163fd1d`).
+  - go.mod carries upstream's temporary gopsutil replace
+    (`hsdfat/gopsutil v4.26.9-0.20260925…`) for the gopsutil panic fix —
+    hand-applied without the tailcat dependency their commit carried
+    (upstream #1180, commit `a2bf16e`).
+- Hand-merge batch 4:
+  - Loading progress from the health check (upstream #1212, commit
+    `d3ab665`): an upstream that answers its not-yet-ready health check
+    with `{"progress": 0.42, "message": "…"}` has that reported live —
+    `modelStatus` SSE entries carry `loadingProgress`/`loadingMessage`
+    (each tick re-sends the status, so no client polling), and the vanilla
+    models table shows the percent next to the starting state, the
+    truncated message, and a thin progress bar in the State cell; the
+    model detail header shows percent + message. Kept deliberately simple:
+    two helpers in `util/modelUtils.js` and five CSS rules, no new
+    components or stores. Documented for upstream authors in the
+    writing-cmd KB guide.
+- Hand-merge batch 3:
+  - Logging rework (upstream #1172, commit `bbdb55d`): log data moves off
+    `/api/events` onto its own `GET /api/events/logs?stream=proxy&stream=…`
+    SSE endpoint, so a chatty model can no longer backpressure model-status
+    updates. `Server` carries a single `logmon.Group` (proxy/upstream/http
+    streams) instead of three monitors; `logToStdout` copies selected
+    streams to stdout; per-stream and per-model `/logs/stream/{id}` tails
+    are unchanged. The vanilla UI opens a second EventSource for the log
+    stream with the same envelope — logs page behavior is identical.
+    Restores the three `APILogEvents` tests trimmed during the #1215 port
+    (they arrived with this commit, as predicted), plus a fix for an
+    upstream race in the no-history test: monitor delivery is asynchronous
+    (Write → channel → publish goroutine), so a pre-subscription write
+    could arrive as a live event; the test now probe-drains the broadcast
+    before subscribing.
+- Hand-merge batch 2:
+  - docker/unified: vllm-wrapper builds correctly on untagged commits via the
+    new shared `lib-release.sh` revision resolver (upstream #1156, commit
+    `e054c90`; the kubeswap stage from the upstream diff dropped — no
+    kubeswap here). sm_70 (V100) compiled into the CUDA 12 image, with
+    upstream's reworked `build-image.sh` adopted wholesale — two-image CUDA
+    12/13 layout with per-platform arch tables (upstream #1187, commit
+    `0ac43bb`, user-approved supersede; README GPU-support section updated
+    to match).
+  - Matrix orphan reference renamed and reworked onto upstream's evolution
+    of the same #1026 feature: `+undefined` becomes **`+auto:orphans`**,
+    with a shared `buildModelSet` root, `SynthesizedOrphans()` accessor and
+    richer startup logging (upstream commit `bea6428`). **Breaking** for
+    configs using `+undefined` — rename the reference; the semantics are
+    unchanged. Our two legacy `*_undefined_test.go` files were superseded
+    by upstream's `*_orphans_test.go` (same coverage plus YAML and
+    reference-validation cases).
+  - semgrep: whole-repo scan now reports zero findings — the #1213
+    wol-proxy confirm/loading pages and the capcompat test fixtures carry
+    inline `nosemgrep` markers with reasons; `docs/semgrep-suppressions.md`
+    updated with the new sites and the `django-no-csrf-token` misfire
+    category.
+- Hand-merge batch 1 (one small manual resolution each):
+  - Requests without (or with a wrong) `Content-Type` to the model POST-JSON
+    routes are tolerated — the body is normalized before the model lookup and
+    filters parse it (upstream #1194, commit `486376e`; extended to the
+    Anthropic/Ollama translated chains so the same sloppy clients translate
+    too — covered by a no-content-type `/v1/messages` test).
+  - Browser-generated headers (`Sec-Fetch-*` and friends) are stripped before
+    proxying to peers (upstream #1215, commit `d34ddb2`; the conflicting test
+    hunk presupposed #1172's separate log-stream endpoints and was trimmed —
+    the assertions return when #1172 lands).
+  - Decision-model detection: llama-server models whose listing reports only
+    decision output are detected automatically (clef fixtures), and
+    `decisions` joins the valid output modalities (upstream #1220, commit
+    `b51dde4`).
 
 ### Changed
 

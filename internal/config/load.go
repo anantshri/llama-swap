@@ -109,10 +109,8 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 		return Config{}, fmt.Errorf("security.cors: %w", err)
 	}
 
-	switch config.LogToStdout {
-	case LogToStdoutProxy, LogToStdoutUpstream, LogToStdoutBoth, LogToStdoutNone:
-	default:
-		return Config{}, fmt.Errorf("logToStdout must be one of: proxy, upstream, both, none")
+	if _, _, _, err := ParseLogToStdout(config.LogToStdout); err != nil {
+		return Config{}, err
 	}
 
 	if err := config.Pricing.Validate(); err != nil {
@@ -324,6 +322,10 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 	}
 
 	if err := validateProfiles(config); err != nil {
+		return Config{}, err
+	}
+
+	if err := validateTailcatConfig(&config); err != nil {
 		return Config{}, err
 	}
 

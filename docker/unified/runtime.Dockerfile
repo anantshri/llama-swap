@@ -5,6 +5,10 @@
 # build-image.sh. Nothing is compiled here, so this build is minutes.
 
 ARG BACKEND=cuda
+# The published flavour name. cuda and cuda13 are both BACKEND=cuda; only the
+# CUDA toolkit they were compiled against and the architectures they cover
+# differ, so this is recorded in /versions.txt rather than used to build.
+ARG VARIANT=cuda
 ARG BUILDER_BASE
 ARG WHISPER_IMAGE
 ARG SD_IMAGE
@@ -18,10 +22,10 @@ FROM ${SD_IMAGE} AS sd-src
 FROM ${AUDIO_IMAGE} AS audio-src
 FROM ${LLAMA_IMAGE} AS llama-src
 
-# Vulkan images ship no ik-llama-server. This gives the COPY below a real but
-# empty /install/bin so the runtime needs no backend branching. For CUDA the
-# arg names a real artifacts image and BuildKit prunes this stage; ubuntu:24.04
-# is already pulled as the Vulkan runtime base, so it costs nothing there.
+# Fallback for IK_LLAMA_IMAGE when the caller does not supply one, so the
+# COPY below always has a real (if empty) /install/bin and needs no backend
+# branching. build-image.sh passes a real artifacts image for every backend
+# it drives, and BuildKit prunes this stage when it does.
 FROM ubuntu:24.04 AS ik-llama-empty
 RUN mkdir -p /install/bin
 FROM ${IK_LLAMA_IMAGE} AS ik-llama-src
@@ -30,7 +34,7 @@ FROM ${IK_LLAMA_IMAGE} AS ik-llama-src
 
 FROM ${BUILDER_BASE} AS llama-swap-download
 ARG LS_VERSION=latest
-COPY install-llama-swap.sh /build/
+COPY lib-release.sh install-llama-swap.sh /build/
 RUN bash /build/install-llama-swap.sh "${LS_VERSION}"
 
 # ── vllm-wrapper ──────────────────────────────────────────────────────
@@ -38,9 +42,9 @@ RUN bash /build/install-llama-swap.sh "${LS_VERSION}"
 # vllm-wrapper is not shipped in the llama-swap release archives, so it is
 # compiled from the same revision as the llama-swap binary above.
 
-FROM golang:1.26-bookworm AS vllm-wrapper-build
+FROM golang:1.27-bookworm AS vllm-wrapper-build
 ARG LS_VERSION=latest
-COPY install-vllm-wrapper.sh /build/
+COPY lib-release.sh install-vllm-wrapper.sh /build/
 RUN --mount=type=cache,id=go-build,target=/root/.cache/go-build \
     --mount=type=cache,id=go-mod,target=/go/pkg/mod \
     bash /build/install-vllm-wrapper.sh "${LS_VERSION}"
@@ -61,7 +65,7 @@ ENV PATH="/usr/local/bin:${PATH}"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 python3 curl ca-certificates \
     libavcodec60 libavformat60 libavutil58 libswresample4 \
-    ffmpeg \
+    ffmpeg libmp3lame0 \
     && rm -rf /var/lib/apt/lists/*
 
 # CUDA stub drivers for container compatibility
@@ -80,7 +84,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rocm-smi \
     python3 curl ca-certificates \
     libavcodec60 libavformat60 libavutil58 libswresample4 \
-    ffmpeg \
+    ffmpeg libmp3lame0 \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Select runtime base by BACKEND ────────────────────────────────────
@@ -93,6 +97,10 @@ ARG WHISPER_COMMIT_HASH=unknown
 ARG SD_COMMIT_HASH=unknown
 ARG IK_LLAMA_COMMIT_HASH=unknown
 ARG AUDIO_COMMIT_HASH=unknown
+# Bare ARG re-declares the global-scope value inside this stage.
+ARG VARIANT
+ARG CUDA_VERSION
+ARG CMAKE_CUDA_ARCHITECTURES=
 ARG RUN_UID=0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -122,9 +130,13 @@ COPY --from=sd-src /install/lib/ /usr/local/lib/
 
 # Copy audio.cpp binaries (statically linked, model specs compiled in via
 # AUDIOCPP_DEPLOYMENT_BUILD). The on-disk spec catalog is installed too so
-# --model-spec-override has a path to point at.
+# --model-spec-override has a path to point at. eSpeak-ng is linked in
+# statically and finds its data directory next to the executable, so
+# espeak-ng-data must stay in /usr/local/bin. Its GPL license and source
+# archive are in /usr/local/share/audiocpp/licenses/espeak-ng.
 COPY --from=audio-src /install/bin/audiocpp_server /usr/local/bin/
 COPY --from=audio-src /install/bin/audiocpp_cli /usr/local/bin/
+COPY --from=audio-src /install/bin/espeak-ng-data/ /usr/local/bin/espeak-ng-data/
 COPY --from=audio-src /install/share/audiocpp/ /usr/local/share/audiocpp/
 
 # Copy llama.cpp binaries (statically linked)
@@ -133,7 +145,7 @@ COPY --from=llama-src /install/bin/llama-cli /usr/local/bin/
 COPY --from=llama-src /install/bin/llama-tts /usr/local/bin/
 COPY --from=llama-src /install/bin/llama-bench /usr/local/bin/
 
-# Copy ik-llama-server (CUDA only; empty copy for vulkan)
+# Copy ik-llama-server
 COPY --from=ik-llama-src /install/bin/ /usr/local/bin/
 
 # Install uv
@@ -148,9 +160,11 @@ COPY --from=vllm-wrapper-build /install/bin/vllm-wrapper /usr/local/bin/
 
 RUN ldconfig
 
-# config.example.yaml lives at the repo root (docs/), outside this build
-# context, so build-image.sh passes it as a named build context.
-COPY --from=repo-docs config.example.yaml /etc/llama-swap/config/config.yaml
+# The starter config the container runs with: small, and valid, so a container
+# started with nothing mounted comes up. docs/config.example.yaml in the repo
+# documents every option instead and is reference material -- it uses strict
+# ${env.X} macros and does not load on its own.
+COPY config.example.yaml /etc/llama-swap/config/config.yaml
 
 # audiocpp_server takes its own JSON config. Ship a starter with this image's
 # backend baked in -- the binary defaults to "cuda", so a vulkan image that
@@ -167,11 +181,24 @@ RUN echo "llama.cpp: ${LLAMA_COMMIT_HASH}" > /versions.txt && \
     echo "ik_llama.cpp: ${IK_LLAMA_COMMIT_HASH}" >> /versions.txt && \
     echo "audio.cpp: ${AUDIO_COMMIT_HASH}" >> /versions.txt && \
     echo "llama-swap: $(cat /tmp/llama-swap-version)" >> /versions.txt && \
-    echo "backend: ${BACKEND}" >> /versions.txt && \
+    echo "backend: ${VARIANT}" >> /versions.txt && \
+    if [ "${BACKEND}" = "cuda" ]; then \
+      echo "cuda_version: ${CUDA_VERSION}" >> /versions.txt; \
+      echo "cuda_architectures: ${CMAKE_CUDA_ARCHITECTURES}" >> /versions.txt; \
+    fi && \
     echo "build_timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /versions.txt
 
 RUN mkdir -p /models && chown ${RUN_UID}:${RUN_UID} /models
+
+# Entrypoint that turns LLAMA_SWAP_* environment variables into flags. The
+# defaults that used to live in CMD moved into it, so a container started with
+# no arguments behaves exactly as before, and arguments passed to the container
+# still replace them outright rather than being appended to ours.
+COPY --chmod=755 run.sh /usr/local/bin/run.sh
+
 WORKDIR /models
 USER ${RUN_UID}
-ENTRYPOINT ["llama-swap"]
-CMD ["-config", "/etc/llama-swap/config/config.yaml", "-listen", "0.0.0.0:8080", "-watch-config"]
+ENTRYPOINT ["run.sh"]
+# Explicitly empty: an inherited CMD would arrive as arguments to run.sh, which
+# reads arguments as a full override of the environment.
+CMD []

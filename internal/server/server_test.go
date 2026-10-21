@@ -1,10 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"io/fs"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,6 +33,8 @@ type stubRouter struct {
 	serveHTTP     func(http.ResponseWriter, *http.Request)
 	shutdownCalls atomic.Int32
 	running       map[string]process.ProcessState
+	readySince    map[string]time.Time
+	loading       map[string]*process.LoadingProgress
 	unloadCalls   atomic.Int32
 	unloadModels  []string
 	unloadTimeout time.Duration
@@ -57,6 +61,13 @@ func (s *stubRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *stubRouter) RunningModels() map[string]process.ProcessState { return s.running }
+func (s *stubRouter) RunningStatus() map[string]process.Status {
+	out := make(map[string]process.Status, len(s.running))
+	for id, st := range s.running {
+		out[id] = process.Status{State: st, ReadySince: s.readySince[id], Loading: s.loading[id]}
+	}
+	return out
+}
 func (s *stubRouter) Unload(timeout time.Duration, models ...string) {
 	s.unloadCalls.Add(1)
 	s.unloadTimeout = timeout
@@ -80,16 +91,15 @@ func newTestServer(local router.LocalRouter, peer router.Router) *Server {
 // tests that exercise config-driven middleware wiring in routes().
 func newTestServerWithConfig(cfg config.Config, local router.LocalRouter, peer router.Router) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
-	proxylog := logmon.NewWriter(io.Discard)
+	logs := logmon.NewGroup(io.Discard, true, true, true)
+	proxylog := logs.ProxyLogs
 	st, err := store.New("")
 	if err != nil {
 		panic(err)
 	}
 	s := &Server{
 		cfg:         cfg,
-		muxlog:      logmon.NewWriter(io.Discard),
-		proxylog:    proxylog,
-		upstreamlog: logmon.NewWriter(io.Discard),
+		logs:        logs,
 		inflight:    newInflightTracker(),
 		metrics:     newMetricsMonitor(proxylog, 0, 0, st),
 		store:       st,
@@ -156,6 +166,22 @@ func chatRequest(model string) *http.Request {
 	return req
 }
 
+// multipartRequest builds a multipart POST carrying the given model field,
+// like the /v1/videos create endpoints accept (upstream PR #991).
+func multipartRequest(path, model string) *http.Request {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if err := mw.WriteField("model", model); err != nil {
+		panic(err)
+	}
+	if err := mw.Close(); err != nil {
+		panic(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, path, &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	return req
+}
+
 // audioTaskRequest builds a JSON POST to the /audioapi/v1/tasks/run endpoint
 // carrying the given model field.
 func audioTaskRequest(model string) *http.Request {
@@ -166,7 +192,7 @@ func audioTaskRequest(model string) *http.Request {
 }
 
 func TestServer_New_GroupConfig(t *testing.T) {
-	discard := logmon.NewWriter(io.Discard)
+	discard := logmon.NewGroup(io.Discard, true, true, true)
 	cfg := config.Config{HealthCheckTimeout: 15}
 	cfg.Routing.Router.Use = "group"
 	st, err := store.New("")
@@ -174,7 +200,7 @@ func TestServer_New_GroupConfig(t *testing.T) {
 		t.Fatalf("store.New: %v", err)
 	}
 	defer st.Close()
-	s, err := New(cfg, discard, discard, discard, nil, st, BuildInfo{}, nil, nil)
+	s, err := New(cfg, discard, nil, st, BuildInfo{}, nil, nil)
 	if err != nil {
 		t.Fatalf("New (group): %v", err)
 	}
@@ -187,7 +213,7 @@ func TestServer_New_GroupConfig(t *testing.T) {
 }
 
 func TestServer_New_MatrixConfig(t *testing.T) {
-	discard := logmon.NewWriter(io.Discard)
+	discard := logmon.NewGroup(io.Discard, true, true, true)
 	cfg := config.Config{HealthCheckTimeout: 15}
 	cfg.Models = map[string]config.ModelConfig{
 		"model": {
@@ -204,7 +230,7 @@ func TestServer_New_MatrixConfig(t *testing.T) {
 		t.Fatalf("store.New: %v", err)
 	}
 	defer st.Close()
-	s, err := New(cfg, discard, discard, discard, nil, st, BuildInfo{}, nil, nil)
+	s, err := New(cfg, discard, nil, st, BuildInfo{}, nil, nil)
 	if err != nil {
 		t.Fatalf("New (matrix): %v", err)
 	}
@@ -379,6 +405,56 @@ func TestServer_UnknownPathReturns404(t *testing.T) {
 	}
 }
 
+func TestServer_RouteVideoCreate_MultipartModelField(t *testing.T) {
+	s := newTestServer(
+		newStubRouter([]string{"local-model"}, `{"id":"video-123","status":"queued"}`),
+		newStubRouter(nil, ""),
+	)
+
+	for _, path := range []string{"/v1/videos", "/v1/videos/sync"} {
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, multipartRequest(path, "local-model"))
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status=%d body=%q", path, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestServer_RouteVideoStatus_QueryParamModel(t *testing.T) {
+	s := newTestServer(
+		newStubRouter([]string{"local-model"}, `{"id":"video-123","status":"completed"}`),
+		newStubRouter(nil, ""),
+	)
+
+	for _, path := range []string{
+		"/v1/videos?model=local-model",
+		"/v1/videos/video-123?model=local-model",
+		"/v1/videos/video-123/content?model=local-model",
+	} {
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+
+		if w.Code != http.StatusOK {
+			t.Errorf("%s: status=%d body=%q", path, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestServer_RouteVideoDelete_QueryParamModel(t *testing.T) {
+	s := newTestServer(
+		newStubRouter([]string{"local-model"}, ""),
+		newStubRouter(nil, ""),
+	)
+
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/v1/videos/video-123?model=local-model", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", w.Code, w.Body.String())
+	}
+}
+
 func TestServer_Health(t *testing.T) {
 	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
 
@@ -500,7 +576,7 @@ func TestServer_Preload(t *testing.T) {
 
 // TestServer_New_OnStartupProfile verifies New activates the configured startup profile.
 func TestServer_New_OnStartupProfile(t *testing.T) {
-	discard := logmon.NewWriter(io.Discard)
+	discard := logmon.NewGroup(io.Discard, true, true, true)
 	cfg := config.Config{HealthCheckTimeout: 15}
 	cfg.Profiles = map[string]config.ProfileConfig{
 		"coding": {Pins: map[string]string{"llm-code": "model"}},
@@ -511,7 +587,7 @@ func TestServer_New_OnStartupProfile(t *testing.T) {
 		t.Fatalf("store.New: %v", err)
 	}
 	defer st.Close()
-	s, err := New(cfg, discard, discard, discard, nil, st, BuildInfo{}, nil, nil)
+	s, err := New(cfg, discard, nil, st, BuildInfo{}, nil, nil)
 	if err != nil {
 		t.Fatalf("New (startup profile): %v", err)
 	}
@@ -578,4 +654,44 @@ func TestServer_LogStream_UnknownID_Returns400(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status=%d want 400", w.Code)
 	}
+}
+
+func TestProxy_ConfiguredVoicesOverrideUpstream(t *testing.T) {
+	cfg := config.Config{Models: map[string]config.ModelConfig{
+		"tts":      {Capabilities: config.ModelCapConfig{Voices: []string{"voicea", "voiceb", "voicec"}}},
+		"tts-none": {},
+	}}
+	local := newStubRouter([]string{"tts", "tts-none"}, "upstream")
+	s := newTestServerWithConfig(cfg, local, newStubRouter(nil, ""))
+
+	t.Run("configured voices are returned", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/audio/voices?model=tts", nil))
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "application/json" {
+			t.Errorf("Content-Type = %q", ct)
+		}
+		var got struct {
+			Voices []string `json:"voices"`
+			Model  string   `json:"model"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(got.Voices, ",") != "voicea,voiceb,voicec" || got.Model != "tts" {
+			t.Errorf("unexpected body: %s", w.Body.String())
+		}
+	})
+
+	t.Run("model without voices goes to upstream", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/audio/voices?model=tts-none", nil))
+
+		if w.Body.String() != "upstream" {
+			t.Errorf("body = %q, want upstream", w.Body.String())
+		}
+	})
 }

@@ -15,6 +15,7 @@ const NAV = [
   { path: "/logs", label: "Logs" },
   { path: "/performance", label: "Performance" },
   { path: "/hardware", label: "Hardware" },
+  { path: "/tailcat", label: "Tailcat" },
   { path: "/settings", label: "Settings" },
 ];
 

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -31,9 +32,7 @@ import (
 type Server struct {
 	cfg config.Config
 
-	muxlog      *logmon.Monitor
-	proxylog    *logmon.Monitor
-	upstreamlog *logmon.Monitor
+	logs *logmon.Group
 
 	perf     *perf.Monitor
 	inflight *inflightTracker
@@ -83,9 +82,29 @@ type Server struct {
 	// the outer route chain, not here.
 	translatedDispatch http.Handler
 
-	shutdownCtx  context.Context
-	shutdownFn   context.CancelFunc
-	shuttingDown atomic.Bool
+	shutdownCtx    context.Context
+	shutdownFn     context.CancelFunc
+	shuttingDown   atomic.Bool
+	tailcatAddress atomic.Pointer[string]
+}
+
+func (s *Server) SetTailcatAddress(address string) {
+	value := address
+	s.tailcatAddress.Store(&value)
+}
+
+func (s *Server) TailcatAddress() string {
+	if value := s.tailcatAddress.Load(); value != nil {
+		return *value
+	}
+	return ""
+}
+
+type tailcatRequestContextKey struct{}
+
+func isTailcatRequest(ctx context.Context) bool {
+	marked, _ := ctx.Value(tailcatRequestContextKey{}).(bool)
+	return marked
 }
 
 // ActiveProfile returns the active runtime profile, or an empty string when no
@@ -112,7 +131,7 @@ func (s *Server) setActiveProfile(name string) (bool, error) {
 	s.activeProfile = name
 	s.profileMu.Unlock()
 
-	s.proxylog.Infof("active profile changed to %q", name)
+	s.logs.ProxyLogs.Infof("active profile changed to %q", name)
 	event.Emit(swaputil.ProfileChangedEvent{Active: name})
 	return true, nil
 }
@@ -136,6 +155,7 @@ var modelPostJSONRoutes = []string{
 	"/v1/images/generations",
 	"/sdapi/v1/txt2img",
 	"/sdapi/v1/img2img",
+	"/v1/systemone",
 
 	// audio.cpp generic task API
 	"/audioapi/v1/tasks/run",
@@ -156,6 +176,8 @@ var modelPostJSONRoutes = []string{
 var modelPostFormRoutes = []string{
 	"/v1/audio/transcriptions",
 	"/v1/images/edits",
+	"/v1/videos",
+	"/v1/videos/sync",
 }
 
 // modelGetRoutes are model-dispatched GET endpoints (the model arrives as a
@@ -164,6 +186,16 @@ var modelGetRoutes = []string{
 	"/v1/audio/voices",
 	"/sdapi/v1/loras",
 	"/props",
+	"/v1/videos",
+	"/v1/videos/{video_id}",
+	"/v1/videos/{video_id}/content",
+}
+
+// modelDeleteRoutes are model-dispatched DELETE endpoints. Like modelGetRoutes,
+// the model arrives as a query parameter since the resource id alone (e.g. a
+// video job id) doesn't identify which backend created it.
+var modelDeleteRoutes = []string{
+	"/v1/videos/{video_id}",
 }
 
 // isMetricsRecordPath reports whether path is one of the model-dispatched
@@ -184,6 +216,11 @@ func isMetricsRecordPath(path string) bool {
 			return true
 		}
 	}
+	for _, p := range modelDeleteRoutes {
+		if p == path {
+			return true
+		}
+	}
 	return false
 }
 
@@ -194,24 +231,24 @@ type BuildInfo struct {
 	Date    string
 }
 
-func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, upstreamlog *logmon.Monitor, perfMon *perf.Monitor, st *store.Store, build BuildInfo, hardware *hw.HardwareSnapshot, refs *docagent.Docs) (*Server, error) {
+func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st *store.Store, build BuildInfo, hardware *hw.HardwareSnapshot, refs *docagent.Docs) (*Server, error) {
 	var local router.LocalRouter
 	var err error
 
 	switch cfg.Routing.Router.Use {
 	case "matrix":
-		local, err = router.NewMatrix(cfg, proxylog, upstreamlog)
+		local, err = router.NewMatrix(cfg, logs)
 		if err != nil {
 			return nil, fmt.Errorf("creating matrix router: %w", err)
 		}
 	default: // "group"
-		local, err = router.NewGroup(cfg, proxylog, upstreamlog)
+		local, err = router.NewGroup(cfg, logs)
 		if err != nil {
 			return nil, fmt.Errorf("creating group router: %w", err)
 		}
 	}
 
-	peer, err := router.NewPeer(cfg, proxylog)
+	peer, err := router.NewPeer(cfg, logs.ProxyLogs)
 	if err != nil {
 		return nil, fmt.Errorf("creating peer router: %w", err)
 	}
@@ -223,12 +260,10 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	shutdownCtx, shutdownFn := context.WithCancel(context.Background())
 	s := &Server{
 		cfg:           cfg,
-		muxlog:        muxlog,
-		proxylog:      proxylog,
-		upstreamlog:   upstreamlog,
+		logs:          logs,
 		perf:          perfMon,
 		inflight:      newInflightTracker(),
-		metrics:       newMetricsMonitor(proxylog, cfg.MetricsMaxInMemory, cfg.CaptureBuffer, st),
+		metrics:       newMetricsMonitor(logs.ProxyLogs, cfg.MetricsMaxInMemory, cfg.CaptureBuffer, st),
 		store:         st,
 		build:         build,
 		hardware:      hardware,
@@ -239,7 +274,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		shutdownCtx:   shutdownCtx,
 		shutdownFn:    shutdownFn,
 	}
-	s.capcompat = capcompat.New(st.Cache(), proxylog)
+	s.capcompat = capcompat.New(st.Cache(), logs.ProxyLogs)
 	s.capcompatCancel = event.On(s.onProcessStateChange)
 
 	// SysProvider is constructed here because this is where perf and hardware
@@ -271,16 +306,39 @@ func (s *Server) localPeerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.serveConfiguredVoices(w, r, data.ModelID) {
+		return
+	}
+
 	switch {
 	case s.local.Handles(data.ModelID):
-		s.proxylog.Debugf("dispatch: using local process for model: %s", data.ModelID)
+		s.logs.ProxyLogs.Debugf("dispatch: using local process for model: %s", data.ModelID)
 		s.local.ServeHTTP(w, r)
 	case s.peer.Handles(data.ModelID):
-		s.proxylog.Debugf("dispatch: using peer for model: %s", data.ModelID)
+		s.logs.ProxyLogs.Debugf("dispatch: using peer for model: %s", data.ModelID)
 		s.peer.ServeHTTP(w, r)
 	default:
 		swaputil.SendError(w, r, router.ErrNoRouterFound)
 	}
+}
+
+// serveConfiguredVoices answers GET /v1/audio/voices from the model's
+// capabilities.voices when it is set, without starting the model or contacting
+// the upstream. It reports whether it wrote the response.
+func (s *Server) serveConfiguredVoices(w http.ResponseWriter, r *http.Request, modelID string) bool {
+	if r.Method != http.MethodGet || r.URL.Path != "/v1/audio/voices" {
+		return false
+	}
+	mc, ok := s.cfg.Models[modelID]
+	if !ok || len(mc.Capabilities.Voices) == 0 {
+		return false
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"voices": mc.Capabilities.Voices,
+		"model":  modelID,
+	})
+	return true
 }
 
 // stripVersionPrefix rewrites versionless /v/... requests to their /... form
@@ -305,7 +363,7 @@ func stripAudioAPIPrefix(r *http.Request) {
 func (s *Server) routes() {
 
 	authMW := CreateAuthMiddleware(s.cfg)
-	modelMWs := []chain.Middleware{authMW}
+	modelMWs := []chain.Middleware{authMW, createContentTypeMiddleware()}
 	// globalConcurrencyLimit guards the top of the inference chain; a limit of
 	// 0 (the default) means no limit, so the handler is left out of the chain
 	// entirely rather than wrapping every request in a no-op semaphore.
@@ -332,8 +390,11 @@ func (s *Server) routes() {
 	// before routing, but not auth/in-flight (the Anthropic/Ollama route chains
 	// own those). The handlers wrap the response writer outside this chain so
 	// metrics tees the raw OpenAI bytes while the client sees the translated
-	// shape.
+	// shape. Content-type normalization runs first so the filters and the
+	// translation handlers see the same body format the model chain does
+	// (fork extension of upstream #1194 to the translated routes).
 	s.translatedDispatch = chain.New(
+		createContentTypeMiddleware(),
 		CreateFilterMiddleware(s.cfg),
 		CreateFormFilterMiddleware(s.cfg),
 		CreateMetricsMiddleware(s.metrics, s.cfg),
@@ -356,6 +417,10 @@ func (s *Server) routes() {
 	}
 	for _, path := range modelGetRoutes {
 		mux.Handle("GET "+path, modelChain.Then(dispatch))
+	}
+
+	for _, path := range modelDeleteRoutes {
+		mux.Handle("DELETE "+path, modelChain.Then(dispatch))
 	}
 
 	// Ollama-compatible API surface (see internal/ollama). llama-swap already
@@ -420,6 +485,11 @@ func (s *Server) routes() {
 	mux.Handle("/comfyui", apiChain.ThenFunc(handleComfyUIRedirect))
 	mux.Handle("/comfyui/{comfyPath...}", apiChain.ThenFunc(s.handleComfyUI))
 
+	// audio.cpp UI passthrough. This uses the fixed audiocpp_auto model so
+	// requests do not have to name a model.
+	mux.Handle("/audiocpp", apiChain.ThenFunc(handleAudioCppRedirect))
+	mux.Handle("/audiocpp/{audioCppPath...}", apiChain.ThenFunc(s.handleAudioCpp))
+
 	// API group (API-key protected) consumed by the UI.
 	mux.Handle("POST /api/models/unload", apiChain.ThenFunc(s.handleAPIUnloadAll))
 	mux.Handle("POST /api/models/unload/{model...}", apiChain.ThenFunc(s.handleAPIUnloadModel))
@@ -427,12 +497,14 @@ func (s *Server) routes() {
 	mux.Handle("PUT /api/profiles/active", apiChain.ThenFunc(s.handleAPIActiveProfile))
 	mux.Handle("POST /api/inflight/{id}/cancel", apiChain.ThenFunc(s.handleAPICancelInflight))
 	mux.Handle("GET /api/events", apiChain.ThenFunc(s.handleAPIEvents))
+	mux.Handle("GET /api/events/logs", apiChain.ThenFunc(s.handleAPILogEvents))
 	mux.Handle("GET /api/metrics/activity", apiChain.ThenFunc(s.handleAPIActivity))
 	mux.Handle("GET /api/metrics/stats", apiChain.ThenFunc(s.handleAPIActivityStats))
 	mux.Handle("GET /api/metrics/pricing", apiChain.ThenFunc(s.handleAPIMetricsPricing))
 	mux.Handle("GET /api/performance", apiChain.ThenFunc(s.handleAPIPerformance))
 	mux.Handle("GET /api/version", apiChain.ThenFunc(s.handleAPIVersion))
 	mux.Handle("GET /api/hardware", apiChain.ThenFunc(s.handleAPIHardware))
+	mux.Handle("GET /api/tailcat", apiChain.ThenFunc(s.handleAPITailcat))
 	mux.Handle("GET /api/captures/{id}", apiChain.ThenFunc(s.handleAPICapture))
 	mux.Handle("POST /api/captures/{id}/pin", apiChain.ThenFunc(s.handleAPICapturePin))
 	mux.Handle("DELETE /api/captures/{id}/pin", apiChain.ThenFunc(s.handleAPICaptureUnpin))
@@ -444,7 +516,7 @@ func (s *Server) routes() {
 	mux.Handle("/api/mcp", apiChain.ThenFunc(s.handleAPIMCP))
 
 	s.mux = mux
-	s.handler = chain.New(CreateRequestLogMiddleware(s.proxylog), CreateCORSMiddleware(s.cfg)).Then(mux)
+	s.handler = chain.New(CreateRequestLogMiddleware(s.logs.HttpLogs), CreateCORSMiddleware(s.cfg)).Then(mux)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

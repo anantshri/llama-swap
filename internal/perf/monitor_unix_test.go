@@ -79,3 +79,11 @@ func TestParseRocmSmiLine_InvalidLines(t *testing.T) {
 		})
 	}
 }
+
+func TestParseRocmSmiLine_PreservesAveragePowerWhenCurrentPowerIsUnavailable(t *testing.T) {
+	header := "device,Device Name,Device ID,GUID,Average Graphics Package Power (W),GPU use (%),VRAM Total Memory (B),VRAM Total Used Memory (B),Current Socket Graphics Package Power (W)"
+	line := "card0,Generic GPU,0x0000,12345,16.0,4,4294967296,1073741824,N/A"
+	stat := parseRocmSmiLine(header, line)
+	require.NotNil(t, stat)
+	assert.Equal(t, 16.0, stat.PowerDrawW)
+}

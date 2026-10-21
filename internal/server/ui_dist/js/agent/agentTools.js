@@ -110,10 +110,8 @@ export async function fetchToolDefinitions(signal) {
   const usable = result.tools.filter((tool) => isUsableToolName(tool?.name));
   const dropped = result.tools.length - usable.length;
   if (dropped > 0) {
-    console.warn(
-      `Ignoring ${dropped} MCP tool(s) whose names cannot be used as function names:`,
-      result.tools.filter((tool) => !isUsableToolName(tool?.name)).map((tool) => tool?.name)
-    );
+    const droppedNames = result.tools.filter((tool) => !isUsableToolName(tool?.name)).map((tool) => tool?.name);
+    console.warn(`Ignoring ${dropped} MCP tool(s) whose names cannot be used as function names:`, droppedNames); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring -- builds a warning from internal tool names, not a shell format string
   }
 
   return usable.map((tool) => ({

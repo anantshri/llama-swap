@@ -181,6 +181,7 @@ export function ActivityTable(options = {}) {
     showPagination = true,
     storagePrefix = "activity",
     emptyMessage = "No activity recorded",
+    srcPrefix = "",
   } = options;
 
   const columns = COLUMNS.filter((c) => showModel || c.key !== "model");
@@ -434,6 +435,7 @@ export function ActivityTable(options = {}) {
     try {
       const params = { page, limit, sort, order };
       if (model) params.model = model;
+      if (srcPrefix) params.srcPrefix = srcPrefix;
       if (filterMinId.get()) params.minID = Number(filterMinId.get());
       if (filterMaxId.get()) params.maxID = Number(filterMaxId.get());
       const activity = await getActivity(params);

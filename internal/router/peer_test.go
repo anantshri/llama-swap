@@ -13,6 +13,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/swaputil"
+	"github.com/tailscale/tailcat"
 )
 
 var testLogger = logmon.NewWriter(os.Stdout)
@@ -101,6 +102,30 @@ func TestNewPeer_MultiplePeers(t *testing.T) {
 		if _, ok := pr.peers[m]; !ok {
 			t.Errorf("expected %s to be mapped", m)
 		}
+	}
+}
+
+func TestNewPeer_MembersIncludePeersWithoutModels(t *testing.T) {
+	proxyURL, _ := url.Parse("http://peer.example.com:8080")
+	peers := config.PeerDictionaryConfig{
+		"modeled-peer": {
+			ProxyURL: proxyURL,
+			Models:   []string{"model-a"},
+		},
+		"empty-peer": {
+			ProxyURL: proxyURL,
+		},
+	}
+
+	pr, err := NewPeer(config.Config{Peers: peers}, testLogger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pr.members) != 2 {
+		t.Fatalf("expected 2 members, got %d", len(pr.members))
+	}
+	if pr.members[0].peerID != "empty-peer" || pr.members[1].peerID != "modeled-peer" {
+		t.Fatalf("members = [%s, %s], want sorted peer order", pr.members[0].peerID, pr.members[1].peerID)
 	}
 }
 
@@ -455,6 +480,55 @@ func TestPeer_ServeHTTP_StripsUpstreamCORSHeaders(t *testing.T) {
 	}
 }
 
+// TestPeer_ServeHTTP_StripsBrowserRequestHeaders covers issue #1214: the
+// browser's Origin was forwarded to the peer, and Anthropic rejects any request
+// carrying Origin as a direct browser call.
+func TestPeer_ServeHTTP_StripsBrowserRequestHeaders(t *testing.T) {
+	var got http.Header
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer testServer.Close()
+
+	proxyURL, _ := url.Parse(testServer.URL)
+	peers := config.PeerDictionaryConfig{
+		"peer1": config.PeerConfig{
+			Proxy:    testServer.URL,
+			ProxyURL: proxyURL,
+			Models:   []string{"test-model"},
+			ApiKey:   "secret",
+		},
+	}
+
+	pr, err := NewPeer(config.Config{Peers: peers}, testLogger)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req.Header.Set("Origin", "http://example.com")
+	req.Header.Set("Referer", "http://example.com/ui/")
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	req.Header.Set("Content-Type", "application/json")
+	*req = *req.WithContext(swaputil.SetContext(req.Context(), swaputil.ReqContextData{Model: "test-model", ModelID: "test-model"}))
+	w := httptest.NewRecorder()
+
+	pr.ServeHTTP(w, req)
+
+	for _, name := range []string{"Origin", "Referer", "Sec-Fetch-Mode"} {
+		if v := got.Values(name); len(v) != 0 {
+			t.Errorf("%s=%q reached the peer; it must be stripped", name, v)
+		}
+	}
+	if v := got.Get("Content-Type"); v != "application/json" {
+		t.Errorf("Content-Type=%q, unrelated headers must be forwarded", v)
+	}
+	if v := got.Get("Authorization"); v != "Bearer secret" {
+		t.Errorf("Authorization=%q, the peer API key must still be sent", v)
+	}
+}
+
 func TestPeer_ServeHTTP_ShutdownRejectsNewRequests(t *testing.T) {
 	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -603,6 +677,30 @@ func TestPeer_ServeHTTP_ShutdownTimeoutCancelsInflight(t *testing.T) {
 	wg.Wait()
 }
 
+func TestPeer_ShutdownTimeoutBoundsInflightWait(t *testing.T) {
+	pr, err := NewPeer(config.Config{}, testLogger)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pr.inflight.Add(1)
+	shutdownDone := make(chan error, 1)
+	go func() {
+		shutdownDone <- pr.Shutdown(50 * time.Millisecond)
+	}()
+
+	select {
+	case err := <-shutdownDone:
+		if err == nil || !strings.Contains(err.Error(), "peer shutdown timed out") {
+			t.Fatalf("Shutdown error = %v, want timeout", err)
+		}
+	case <-time.After(time.Second):
+		pr.inflight.Done()
+		t.Fatal("Shutdown remained blocked on an inflight request after its deadline")
+	}
+	pr.inflight.Done()
+}
+
 func TestPeer_ShutdownMultiple(t *testing.T) {
 	pr, err := NewPeer(config.Config{}, testLogger)
 	if err != nil {
@@ -741,5 +839,41 @@ func TestNewPeer_CustomTimeouts(t *testing.T) {
 	}
 	if !transport.ForceAttemptHTTP2 {
 		t.Error("expected ForceAttemptHTTP2 to be true")
+	}
+}
+
+func TestNewPeer_TailcatTransportDisablesEnvironmentProxyAndCleansUp(t *testing.T) {
+	private := tailcat.NewPrivateKey()
+	private.Public.RegionID = 1
+	blob := private.Public.Addr()
+	cfg, err := config.LoadConfigFromReader(strings.NewReader(`
+models: {}
+peers:
+  cat:
+    proxy: tailcat://` + string(blob) + `
+    models: [remote]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, err := NewPeer(cfg, testLogger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := pr.peers["cat/remote"].member
+	if member.tailcat == nil {
+		t.Fatal("Tailcat client was not attached")
+	}
+	if member.transport.Proxy != nil {
+		t.Fatal("Tailcat transport must not use environment HTTP proxies")
+	}
+	if member.reverseProxy.Transport != member.transport {
+		t.Fatal("reverse proxy does not use the Tailcat transport")
+	}
+	if !member.transport.DisableKeepAlives {
+		t.Fatal("Tailcat transport must dial each request to detect server restarts")
+	}
+	if err := pr.Shutdown(time.Second); err != nil {
+		t.Fatalf("Shutdown: %v", err)
 	}
 }

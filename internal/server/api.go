@@ -86,6 +86,9 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 		if contains(caps.In, "image") {
 			capsMap["vision"] = true
 		}
+		if contains(caps.In, "video") {
+			capsMap["video_understanding"] = true
+		}
 	}
 	if hasIn && hasOut {
 		if contains(caps.In, "audio") && contains(caps.Out, "text") {
@@ -99,6 +102,15 @@ func renderCapabilities(caps config.ModelCapConfig) (arch map[string]any, capsMa
 		}
 		if contains(caps.In, "image") && contains(caps.Out, "image") {
 			capsMap["image_to_image"] = true
+		}
+		if contains(caps.In, "text") && contains(caps.Out, "video") {
+			capsMap["video_generation"] = true
+		}
+		if contains(caps.In, "image") && contains(caps.Out, "video") {
+			capsMap["image_to_video"] = true
+		}
+		if contains(caps.In, "video") && contains(caps.Out, "video") {
+			capsMap["video_to_video"] = true
 		}
 	}
 
@@ -334,6 +346,19 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sort.Slice(data, func(i, j int) bool { return data[i].ID < data[j].ID })
+	// A Tailcat caller only sees the models the listener may serve.
+	if isTailcatRequest(r.Context()) {
+		exposed := s.cfg.Tailcat
+		filtered := data[:0]
+		if exposed != nil {
+			for _, record := range data {
+				if tailcatModelAllowed(exposed.Models, record.ID) {
+					filtered = append(filtered, record)
+				}
+			}
+		}
+		data = filtered
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -413,10 +438,10 @@ func (s *Server) startPreload() {
 	go func() {
 		for _, modelID := range models {
 			if !s.local.Handles(modelID) {
-				s.proxylog.Warnf("preload: model %s is not a local model, skipping", modelID)
+				s.logs.ProxyLogs.Warnf("preload: model %s is not a local model, skipping", modelID)
 				continue
 			}
-			s.proxylog.Infof("preloading model: %s", modelID)
+			s.logs.ProxyLogs.Infof("preloading model: %s", modelID)
 
 			req, err := http.NewRequestWithContext(s.shutdownCtx, http.MethodGet, "/", nil)
 			if err != nil {
@@ -429,7 +454,7 @@ func (s *Server) startPreload() {
 
 			success := dw.status < http.StatusBadRequest
 			if !success {
-				s.proxylog.Errorf("failed to preload model %s: status %d", modelID, dw.status)
+				s.logs.ProxyLogs.Errorf("failed to preload model %s: status %d", modelID, dw.status)
 			}
 			event.Emit(swaputil.ModelPreloadedEvent{ModelName: modelID, Success: success})
 		}
@@ -459,7 +484,6 @@ func handleRootRedirect(w http.ResponseWriter, r *http.Request) {
 func handleUpstreamRedirect(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/ui/models", http.StatusFound)
 }
-
 
 // handleUpstream proxies ANY request under /upstream/<model>/<path> directly to
 // the model's process, bypassing model dispatch by body/query inspection.

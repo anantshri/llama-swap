@@ -13,7 +13,9 @@ import (
 
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/event"
+	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/perf"
+	"github.com/mostlygeek/llama-swap/internal/process"
 	"github.com/mostlygeek/llama-swap/internal/store"
 	"github.com/mostlygeek/llama-swap/internal/swaputil"
 )
@@ -29,6 +31,20 @@ type apiModel struct {
 	Aliases       []string       `json:"aliases,omitempty"`
 	Capabilities  map[string]any `json:"capabilities,omitempty"`
 	ContextLength int            `json:"context_length,omitempty"`
+	// ReadySince is when the model last became ready (RFC 3339). Only set
+	// while the model is ready.
+	ReadySince string `json:"readySince,omitempty"`
+	// UptimeMs is how long the model has been ready as of this payload. The
+	// UI counts from it rather than from ReadySince, so a browser clock that
+	// differs from the server's doesn't skew the uptime.
+	UptimeMs int64 `json:"uptimeMs,omitempty"`
+	// LoadingProgress is the fraction loaded (0 to 1) the upstream last
+	// reported through its health check. Only set while the model is starting
+	// and its upstream reports progress.
+	LoadingProgress *float64 `json:"loadingProgress,omitempty"`
+	// LoadingMessage is the loading step the upstream last reported. Only set
+	// while the model is starting.
+	LoadingMessage string `json:"loadingMessage,omitempty"`
 }
 
 type apiProfile struct {
@@ -98,7 +114,7 @@ func (s *Server) handleAPIActiveProfile(w http.ResponseWriter, r *http.Request) 
 // modelStatus returns every configured model joined with its current process
 // state (defaulting to "stopped"), followed by peer models.
 func (s *Server) modelStatus() []apiModel {
-	running := s.local.RunningModels()
+	running := s.local.RunningStatus()
 
 	ids := make([]string, 0, len(s.cfg.Models))
 	for id := range s.cfg.Models {
@@ -110,8 +126,19 @@ func (s *Server) modelStatus() []apiModel {
 	for _, id := range ids {
 		mc := s.cfg.Models[id]
 		state := "stopped"
+		var readySince string
+		var uptimeMs int64
+		var loading process.LoadingProgress
 		if st, ok := running[id]; ok {
-			state = string(st)
+			state = string(st.State)
+			if st.State == process.StateReady && !st.ReadySince.IsZero() {
+				readySince = st.ReadySince.UTC().Format(time.RFC3339)
+				// At least 1 so omitempty keeps it for a model that just became ready.
+				uptimeMs = max(1, time.Since(st.ReadySince).Milliseconds())
+			}
+			if st.State == process.StateStarting && st.Loading != nil {
+				loading = *st.Loading
+			}
 		}
 		// Same resolution /v1/models uses, so the dashboard and the OpenAI
 		// listing never disagree about what a model can do. Bound by
@@ -120,14 +147,18 @@ func (s *Server) modelStatus() []apiModel {
 		caps := s.resolveCapabilities(s.shutdownCtx, id, mc)
 		_, capsMap, _, ctxLen, _, _, _, _, _, _ := renderCapabilities(caps)
 		models = append(models, apiModel{
-			Id:            id,
-			Name:          mc.Name,
-			Description:   mc.Description,
-			State:         state,
-			Unlisted:      mc.Unlisted,
-			Aliases:       mc.Aliases,
-			Capabilities:  capsMap,
-			ContextLength: ctxLen,
+			Id:              id,
+			Name:            mc.Name,
+			Description:     mc.Description,
+			State:           state,
+			Unlisted:        mc.Unlisted,
+			Aliases:         mc.Aliases,
+			Capabilities:    capsMap,
+			ContextLength:   ctxLen,
+			ReadySince:      readySince,
+			UptimeMs:        uptimeMs,
+			LoadingProgress: loading.Progress,
+			LoadingMessage:  loading.Message,
 		})
 	}
 
@@ -283,6 +314,7 @@ func parseActivityQuery(r *http.Request) (store.ActivityQuery, error) {
 		Limit: defaultLimit,
 		Page:  1,
 	}
+	query.SrcPrefix = r.URL.Query().Get("src_prefix")
 
 	// model repeats to filter on several models at once (?model=a&model=b).
 	// A single ?model=x stays a plain exact match.
@@ -407,6 +439,71 @@ func (s *Server) handleAPIVersion(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAPIHardware serves the hardware snapshot captured at process startup.
+func (s *Server) handleAPITailcat(w http.ResponseWriter, r *http.Request) {
+	address := ""
+	models := []string{}
+	enabled := s.cfg.TailcatEnabled()
+	if enabled {
+		address = s.TailcatAddress()
+		if ids := s.tailcatExposedModelIDs(); ids != nil {
+			models = ids
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"enabled": enabled, "address": address, "models": models}); err != nil {
+		s.logs.ProxyLogs.Warnf("failed to encode tailcat status: %v", err)
+	}
+}
+
+// tailcatExposedModelIDs returns the sorted model IDs a Tailcat caller can
+// currently request, using the same active-profile routing rules as the
+// listener itself (ServeTailcatHTTP's tailcatModelAllowed check): local
+// models and their aliases, selectors, the active profile's pins, and peer
+// models addressed either by their fully qualified name or, where
+// unambiguous, their bare name. A "*" entry expands to every candidate.
+func (s *Server) tailcatExposedModelIDs() []string {
+	tc := s.cfg.Tailcat
+	if tc == nil {
+		return nil
+	}
+
+	candidates := make(map[string]struct{})
+	for id, mc := range s.cfg.Models {
+		candidates[id] = struct{}{}
+		for _, alias := range mc.Aliases {
+			candidates[alias] = struct{}{}
+		}
+	}
+	for selectorID := range s.cfg.Selectors {
+		candidates[selectorID] = struct{}{}
+	}
+	for peerID, peer := range s.cfg.Peers {
+		for _, modelID := range peer.Models {
+			candidates[config.PeerModelFQN(peerID, modelID)] = struct{}{}
+			if resolvedPeer, resolvedModel, found := s.cfg.ResolvePeerModel(modelID); found &&
+				resolvedPeer == peerID && resolvedModel == modelID {
+				candidates[modelID] = struct{}{}
+			}
+		}
+	}
+	if profile, ok := s.cfg.Profiles[s.ActiveProfile()]; ok {
+		for pin, target := range profile.Pins {
+			if target != "" {
+				candidates[pin] = struct{}{}
+			}
+		}
+	}
+
+	ids := make([]string, 0, len(candidates))
+	for id := range candidates {
+		if tailcatModelAllowed(tc.Models, id) {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 func (s *Server) handleAPIHardware(w http.ResponseWriter, r *http.Request) {
 	if s.hardware == nil {
 		swaputil.SendResponse(w, r, http.StatusServiceUnavailable, "hardware detection unavailable")
@@ -414,7 +511,7 @@ func (s *Server) handleAPIHardware(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(s.hardware); err != nil {
-		s.proxylog.Warnf("failed to encode hardware snapshot: %v", err)
+		s.logs.ProxyLogs.Warnf("failed to encode hardware snapshot: %v", err)
 	}
 }
 
@@ -438,7 +535,7 @@ func (s *Server) handleAPICapture(w http.ResponseWriter, r *http.Request) {
 		if pinned {
 			capture, err = decompressCapture(data)
 			if err != nil {
-				s.proxylog.Warnf("failed to decompress pinned capture %d: %v", id, err)
+				s.logs.ProxyLogs.Warnf("failed to decompress pinned capture %d: %v", id, err)
 			}
 		}
 	}
@@ -473,7 +570,7 @@ func (s *Server) handleAPICapturePin(w http.ResponseWriter, r *http.Request) {
 
 	compressed, _, err := compressCapture(capture)
 	if err != nil {
-		s.proxylog.Warnf("failed to compress capture %d for pinning: %v", id, err)
+		s.logs.ProxyLogs.Warnf("failed to compress capture %d for pinning: %v", id, err)
 		swaputil.SendResponse(w, r, http.StatusInternalServerError, "failed to compress capture")
 		return
 	}
@@ -482,13 +579,13 @@ func (s *Server) handleAPICapturePin(w http.ResponseWriter, r *http.Request) {
 	// (possible only in in-memory stores after pruning) must not block pinning.
 	model := ""
 	if entry, found, err := s.store.GetActivity(r.Context(), id); err != nil {
-		s.proxylog.Warnf("failed to read activity %d while pinning: %v", id, err)
+		s.logs.ProxyLogs.Warnf("failed to read activity %d while pinning: %v", id, err)
 	} else if found {
 		model = entry.Model
 	}
 
 	if err := s.store.InsertPinnedCapture(r.Context(), id, model, capture.ReqPath, compressed); err != nil {
-		s.proxylog.Warnf("failed to pin capture %d: %v", id, err)
+		s.logs.ProxyLogs.Warnf("failed to pin capture %d: %v", id, err)
 		swaputil.SendResponse(w, r, http.StatusInternalServerError, "failed to pin capture")
 		return
 	}
@@ -506,7 +603,7 @@ func (s *Server) handleAPICaptureUnpin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.DeletePinnedCapture(r.Context(), id); err != nil {
-		s.proxylog.Warnf("failed to unpin capture %d: %v", id, err)
+		s.logs.ProxyLogs.Warnf("failed to unpin capture %d: %v", id, err)
 		swaputil.SendResponse(w, r, http.StatusInternalServerError, "failed to unpin capture")
 		return
 	}
@@ -538,7 +635,7 @@ const (
 	msgTypeProfile     messageType = "profileChanged"
 )
 
-// sendDropReportInterval is how often handleAPIEvents reports messages that
+// sendDropReportInterval is how often an SSE handler reports messages that
 // were dropped because the send buffer was full.
 const sendDropReportInterval = 5 * time.Second
 
@@ -547,9 +644,11 @@ type messageEnvelope struct {
 	Data string      `json:"data"`
 }
 
-// handleAPIEvents streams server events (model status, log data, metrics,
-// in-flight counts) to the client as Server-Sent Events.
-func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
+// serveSSE streams messages to the client as Server-Sent Events until the
+// client disconnects or the server shuts down. setup subscribes to the events
+// the stream carries, queues any initial payload with send, and returns a
+// function that unsubscribes. name identifies the handler in drop warnings.
+func (s *Server) serveSSE(w http.ResponseWriter, r *http.Request, name string, setup func(send func(messageEnvelope)) (unsubscribe func())) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -571,17 +670,17 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 
 	// Dropped messages are counted and reported at most once per interval.
 	// Logging every drop floods the logs because each warning becomes a log
-	// event that is sent over this same buffer, which drops again.
+	// event that may be sent over this same buffer, which drops again.
 	dropped := newSuppressionCounter(sendDropReportInterval)
 	cancelled := newSuppressionCounter(sendDropReportInterval)
 	reportDropped := func(n int) {
-		s.proxylog.Warnf("handleAPIEvents sendBuffer full, %d messages suppressed", n)
+		s.logs.ProxyLogs.Warnf("%s sendBuffer full, %d messages suppressed", name, n)
 	}
 	reportCancelled := func(n int) {
-		s.proxylog.Warnf("handleAPIEvents send suppressed due to context done, %d messages suppressed", n)
+		s.logs.ProxyLogs.Warnf("%s send suppressed due to context done, %d messages suppressed", name, n)
 	}
-	// runs after the event handlers below are unsubscribed so any remaining
-	// counts are reported before the connection goes away
+	// runs after setup's subscriptions are removed so any remaining counts
+	// are reported before the connection goes away
 	defer func() {
 		if n, ok := dropped.Flush(); ok {
 			reportDropped(n)
@@ -604,59 +703,8 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	sendModels := func() {
-		if data, err := json.Marshal(s.modelStatus()); err == nil {
-			send(messageEnvelope{Type: msgTypeModelStatus, Data: string(data)})
-		}
-	}
-	sendLogData := func(source string, data []byte) {
-		if j, err := json.Marshal(map[string]string{"source": source, "data": string(data)}); err == nil {
-			send(messageEnvelope{Type: msgTypeLogData, Data: string(j)})
-		}
-	}
-	sendActivity := func(id int) {
-		if j, err := json.Marshal(map[string]int{"id": id}); err == nil {
-			send(messageEnvelope{Type: msgTypeActivity, Data: string(j)})
-		}
-	}
-	sendInFlight := func(update swaputil.InFlightRequestsEvent) {
-		if update.Operation == inflightOperationSnapshot && update.Requests == nil {
-			update.Requests = []swaputil.InflightRequestEntry{}
-		}
-		if j, err := json.Marshal(update); err == nil {
-			send(messageEnvelope{Type: msgTypeInFlight, Data: string(j)})
-		}
-	}
-	sendUIConfig := func() {
-		if j, err := json.Marshal(s.cfg.UI); err == nil {
-			send(messageEnvelope{Type: msgTypeUIConfig, Data: string(j)})
-		}
-	}
-	sendProfile := func() {
-		if j, err := json.Marshal(map[string]any{"active": nullableProfile(s.ActiveProfile())}); err == nil {
-			send(messageEnvelope{Type: msgTypeProfile, Data: string(j)})
-		}
-	}
 
-	defer event.On(func(e swaputil.ProcessStateChangeEvent) { sendModels() })()
-	defer event.On(func(e swaputil.ModelCapabilitiesChangedEvent) { sendModels() })()
-	defer event.On(func(e swaputil.ConfigFileChangedEvent) { sendModels() })()
-	defer event.On(func(e swaputil.ProfileChangedEvent) {
-		sendProfile()
-		sendModels()
-	})()
-	defer s.proxylog.OnLogData(func(data []byte) { sendLogData("proxy", data) })()
-	defer s.upstreamlog.OnLogData(func(data []byte) { sendLogData("upstream", data) })()
-	defer event.On(func(e ActivityLogEvent) { sendActivity(e.Metrics.ID) })()
-	defer event.On(func(e swaputil.InFlightRequestsEvent) { sendInFlight(e) })()
-
-	// initial payload
-	sendLogData("proxy", s.proxylog.GetHistory())
-	sendLogData("upstream", s.upstreamlog.GetHistory())
-	sendModels()
-	sendUIConfig()
-	sendProfile()
-	sendInFlight(s.inflight.Current())
+	defer setup(send)()
 
 	for {
 		select {
@@ -672,5 +720,115 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "event:message\ndata:%s\n\n", data) // nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter
 			flusher.Flush()
 		}
+	}
+}
+
+// handleAPIEvents streams server events (model status, activity, in-flight
+// requests, UI config, profile changes) to the client as Server-Sent Events.
+// Log data has its own stream, handleAPILogEvents.
+func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
+	s.serveSSE(w, r, "handleAPIEvents", func(send func(messageEnvelope)) func() {
+		sendModels := func() {
+			if data, err := json.Marshal(s.modelStatus()); err == nil {
+				send(messageEnvelope{Type: msgTypeModelStatus, Data: string(data)})
+			}
+		}
+		sendActivity := func(id int) {
+			if j, err := json.Marshal(map[string]int{"id": id}); err == nil {
+				send(messageEnvelope{Type: msgTypeActivity, Data: string(j)})
+			}
+		}
+		sendInFlight := func(update swaputil.InFlightRequestsEvent) {
+			if update.Operation == inflightOperationSnapshot && update.Requests == nil {
+				update.Requests = []swaputil.InflightRequestEntry{}
+			}
+			if j, err := json.Marshal(update); err == nil {
+				send(messageEnvelope{Type: msgTypeInFlight, Data: string(j)})
+			}
+		}
+		sendUIConfig := func() {
+			if j, err := json.Marshal(s.cfg.UI); err == nil {
+				send(messageEnvelope{Type: msgTypeUIConfig, Data: string(j)})
+			}
+		}
+		sendProfile := func() {
+			if j, err := json.Marshal(map[string]any{"active": nullableProfile(s.ActiveProfile())}); err == nil {
+				send(messageEnvelope{Type: msgTypeProfile, Data: string(j)})
+			}
+		}
+
+		unsubscribe := []context.CancelFunc{
+			event.On(func(e swaputil.ProcessStateChangeEvent) { sendModels() }),
+			event.On(func(e swaputil.ProcessLoadingEvent) { sendModels() }),
+			event.On(func(e swaputil.ModelCapabilitiesChangedEvent) { sendModels() }),
+			event.On(func(e swaputil.ConfigFileChangedEvent) { sendModels() }),
+			event.On(func(e swaputil.ProfileChangedEvent) {
+				sendProfile()
+				sendModels()
+			}),
+			event.On(func(e ActivityLogEvent) { sendActivity(e.Metrics.ID) }),
+			event.On(func(e swaputil.InFlightRequestsEvent) { sendInFlight(e) }),
+		}
+
+		// initial payload
+		sendModels()
+		sendUIConfig()
+		sendProfile()
+		sendInFlight(s.inflight.Current())
+
+		return func() { cancelAll(unsubscribe) }
+	})
+}
+
+// handleAPILogEvents streams log data to the client as Server-Sent Events.
+// The streams are chosen with repeated query parameters, for example
+// ?stream=proxy&stream=http. Each stream's history is sent first unless
+// ?no-history is set.
+func (s *Server) handleAPILogEvents(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	names := query["stream"]
+	if len(names) == 0 {
+		swaputil.SendResponse(w, r, http.StatusBadRequest, "at least one stream is required: proxy, upstream or http")
+		return
+	}
+	streams := make(map[logmon.StreamID]*logmon.Monitor, len(names))
+	for _, name := range names {
+		id := logmon.StreamID(name)
+		log, ok := s.logs.Stream(id)
+		if !ok {
+			swaputil.SendResponse(w, r, http.StatusBadRequest, fmt.Sprintf("invalid stream %q. Use proxy, upstream or http", name))
+			return
+		}
+		streams[id] = log
+	}
+	_, skipHistory := query["no-history"]
+
+	s.serveSSE(w, r, "handleAPILogEvents", func(send func(messageEnvelope)) func() {
+		sendLogData := func(source logmon.StreamID, data []byte) {
+			if j, err := json.Marshal(map[string]string{"source": string(source), "data": string(data)}); err == nil {
+				send(messageEnvelope{Type: msgTypeLogData, Data: string(j)})
+			}
+		}
+
+		unsubscribe := make([]context.CancelFunc, 0, len(streams))
+		for id, log := range streams {
+			unsubscribe = append(unsubscribe, log.OnLogData(func(data []byte) { sendLogData(id, data) }))
+		}
+		if !skipHistory {
+			for id, log := range streams {
+				if history := log.GetHistory(); len(history) != 0 {
+					sendLogData(id, history)
+				}
+			}
+		}
+		return func() { cancelAll(unsubscribe) }
+	})
+}
+
+// cancelAll calls every cancel function, last first, matching the order
+// deferred calls would run in.
+func cancelAll(cancels []context.CancelFunc) {
+	for i := len(cancels) - 1; i >= 0; i-- {
+		cancels[i]()
 	}
 }

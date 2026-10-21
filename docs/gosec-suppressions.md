@@ -23,7 +23,7 @@ To list the live markers at any time:
 grep -rn "#nosec" internal/
 ```
 
-Total: **92** suppressions across **12** rules (G115 ×29, G103 ×27, G304 ×10, G204 ×8, G404 ×4, G202 ×5, G117 ×2, G120 ×2, G710 ×2, G118 ×1, G703 ×1, G705 ×1).
+Total: **94** suppressions across **12** rules (G115 ×29, G103 ×27, G304 ×11, G204 ×8, G404 ×4, G202 ×5, G117 ×2, G120 ×2, G710 ×3, G118 ×1, G703 ×1, G705 ×1).
 
 ---
 
@@ -52,7 +52,7 @@ telemetry syscall paths (`internal/perf/d3dkmt_windows.go`, `pdh_windows.go`,
 pointers across the `syscall`/`golang.org/x/sys/windows` boundary. There is no
 safe alternative for these OS ABIs.
 
-## G204 — subprocess launched with a variable · 7 sites · MEDIUM
+## G204 — subprocess launched with a variable · 8 sites in `internal/` (+2 in `cmd/`) · MEDIUM
 
 **Verdict: by design — this is the product.** llama-swap's core function is to
 launch operator-configured model server commands (`cmd`, `cmdStop`) and helper
@@ -60,12 +60,16 @@ tools (`nvidia-smi`, `rocm-smi`, `xpu-smi`, `powermetrics`). The command source 
 operator's trusted config, not attacker input.
 Files: `internal/process/{process_command,runtime_windows}.go`,
 `internal/perf/{monitor_unix,monitor_darwin,monitor_windows}.go`,
-`internal/hw/{detect_linux,intel_linux}.go`.
+`internal/hw/{detect_linux,intel_linux}.go`; the `cmd`/`cmdStop` launches in
+`internal/process/process_command.go` account for two of the sites, and
+`cmd/vllm-wrapper/main.go` carries two more outside the audit test's scope.
 
-## G304 — file inclusion via variable · 10 sites · MEDIUM
+## G304 — file inclusion via variable · 11 sites · MEDIUM
 
 **Verdict: false positive.** Every path is either the operator-supplied config
-file (`internal/config/{config,merge,load_windows}.go`) or an internally
+file (`internal/config/{config,merge,load_windows}.go`), the operator-supplied
+Tailcat key file from the `-listen-tailcat` flag
+(`internal/tailcat/transport.go`), or an internally
 constructed sysfs/hwmon path enumerated by the kernel
 (`internal/hw/{detect_linux,amd_linux}.go`, `internal/perf/monitor_sysfs.go` —
 the GPU telemetry provider reads `/sys/class/drm/*/` + `/proc/<pid>/fdinfo/`
@@ -100,13 +104,14 @@ never leaves the function un-redacted.
 with an explicit `MaxMultiPartSize` (32 MB) in-memory bound. A hard total-size
 cap would break the large audio/image uploads this proxy must forward.
 
-## G710 — open redirect · 2 sites · MEDIUM
+## G710 — open redirect · 3 sites · MEDIUM
 
 **Verdict: false positive.** `internal/server/comfyui.go` (moved from
-`internal/server/api.go` by the upstream #1145 port) and
-`internal/server/api.go` issue relative, same-origin redirects with fixed
-`/comfyui/` and `/upstream/` prefixes; only the query string is carried over
-and the host is never user-controlled.
+`internal/server/api.go` by the upstream #1145 port), `internal/server/api.go`,
+and `internal/server/audiocpp.go` (upstream #1223 port) issue relative,
+same-origin redirects with fixed `/comfyui/`, `/upstream/`, and `/audiocpp/`
+prefixes; only the query string is carried over and the host is never
+user-controlled.
 
 ## G118 — goroutine uses context.Background · 1 site · MEDIUM
 

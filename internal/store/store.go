@@ -56,6 +56,10 @@ type ActivityFilter struct {
 	End    time.Time // inclusive upper bound on ts_created; zero is unbounded
 	MinID  int       // inclusive lower bound on id; 0 is unbounded
 	MaxID  int       // inclusive upper bound on id; 0 is unbounded
+	// SrcPrefix is a literal prefix match on src (e.g. "tc:" for Tailcat
+	// sources). A bounded lexical range keeps SQL wildcard characters as
+	// data and can use idx_activity_src_created_id.
+	SrcPrefix string
 }
 
 type ActivityQuery struct {
@@ -424,17 +428,24 @@ func (s *Store) ListActivity(ctx context.Context, query ActivityQuery) (Activity
 
 func (s *Store) ActivityStats(ctx context.Context, query ActivityStatsQuery) (ActivityStats, error) {
 	filter := ActivityFilter{}
-	if model := strings.TrimSpace(query.Model); model != "" {
+	model := strings.TrimSpace(query.Model)
+	if model != "" {
 		filter.Models = []string{model}
 	}
 	where, args := activityWhere(filter)
 	// TotalRequests is MAX(id), not COUNT(*): pruning deletes old rows, and
 	// the monotonic id keeps the all-time request total stable across prunes.
+	// With a model filter, ids are interleaved across models and MAX(id)
+	// would overcount that model's requests, so count the filtered rows.
+	requestTotal := "COALESCE(MAX(id), 0)"
+	if model != "" {
+		requestTotal = "COUNT(*)"
+	}
 	// #nosec G202 -- `where` uses ? placeholders bound via args; no user input
 	// is concatenated into the SQL text.
 	row := s.db.QueryRowContext(ctx, `
 		SELECT
-			COALESCE(MAX(id), 0),
+		`+requestTotal+`,
 			COALESCE(SUM(input_tokens), 0),
 			COALESCE(SUM(output_tokens), 0),
 			COALESCE(SUM(CASE WHEN cache_tokens > 0 THEN cache_tokens ELSE 0 END), 0)
@@ -803,6 +814,12 @@ func activityWhere(filter ActivityFilter) (string, []any) {
 	if filter.MaxID > 0 {
 		conditions = append(conditions, "id <= ?")
 		args = append(args, filter.MaxID)
+	}
+	if filter.SrcPrefix != "" {
+		// A bounded lexical range is a literal prefix match (SQL wildcard
+		// characters remain data) and can use idx_activity_src_created_id.
+		conditions = append(conditions, "src >= ? AND src < ?")
+		args = append(args, filter.SrcPrefix, filter.SrcPrefix+"\U0010FFFF")
 	}
 
 	if len(conditions) == 0 {

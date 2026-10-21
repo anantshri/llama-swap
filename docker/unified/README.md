@@ -138,6 +138,18 @@ cmd: |
   --port ${PORT}
 ```
 
+### eSpeak-ng
+
+Kokoro, SanoTTS and Inflect use eSpeak-ng to turn text into phonemes. audio.cpp
+is built with `AUDIOCPP_STATIC_ESPEAK=ON`, so eSpeak-ng 1.52.0 is linked into
+`audiocpp_server` and `audiocpp_cli` and no shared library is needed. Its data
+is installed unpacked at `/usr/local/bin/espeak-ng-data`, where audio.cpp looks
+for it by default, so these models need no eSpeak settings in the config.
+Nothing is written to `$HOME` at runtime.
+
+eSpeak-ng is GPL-3.0-or-later. Its license and the source archive it was built
+from are in `/usr/local/share/audiocpp/licenses/espeak-ng`.
+
 ### CUDA version
 
 The CUDA toolkit the projects compile against and the runtime libraries the
@@ -150,15 +162,63 @@ CUDA projects, and the runtime image.
 
 ### GPU support
 
-The CUDA image compiles SASS for compute capabilities `60;61;75;86;89`, so
-Pascal (P100, GTX 10xx, P40) and newer NVIDIA GPUs are supported. Architectures
-between and above those entries — Volta (70), Ampere (80), Hopper (90) and
-Blackwell (100 on datacenter parts, 120 on GeForce and RTX PRO) — run by
-JIT-compiling the nearest lower PTX, which costs time on first load. Set the
-`CMAKE_CUDA_ARCHITECTURES` environment variable when invoking `build-image.sh`
-(to edit the default, change it in `base-cuda.Dockerfile`) to compile one of them
-natively. The base is what every CUDA project compiles from, so an addition
-lengthens all of them — and changes the base's hash, which rebuilds all five.
+Two CUDA images are built, because CUDA 13 removed Maxwell, Pascal and Volta
+from `nvcc` altogether and those cards still need an image:
+
+| image | platform | CUDA | `CMAKE_CUDA_ARCHITECTURES` | covers |
+|---|---|---|---|---|
+| `unified-cuda` | amd64 | 12.9.1 | `60;61;70;75;86;89` | Pascal (P100, GTX 10xx, P40), Volta (V100), Turing, Ampere, Ada |
+| `unified-cuda13` | amd64 | 13.3.1 | `80;86;89;90;100;120` | Ampere (A100, RTX 30xx), Ada (RTX 40xx), Hopper (H100), Blackwell (100 on datacenter parts, 120 on GeForce RTX 50xx and RTX PRO) |
+| `unified-cuda13` | arm64 | 13.3.1 | `90;100;120;121` | GB10 (DGX Spark) at 121, GH200 at 90, GB200 at 100, and a discrete GeForce or RTX PRO card in an aarch64 host at 120 |
+
+Those are the compute capabilities compiled as SASS. For most entries CMake also
+emits PTX, so an architecture above one of them still runs by JIT-compiling that
+PTX — it pays that cost on first load and misses arch-specific kernels. On
+`unified-cuda` that covers Ampere (80) and Hopper (90).
+
+That fallback does not work for every project. ik_llama.cpp picks its WMMA
+flash-attention kernel from the GPU's compute capability, so on a Volta card
+running the sm_61 PTX it launches a kernel that was never compiled and aborts
+(issue #1185). That is why `70` is compiled natively on `unified-cuda`.
+
+Blackwell is the exception, in two ways that both matter when editing these
+lists.
+
+**`120` is not what actually gets compiled.** ggml's CUDA `CMakeLists.txt`
+rewrites any plain `12X` into the architecture-specific `12Xa`, because
+Blackwell's FP4 tensor core instructions are not forwards compatible and exist
+only under that target. Writing `120` is what you want: it is how an RTX 5090 or
+RTX PRO 6000 Blackwell (both GB202, sm_120) gets native FP4-capable code, without
+naming `120a` yourself — and naming it yourself would risk `ik_llama.cpp`, an
+older fork with no such rewrite, which compiles the plain number. The catch is
+that `12Xa` targets are real-only: they emit no PTX, so **nothing in the 12.x
+family is reachable by JIT**. A 12.x GPU runs only if its number is listed.
+
+**Blackwell spans two CUDA major versions.** Datacenter parts are compute 10.x
+(`100`, `103`); GeForce, RTX PRO and GB10 are 12.x (`120`, `121`). PTX only JITs
+forward within a major version, so neither branch can stand in for the other —
+dropping `100` does not leave GB200 covered by `120`.
+
+`121` is deliberately absent from the amd64 list. GB10 is a Grace SoC with no
+PCIe part, so sm_121 cannot appear in an x86 host; it is listed on arm64, where
+it is the whole point.
+
+Pick `unified-cuda13` for an Ampere or newer card and `unified-cuda` for
+anything older. `unified-cuda13` is a multi-arch tag, so on a DGX Spark or any
+other aarch64 host `docker pull` resolves to the arm64 image without asking. What
+an image is and what it was compiled for is recorded inside it:
+
+```bash
+docker run --rm --entrypoint cat ghcr.io/mostlygeek/llama-swap:unified-cuda13 /versions.txt
+```
+
+To compile an architecture natively that a variant does not list — Jetson's `87`
+or Thor's `110`, say, both of which want an l4t base image rather than
+`nvidia/cuda` — set `CMAKE_CUDA_ARCHITECTURES` when invoking `build-image.sh`; to
+change a default, edit the `case` on `VARIANT` and `ARCH` near the top of that
+script. The base is what every CUDA project compiles from, so an addition
+lengthens all of them — and changes the base's hash, which rebuilds all five
+projects of that variant on that platform.
 
 The Vulkan image builds audio.cpp with `ENGINE_ENABLE_VULKAN=ON`. audio.cpp is
 tuned for CUDA, and the server prints a notice on startup that a non-CUDA

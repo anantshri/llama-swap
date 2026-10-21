@@ -35,6 +35,20 @@ function environmentLabel(snapshot) {
   );
 }
 
+// SoC systems like DGX Spark (GB10) report the board identity separately
+// from the CPU (upstream #1163).
+function systemLabel(snapshot) {
+  const device = [snapshot.system?.vendor, snapshot.system?.model].filter(Boolean).join(" ");
+  if (!device) return "Not detected";
+  return snapshot.system?.family ? `${device} (${snapshot.system.family})` : device;
+}
+
+function powerLabel(accelerator) {
+  if (accelerator.power_limit_watts !== null) return `${accelerator.power_limit_watts} W`;
+  if (accelerator.nominal_power_watts !== null) return `${accelerator.nominal_power_watts} W (nominal SoC)`;
+  return "Not detected";
+}
+
 function driverLabel(accelerator) {
   return accelerator.driver
     ? [accelerator.driver.name, accelerator.driver.version].filter(Boolean).join(" ") || "Not detected"
@@ -49,7 +63,7 @@ function acceleratorSummary(accelerator) {
     `  Architecture: ${shown(accelerator.architecture)}`,
     `  Memory: ${accelerator.memory.capacity_bytes ? formatCapacity(accelerator.memory.capacity_bytes) : "Not detected"} (${titleCase(accelerator.memory.kind)})`,
     `  Driver: ${driverLabel(accelerator)}`,
-    `  Power Limit: ${accelerator.power_limit_watts === null ? "Not detected" : `${accelerator.power_limit_watts} W`}`,
+    `  Power: ${powerLabel(accelerator)}`,
   ];
 }
 
@@ -71,6 +85,7 @@ function hardwareSummary(snapshot) {
     `  Architecture: ${snapshot.architecture.name}`,
     `  Environment: ${environmentLabel(snapshot)}`,
     `  System Memory: ${formatCapacity(snapshot.memory.capacity_bytes)}`,
+    `  Device: ${systemLabel(snapshot)}`,
     "",
     "CPU",
     `  Model: ${shown(snapshot.cpu.model)}`,
@@ -120,7 +135,7 @@ export function HardwarePage() {
               `${a.memory.capacity_bytes ? formatCapacity(a.memory.capacity_bytes) : "Not detected"} (${titleCase(a.memory.kind)})`,
             ],
             ["Driver", driverLabel(a)],
-            ["Power Limit", a.power_limit_watts === null ? "Not detected" : `${a.power_limit_watts} W`],
+            ["Power", powerLabel(a)],
           ])}
         </article>`
       )
@@ -136,6 +151,7 @@ export function HardwarePage() {
             ["Architecture", hw.architecture.name],
             ["Environment", environmentLabel(hw)],
             ["System Memory", formatCapacity(hw.memory.capacity_bytes)],
+            ["Device", systemLabel(hw)],
           ])}
         </section>
         <section class="card hw-section">

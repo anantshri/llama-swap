@@ -135,9 +135,9 @@ func TestCapcompat_RefreshRetriesUntilUpstreamAnswers(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/v1/models":
-			w.Write(fixture(t, "llama-server", "v1_models.json"))
+			w.Write(fixture(t, "llama-server", "v1_models.json")) // nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- static test fixture bytes
 		case "/props":
-			w.Write(fixture(t, "llama-server", "props.json"))
+			w.Write(fixture(t, "llama-server", "props.json")) // nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- static test fixture bytes
 		default:
 			http.NotFound(w, r)
 		}
@@ -231,9 +231,9 @@ func TestCapcompat_RefreshSkipsWhenAlreadyInFlight(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/v1/models":
-			w.Write(fixture(t, "llama-server", "v1_models.json"))
+			w.Write(fixture(t, "llama-server", "v1_models.json")) // nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- static test fixture bytes
 		case "/props":
-			w.Write(fixture(t, "llama-server", "props.json"))
+			w.Write(fixture(t, "llama-server", "props.json")) // nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- static test fixture bytes
 		}
 	}))
 	defer server.Close()

@@ -5,6 +5,677 @@ High-level summaries live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## 2026-10-16 — oMLX upstream guide and config example
+
+### What / why
+
+User report: with an MLX backend, Activity shows no prompt-processing or
+generation speed. Root cause is the backend, not llama-swap: the stock
+`mlx-lm server` emits a usage block with token counts only — no
+llama-server `timings`, no vLLM `metrics`, no TabbyAPI/oMLX rate fields —
+and in streaming mode even the counts only arrive when the client sends
+`stream_options: {"include_usage": true}` (verified against mlx-lm
+`server.py`: `generate_response`/`completion_usage_response` build usage
+from `prompt_tokens`/`completion_tokens`/`cached_tokens` alone; prefill
+progress is SSE comment lines). `buildMetrics` has no proxy-side rate
+fallback, so both columns read unknown. oMLX (`jundot/omlx`) reports
+`usage.prompt_tokens_per_second` (uncached prompt ÷ prefill) and
+`usage.generation_tokens_per_second` (completion ÷ generation), which this
+fork already parses (upstream #1199, cherry-picked as `783c323`).
+
+User decision: config-level workaround plus an oMLX config entry, no
+metrics code change; deployment target is an Apple Silicon Mac.
+
+### Change
+
+- `docs/kb/guides/upstreams/omlx.md` (new): why stock mlx-lm reads unknown,
+  oMLX install + one-entry-many-models pattern, what lands in Activity, and
+  failure modes (no shell in `cmd` so `~`/brew path needs absolutes,
+  alias routing, whole-process swapping, admin UI via `/upstream/`).
+- `docs/config.example.yaml`: oMLX example model after the vLLM-omni one —
+  `omlx serve --model-dir <abs> --port ${PORT}` with `aliases` for sibling
+  model directories (requested names pass through unchanged when
+  `useModelName` is unset, so oMLX resolves them itself; verified in
+  `internal/server/filters.go`).
+
+Facts verified against oMLX source (`omlx/server.py` @ main): `GET /health`
+exists (503 while preloading → default `checkEndpoint` works);
+`--model-dir`/`--host`/`--port` CLI flags; usage timing fields in every
+non-streaming response, and in streams behind
+`stream_options.include_usage` — llama-swap injects that flag automatically
+for Anthropic `/v1/messages` (`internal/apiconv/anthropic_req.go`) and
+Ollama (`internal/ollama/translate.go`) clients. `cmd` runs via
+`exec.CommandContext` with no shell
+(`internal/process/process_command.go`), so the example and guide use
+absolute paths.
+
+### Verification
+
+- `go test ./internal/docagent/ -run TestKB` — 28 passed (frontmatter and
+  `config_keys` validation of the new article).
+- `go test ./internal/config/ -run "Example|Schema"` —
+  `TestConfig_ExampleMatchesSchema` passes (new example entry validates
+  against `config-schema.json`).
+- `go build ./...` — clean (docs are go:embed'ed).
+
+### Notes
+
+- The deeper fix — proxy-side TTFT measurement in `responseBodyCopier` with
+  wall-clock rate derivation in `buildMetrics` for backends that report no
+  rates (sousekd's fork ships this as "stream rate estimation") — was
+  proposed and declined for now; revisit if stock mlx-lm must stay.
+- Headless Chromium installed for JS-rendered doc fetching
+  (`~/.local/bin/chromium`, Chrome for Testing 155 arm64) per user request;
+  `/opt/toolchains` is read-only so it lives under `~/.local/share`.
+
+---
+
+## 2026-10-13 — Video generation API + model-filtered stats fix (PRs #991, #1147)
+
+### What / why
+
+Two open upstream PRs pulled ahead of merge, per user decision: #1147
+(store stats counting bug — we had the bug) and #991 (video generation
+API — Go + a vanilla UI port).
+
+### #1147 (fix, commit 8fc8591)
+
+`ActivityStats` used `COALESCE(MAX(id),0)` for `TotalRequests` so the
+all-time total survives pruning — but activity ids are global, so with a
+`?model=` filter MAX(id) counts interleaved rows from other models.
+Model-filtered queries now use `COUNT(*)`. The pre-existing prune test's
+`modelStats.TotalRequests == 5` assertion encoded the bug (upstream's PR
+flips it to 2); corrected. Regression test covers interleaved rows and
+the unfiltered MAX(id) path.
+
+### #991 (feature)
+
+Go: `/v1/videos` + `/v1/videos/sync` POST routes (form/multipart —
+llama-swap reads only the model field, everything else passes through);
+`/v1/videos/{id}` + `/v1/videos/{id}/content` GET and `{id}` DELETE
+dispatched via the required `?model=` query param; `modelInQuery` (GET +
+DELETE) in swaputil with the query kept in sync on JSON-body model
+rewrites; video capability mappings; vLLM-omni example model. Ported
+tests: route dispatch (multipart/query/delete), profile+selector DELETE
+rewrites, swaputil ReplaceRequestModel cases (query-delete,
+json-with-query), caps table cases.
+Vanilla UI: `api/video.js` (form builder with advanced-JSON extension
+fields, async poll loop with abort + timeout), Video tab (model picker
+matching the video caps, async/sync, reference image, size/seconds/fps/
+negative/advanced, live job cards, in-browser playback, delete).
+Selftest +3 (form builder, poll loop with mocked fetch, terminal
+statuses) → 173/173.
+
+### Verification
+
+- E2E against a fake vLLM-omni backend: async create → poll → completed →
+  blob playback in the browser; sync mode returns video bytes; DELETE
+  removes the job; `/v1/models` reports the video capabilities; picker
+  shows the model as fitting the Video tab. No page errors.
+- Full short suite green (26 pkgs); gosec 0 ×3; aidc-scan --all clean;
+  gofmt clean.
+
+## 2026-10-13 — Tailcat subsystem port (upstream #1074 → #1183)
+
+### What / why
+
+The last intentionally-skipped subsystem, pulled in by user decision.
+Tailcat is llama-swap's private connectivity layer (Tailscale-derived, no
+account/control plane): serve llama-swap over an encrypted virtual TCP
+port 80, and route peers through connection tokens.
+
+### Approach
+
+The whole series is post-baseline, so instead of replaying five commits,
+the final upstream state was snapshotted and integrated:
+
+- Copied: `internal/tailcat/{transport,transport_test}.go`,
+  `internal/config/{tailcat,tailcat_test}.go`,
+  `internal/server/tailcat_test.go`, KB guide, `peer.go`/`peer_test.go`
+  (verified free of fork-specific content first).
+- Hand-merged: `llama-swap.go` (flag, configure/load key, listener
+  lifecycle incl. reload-address handoff and shutdown close),
+  `server.go` (tailcatAddress field + accessors, request context key,
+  `/api/tailcat` route), `apigroup.go` (handleAPITailcat +
+  tailcatExposedModelIDs), `api.go` (/v1/models filters to exposed IDs for
+  tailcat-marked requests), `metrics.go` (authenticated source preferred
+  over xff/ip), `redact.go` (`tailcat://` proxy scrubbing),
+  `load.go` (validateTailcatConfig call), config-schema + example config.
+- Ported onto this fork's store API: `ActivityFilter.SrcPrefix` with the
+  upstream bounded-range literal prefix match + `idx_activity_src_created_id`
+  migration (00005); upstream's sqlite-package test adapted.
+- gosec hardening on imported code (fork bar: zero): explicit `_ =` on
+  fatal-path/cleanup calls, encode error checked, one ledgered G304
+  marker (operator key path); ledger 93 → 94 (G304 ×11).
+- Vanilla UI: `/tailcat` page (token reveal/copy, peer-config YAML copy,
+  tc:-filtered ActivityTable), `tailcatPeerConfig.js` util (direct port),
+  `getTailcatStatus` + `srcPrefix` on `getActivity`/ActivityTable, nav
+  entry. +2 selftests (yamlQuote, peerConfigYaml).
+
+### Verification
+
+- Full short suite green (26 ok packages incl. internal/tailcat's
+  in-memory transport tests); server policy tests (22) + config validation
+  green; gosec 0 ×3; aidc-scan --all clean (gitleaks fine with the
+  placeholder nodekey in the example config).
+- Browser: `/api/tailcat` answers `{"enabled":false,…}`; the Tailcat page
+  renders the not-enabled notice; selftest 170/170.
+- NOT verified live: an actual `-listen-tailcat` boot needs the `tailcat`
+  CLI (key generation) and relay reachability, neither available in this
+  container. First real deployment should smoke: boot with a generated
+  key, connect a client, check `tc:` activity rows appear.
+
+### Post-review fixes (fresh-eyes review catch)
+
+- **H1** reload bricked the listener: the fork's reload path missed
+  upstream's `configureTailcatListener(&newCfg, *flagListenTailcat)` call,
+  so after any reload `TailcatEnabled()` was false and ServeTailcatHTTP
+  404'd everything. Added (also restores reload-time policy validation).
+- **M1** the schema merge had wholesale-replaced the peers block, dropping
+  the fork-only `setParamsByMatch` from peer filters — restored (peer
+  filters keep setParams/stripParams/setParamsByMatch + the new
+  tailcatKey).
+- **M2** the page leaked an ActivityTable per Reveal/Hide re-render —
+  tables are now destroyed on re-render and page destroy.
+- **M3** Copy buttons now use the UI's clipboard fallback
+  (textarea + execCommand) for plain-HTTP origins, with failure feedback.
+
+## 2026-10-13 — Capture dialog: section collapse state survives re-renders
+
+### What / why
+
+User report: clicking the response section's Chat/Pretty/Raw tabs expanded
+the (collapsed) Request sections. Cause: every tab click re-renders the
+whole dialog from a template with hardcoded `<details open>`, wiping manual
+collapses. Same applied to Copy clicks and the parts collapse/expand
+controls.
+
+### Change
+
+`captureDialog.js`: sections carry `data-section` names; `sectionAttr()`
+renders `open` unless the user collapsed that section; a `toggle` listener
+records each section's state into `state.sectionOpen`; `open()` resets the
+map per capture (fresh captures start expanded, matching the parts-view
+convention). Note: the `toggle` event is queued as a task, so a collapse
+and a re-render in the same tick would race — not reachable by real users
+(clicks are separate tasks), and the selftest awaits the toggle first.
+
+### Verification
+
+- Selftest +1 (`collapsed sections stay collapsed across tab switches`) →
+  **168/168**. First version failed for the right reason: `await` inside a
+  non-async test callback broke the module (SyntaxError → "Running…"
+  forever); fixed by making the callback async and letting the queued
+  toggle run (`setTimeout 10ms`) before the tab click.
+- Playwright E2E of the exact report: collapse Request Body in a live
+  dialog, click response Raw → Pretty → Chat — Request Body stays collapsed
+  through all three, Response Body stays open, no page errors.
+- `go test -short ./...` 1991/32 ok; aidc-scan --all clean.
+
+## 2026-10-13 — Hand-merge batch 5: voices override + gopsutil panic fix
+
+### What / why
+
+Upstream catch-up after the full-drain audit: the one new feature commit
+(#1225) and the one missed fix (#1180).
+
+### Picks and resolutions
+
+- `163fd1d` #1225 (`capabilities.voices`): model_config/server/tests
+  applied clean; schema conflict was both-additive (our #915 fields +
+  their `voices` — one missing `},` from the splice fixed); KB section
+  taken from theirs; Svelte file dropped and its substance ported: the
+  speech tab's `(refresh)` dropdown pseudo-entry removed (a dedicated
+  refresh button already existed upstream and here).
+- `a2bf16e` #1180 (gopsutil panic): their go.mod hunks carried the tailcat
+  dependency, so the conflict was resolved by hand — keep our go.mod, add
+  only the `replace gopsutil => hsdfat/gopsutil v4.26.9-0.20260925…`
+  directive, `go mod tidy` regenerates go.sum for our dependency set.
+
+### Verification
+
+- `go test -short ./...` → 1991/32 ok; selftest 167/167; gosec 0 ×3;
+  aidc-scan --all clean.
+- E2E (after remembering to rebuild the binary): config with
+  `capabilities.voices: [alloy, echo, fable]` →
+  `GET /v1/audio/voices?model=tts` answers `{"model":"tts","voices":[…]}`
+  from config and the log confirms the model never started. (The first
+  smoke hung: the running binary predated the pick — rebuild before smoke
+  tests.)
+
+## 2026-10-12 — Capture viewer: split reasoning/content blocks for buffered responses
+
+### What / why
+
+User request: the response section of the Activity capture viewer should
+show a clear reasoning block and content block "just like we have parts in
+request". Streamed responses already had that (the SSE Chat tab); buffered
+JSON chat completions only had Pretty/Raw, burying `reasoning_content`
+inside the JSON.
+
+### Change (vanilla UI only, kept simple)
+
+`internal/server/ui_dist/js/components/captureDialog.js`:
+
+- `parseChatJson(text)` — extracts `choices[0].message` (or `.delta`) into
+  the same `{reasoning, content}` shape `parseSSEChat` produces; accepts the
+  `reasoning` alias, flattens multimodal content arrays via `contentText`,
+  returns null for non-chat JSON or empty messages.
+- `responseChatHTML(chat, labels)` — renders one collapsible part-style
+  block per field (role chip, field label, char/word/≈token estimate),
+  reusing the request parts CSS; reasoning keeps the tinted
+  `capture-pre-reasoning` style; empty fields are skipped; empty chat
+  renders `(empty)`.
+- Dialog wiring: the Chat tab is offered for any chat-shaped response
+  (SSE or buffered JSON), `defaultRespTab` lands chat-shaped JSON on Chat,
+  and the chat-tab Copy concatenates reasoning + content for both kinds.
+  The old SSE-only inline chat markup is gone (one shared renderer).
+
+### Verification
+
+- Selftest +6 (parseChatJson ×4: split, alias+multimodal, null cases,
+  content-only; responseChatHTML ×2: blocks/labels/stats, empty handling)
+  → **163/163**.
+- Browser E2E with a fake upstream returning
+  `{"choices":[{"message":{"reasoning_content":"…","content":"…"}}]}`:
+  opening the capture from the Activity page lands on Chat with both
+  blocks, correct labels (`choices[0].message.reasoning_content`),
+  stats visible, no page errors.
+- `go test -short ./...` green; aidc-scan --all clean.
+
+## 2026-10-12 — Hand-merge batch 4: loading progress (#1212 / d3ab665)
+
+### What / why
+
+The last queue item: upstreams can report their own startup progress by
+answering the not-yet-ready health check with
+`{"progress": 0.42, "message": "…"}`. Per user instruction the vanilla-UI
+port was kept deliberately simple.
+
+### Picks and resolutions
+
+The entire Go side applied clean (loading_progress.go + 202-line tests,
+process_command health-check parsing, `ProcessLoadingEvent` wiring that
+re-sends `modelStatus` per progress tick, apigroup fields, schema, docs);
+the five `ui/src` files were skipped — this repo has no Svelte UI.
+Vanilla port:
+
+- `loadingPercent`/`loadingMessage` helpers in `util/modelUtils.js`
+  (shared): percent floors and clamps so a load never shows 100% while
+  starting; both helpers only fire in the `starting` state.
+- models table State cell: percent beside the state, truncated message
+  line, and a thin decorative bar inside the cell (a `<tr>` cannot host a
+  row-wide absolutely-positioned bar — invalid HTML; upstream's row-edge
+  bar is a Svelte-shell nicety). Progress updates arrive as modelStatus
+  SSE events, so no client ticking.
+- model detail header: percent + message beside the status badge.
+- Five CSS rules reusing theme tokens; no new components, stores, or
+  timers.
+
+### Verification
+
+- E2E with a fake upstream serving `503 {"progress":0.5,"message":
+  "loading tensors"}` on its health endpoint: the `modelStatus` SSE
+  stream shows `stopped → starting` with `"loadingProgress":0.5,
+  "loadingMessage":"loading tensors"` → `stopped` (fixture never goes
+  ready). Browser selftest **156/156** (+4: helper edge cases, render,
+  update-on-store).
+- `go test -short ./...` green, gosec 0 ×3 GOOS; aidc-scan --all clean
+  after one inline nosemgrep marker on the new test fixture write
+  (documented FP category).
+
+## 2026-10-12 — Hand-merge batch 3: multi-stream logging (#1172 / bbdb55d)
+
+### What / why
+
+The logging rework the earlier batches deferred: log data leaves
+`/api/events` for its own SSE endpoint, the server carries one
+`logmon.Group`, and configs gain `logToStdout` stream selection.
+
+### Resolutions
+
+- `router/matrix.go` + `llama-swap.go` (logmon.Group wiring) applied clean;
+  matrix.go needed the predicted `proxylog` → `logs.ProxyLogs` fix in the
+  orphan-synthesis logging.
+- `server.go`: one conflict on the `New()` signature — kept upstream's
+  `logs *logmon.Group` with our concrete `*store.Store` parameter; six
+  fork-side `s.{proxylog,upstreamlog,muxlog}` references renamed to
+  `s.logs.*` (anthropic.go, apigroup.go).
+- `log.go`: kept the error-handling convention + nosemgrep marker on the
+  combined-history write. `server_test.go`/`translate_test.go` helpers:
+  upstream's `logmon.NewGroup(io.Discard, true, true, true)` with our
+  `store.New`.
+- README conflicts: the recurring upstream-content-vs-fork-notice class —
+  kept ours both times. KB doc: took upstream's updated date.
+- Svelte stores (`logs.ts`/`logs.test.ts`) came along dead; the vanilla
+  adaptation is in `api.js`: a second EventSource
+  (`/api/events/logs?stream=proxy&stream=upstream`) with its own backoff,
+  the same message envelope, and the `logData` case removed from the main
+  `/api/events` handler; log-store resets moved into the log stream's
+  onopen so replayed history is never cleared by the other stream.
+
+### Test restore + race fix
+
+The three `TestServer_APILogEvents_*` tests + `serveLogEvents` helper
+trimmed during the #1215 port arrived with this commit and applied clean,
+as predicted. `TestServer_APILogEvents_NoHistory` flaked under package
+load: monitor delivery is asynchronous (`Write` → buffered channel →
+publish goroutine), so a write made before subscribing could still be
+published after it and arrive as a live event, defeating the no-history
+assertion. Fixed deterministically: a probe subscriber drains the history
+write's broadcast before the handler subscribes.
+
+### Verification
+
+- `go test -short ./...` → 1968 passed, 32 packages; `APILogEvents` ×6
+  consecutive runs green; browser selftest 152/152.
+- Runtime smoke: `/api/events/logs?stream=proxy` serves SSE with history;
+  a 5s `/api/events` sample carries zero `logData`; `/logs/stream/proxy`
+  tails; the vanilla logs page renders history live with no page errors
+  (playwright against a rebuilt binary).
+- gosec 0 ×3 GOOS; aidc-scan --all clean (semgrep/gitleaks/gosec/shellcheck).
+
+## 2026-10-12 — Hand-merge batch 2: vllm-wrapper build, sm_70 docker, auto:orphans
+
+### What / why
+
+Second hand-merge set (user approved all resolutions incl. adopting
+upstream's `build-image.sh` wholesale for the sm_70 pick).
+
+### Picks and resolutions
+
+- `c2c5106` (upstream `e054c90` #1156, vllm-wrapper untagged build) —
+  `lib-release.sh` (new) + installer fixes applied clean; the kubeswap
+  build stage in `runtime.Dockerfile` dropped (subsystem absent).
+- `2575683` (upstream `0ac43bb` #1187, sm_70 for V100) — `build-image.sh`
+  taken wholesale from upstream (supersedes our drifted copy; two-image
+  CUDA 12/13 layout, per-platform arch tables); README GPU-support section
+  taken from upstream to match; `base-cuda.Dockerfile` applied clean.
+- `6e5df33` (upstream `bea6428` #1026, auto:orphans) — our `+undefined`
+  port and upstream's `auto:orphans` turned out to be the same design at
+  different vintages; adopted upstream's wholesale (shared `buildModelSet`
+  root, `SynthesizedOrphans()`, orphanModes). `program.go` verified free of
+  fork-specific content beyond the old implementation before taking theirs.
+  `router/matrix.go` hand-merged (upstream's version uses the #1172-era
+  `logmon.Group` API we don't have — kept our wiring, adopted their
+  messages/names). Schema description and KB doc taken from upstream, minus
+  the kubeswap Helm paragraph. Legacy `matrix_undefined_test.go` and
+  `program_undefined_test.go` deleted — upstream's `*_orphans_test.go`
+  files cover the same cases plus YAML/reference-validation. **Breaking**:
+  `+undefined` in configs must be renamed to `+auto:orphans`.
+
+### Security cleanup (aidc-scan --all surfaced)
+
+Whole-repo semgrep now zero: inline markers with reasons on the #1213
+wol-proxy confirm/loading writes and form (django-no-csrf-token misfire on
+a static non-Django page), the capcompat httptest fixture writes, and the
+agentTools warning; `docs/semgrep-suppressions.md` updated with the new
+sites/categories. Note: markers must carry the exact reported rule id and
+sit on the finding's start line — two earlier attempts with a guessed rule
+id and off-line placement did not suppress.
+
+### Verification
+
+- `go test -short ./...` → 1942 passed, 32 packages, zero failures.
+- gosec 0 ×3 GOOS; aidc-scan and `--all`: semgrep 0 findings repo-wide,
+  gitleaks/gosec/shellcheck clean; schema valid JSON; `bash -n` +
+  shellcheck clean on the docker scripts.
+
+### Post-review fixes (fresh-eyes review catch)
+
+- **H1** — the wholesale `build-image.sh` adoption was incomplete: it builds
+  `-f rootless.Dockerfile` (absent here), probes via upstream's `run.sh`
+  entrypoint (absent), and our fork-diverged `runtime.Dockerfile` still
+  used a `repo-docs` build context the script never passes. Completed the
+  adoption: `rootless.Dockerfile` and `run.sh` extracted from upstream
+  `0ac43bb`; `runtime.Dockerfile` taken wholesale from upstream too, minus
+  the kubeswap build stage and binary COPY (consistent with #1156's drop).
+  Cross-checked every `SCRIPT_DIR` file reference, `-f` Dockerfile, and
+  build-arg/FROM-stage pairing — all resolve. (No docker daemon in this
+  container, so verification is structural, not a real build.)
+- **M2** — README still advertised the `+undefined` matrix reference;
+  updated to `+auto:orphans` with a rename note.
+- **M3** — semgrep ledger gained the `unsafe-formatstring` entry and a note
+  that ui_dist markers are covered by the inventory grep.
+- **M4** — `gofmt -w cmd/wol-proxy/wol-proxy.go` (marker edit had dedented
+  a block).
+
+## 2026-10-12 — Hand-merge batch 1: content-type autofill, browser headers, decision models
+
+### What / why
+
+Second set of hand-merged upstream picks (user-approved resolutions): each
+had exactly one small manual resolution.
+
+### Picks and resolutions
+
+- `0ab9b16` (upstream `486376e` #1194, content-type middleware) —
+  `contenttype.go` + tests applied clean; the model-chain wiring applied
+  clean (`modelMWs` gets `createContentTypeMiddleware()` right after auth).
+  The conflict was entirely upstream's Tailcat-context code (subsystem this
+  fork doesn't carry) — dropped. Fork extension per user call: the
+  middleware also runs first in `translatedDispatch`, so Anthropic
+  `/v1/messages` and the Ollama routes tolerate missing content-type too;
+  covered by `TestServer_AnthropicMessages_MissingContentTypeTolerated`.
+- `ce84b20` (upstream `d34ddb2` #1215, strip browser headers) — feature
+  (`router/peer.go`, `swaputil/cors.go`) and its tests applied clean. The
+  conflicting `apigroup_test.go` hunk was #1172's log-stream tests riding
+  along in upstream's context (`serveLogEvents` helper + three
+  `APILogEvents` tests + a logData assertion) — trimmed per user decision;
+  they return when #1172 lands. One now-unused import (`bytes`) removed.
+- `69e162b` (upstream `b51dde4` #1220, decision models) — additive splice
+  knot in `model_config.go`: kept both our #915 reasoning config and their
+  `validOutModalities` (+`decisions`), each with its own braces; schema
+  enum extended (`video`, `decisions` — valid per the merged Go maps); KB
+  doc tags merged. clef detection fixtures + capcompat changes applied
+  clean.
+
+### Verification
+
+- `go test -short ./...` → 1926 passed, 32 packages, zero failures.
+- gosec 0 ×3 GOOS; aidc-scan clean; gofmt clean; schema valid JSON.
+
+## 2026-10-12 — perf GPU-collector restart loop (#1196 / 5dd7f88)
+
+First of the hand-merge batch. Only one hunk conflicted: our G104-motivated
+`_ = cmd.Wait()` vs upstream's error-logging variant. Took upstream's
+(their fix, user decision) — it checks the error, so gosec stays at zero
+and collector exits are no longer silently discarded. Everything else
+(monitor.go restart loop + 266 lines of tests) applied clean.
+
+### Post-port test-stability work
+
+The new tests flaked, then failed deterministically in multi-test runs
+(`TestStart_GpuRestartWaitResetsAfterStats`: timed out waiting for
+collector 6; `-count=5` failed iterations 1,3,4,5 while 2 passed in 0.00s).
+Root cause — an upstream test race, not load: `fakeGpuCollector.wait`
+returned instantly, so the restart loop cycled all six fake collectors
+faster than the test goroutine drained; the monitor's publish is
+non-blocking (buffer 1, drop on full), so the single stat the test awaited
+could be dropped. Fixes:
+
+- `fakeGpuCollector.wait` now waits 1ms via `waitOrDone` (or aborts on
+  ctx) — paces the loop, keeps wait-history semantics, total test time
+  still trivial.
+- Wait deadlines in the new tests carry load headroom (10s vs upstream's
+  2s); comments note the pacing fix — not the deadline — is what cured
+  the flakes.
+
+### Verification
+
+- `go test ./internal/perf/` 68 ok; `-count=10` of the flaky test 10/10;
+  the previously-failing pairs (`perf`+`process`, parallel and `-p 1`) green.
+- `go test -short ./...` ×3 consecutive: 1901 passed, 32 packages, zero
+  failures.
+- gosec 0 ×3 GOOS; aidc-scan clean; gofmt clean.
+
+## 2026-10-12 — UI-only-conflict upstream picks (GB10, uptime, /audiocpp)
+
+### What / why
+
+Second batch of the upstream survey: the three commits whose cherry-pick
+conflicts were only in the deleted Svelte UI (`ui/src/**`) or in vanilla
+files rename-matched against Svelte originals. Resolution per user
+decision: `git rm` the Svelte side, keep our vanilla versions, and port the
+user-visible changes to the vanilla UI by hand.
+
+### Picks and resolutions
+
+- `e2f4e43` (upstream `ccccb20` #1163) — GB10/DGX Spark hw detection.
+  All Go applied clean; only `ui/src/{types.ts,Hardware.svelte}` conflicted
+  (deleted here). No UI port needed: the vanilla Hardware page renders
+  whatever `/api/hardware` reports.
+- `3351168` (upstream `85a109b` #1173) — uptime. Conflicts were
+  rename-detected matches of our ported vanilla files (`format.js`) plus
+  missing Svelte files; kept ours, dropped theirs. Follow-up commit
+  `b3da3a3` ports the UI half: `formatUptime` (42s / 5m 12s / 2h 5m / 3d 4h),
+  live-ticking uptime cell in the models State column (1s in-place update
+  from server `uptimeMs`, no list re-render so focus/scroll survive), and an
+  Uptime/ready-since row on the model Details tab. Sidebar resize and
+  middle-truncate IDs were judged Svelte-shell specifics without a vanilla
+  equivalent and skipped.
+- `c3f4323` (upstream `fd49827` #1223) — `/audiocpp/` endpoint. Server side
+  applied clean; README conflict resolved onto the fork notice (added a
+  pointer that post-baseline adopted features live in the CHANGELOG), and
+  upstream's one-line `modelUtils` change ported to both vanilla
+  `modelServerPath` copies so `audiocpp_auto`'s open-model link targets
+  `/audiocpp/`.
+
+### Security
+
+gosec flagged G710 on `audiocpp.go`'s redirect — same fixed-prefix
+same-origin pattern already ledgered for comfyui.go. Suppressed at the line
+with the same reasoning; ledger updated (G710 ×2 → ×3, total 92 → 93).
+
+### Post-review fixes (fresh-eyes review catch)
+
+- Hardware page is field-list driven, not data-driven: ported the #1163
+  Svelte page changes — `systemLabel` Device row (vendor/model/family) in
+  the System card + text summary, and `powerLabel` falling back to
+  `nominal_power_watts` ("W (nominal SoC)"). The initial "needs no UI
+  change" claim was wrong; docs corrected.
+- Uptime anchored per `uptimeMs` value (first instant seen) instead of per
+  render: an unrelated re-render (search keystroke, profile switch) no
+  longer resets the displayed age; a new SSE value re-anchors. Selftest
+  covers anchor persistence + re-anchoring.
+- Ported #1173's interrupted-turn semantics to the vanilla chat: aborted
+  turns keep a "Cancelled" label + Retry instead of a bare empty bubble,
+  failed turns mark `interrupted: "error"` (error text unchanged), retry
+  title switches to "Retry". Docs-agent variant intentionally not ported.
+- Ledger: G204 section header recounted (7 → 8 internal sites; notes the
+  two `cmd/vllm-wrapper` markers outside the audit test's scope). The
+  summary line the audit test enforces was already correct.
+
+### Verification
+
+- `go test -short ./...` → 1892 tests, 32 packages, zero failures
+  (includes upstream's new audiocpp/uptime/hw tests).
+- gosec ×3 GOOS → 0 findings; aidc-scan clean (semgrep/gitleaks/gosec).
+- Browser selftest via playwright headless chromium against a rebuilt
+  binary: **151/151** (+5: formatUptime, uptime cell ×3, audiocpp link).
+  Note for future sessions: `fuser -k 8765/tcp` via the wrapper did not
+  kill the old server — the stale binary kept serving and hid the new
+  selftest; `kill <pid>` + restart resolved it. Chromium needs the apt
+  lib set from the 2026-09-26 log (playwright module reinstalled too).
+- Runtime smoke: `/audiocpp/` without the model → 404 (expected); `/health`
+  200.
+
+## 2026-10-12 — Upstream clean cherry-pick batch (8 commits, zero hand merges)
+
+### What / why
+
+Follow-up to the upstream survey: of the 72 unmerged upstream commits, 8
+applied with `git cherry-pick -x` without a single conflict, build clean,
+and pass the full suite — taken as-is before tackling the ones that need
+hand merges. Tested first in a throwaway worktree (`git worktree add`) so
+the real tree was never at risk.
+
+### Picked (upstream order)
+
+- `aa8031f` #1157 — docker/unified audio.cpp: download + mp3 support
+- `a6f3b09` #1182 — docker/unified audio.cpp: static eSpeak-ng + phoneme data
+- `7e18554` #1189 — ComfyUI `concurrencyLimit` floor 50 → 999 (internal/config)
+- `45b78e2` #1197 — `/v1/systemone` added to POST-JSON model routes
+- `9db37d0` #1198 — capcompat `defaultProber` fallback (replaces `vllmProber`)
+- `783c323` #1199 — oMLX token-per-second usage fields into activity metrics
+- `d60d084` #1205 — per-model `disableKeepAlives` (stream-then-POST EOF fix)
+- `8db9566` #1213 — wol-proxy `-require-confirm` + wake progress UI
+
+Conflict-checked and deferred for hand merges (next batch): `e054c90`
+(vllm-wrapper untagged build), `bbdb55d` (multi-stream logging), `ccccb20`
+(DGX Spark GB10), `85a109b` (model uptime), `a2bf16e` (gopsutil panic fix —
+go.sum context), `0ac43bb` (sm_70 V100), `486376e` (content-type autofill),
+`5dd7f88` (perf collector restart loop), `d3ab665` (loading progress),
+`d34ddb2` (strip browser headers), `b51dde4` (decision models), `fd49827`
+(/audiocpp), `bea6428` (matrix `auto:orphans`).
+
+### Verification
+
+- Worktree dry-run: all 8 cherry-picks clean, `go build ./...` clean,
+  gofmt clean; touched packages (`config`, `capcompat`, `server`, `process`,
+  `cmd/wol-proxy`) `ok` — note the two #1205 process tests SKIP unless
+  `build/simple-responder` exists (`go build -o build/simple-responder
+  ./cmd/simple-responder`); they were executed after building it.
+- Real branch: `go test -short ./...` → 25 packages ok, zero failures.
+- `gosec` ×3 GOOS (linux/darwin/windows) → 0 findings.
+- `aidc-scan` → clean after adding one `.gitleaksignore` fingerprint: the
+  known tailcat-playground placeholder (`nodekey:012345…`, reviewed FP) got
+  re-attributed by gitleaks to its duplicate-lineage commit `f1d38508`
+  (same change as the already-listed `a41af15d`); both copies now listed,
+  matching the ledger's per-commit convention.
+
+### Post-review fix (fresh-eyes review catch)
+
+Upstream's #1205 census test counted every non-`/health` upstream
+connection; this fork's one-time `GET /props` reasoning probe (PR #915
+port) opened an extra connection, failing
+`TestProcessCommand_DisableKeepAlives/disableKeepAlives_opens_one_per_request`
+(4 vs want 3). The test handler now serves `/props` as JSON and keeps it
+out of the census — the only hand edit on top of the clean picks.
+
+## 2026-10-12 — KB guide: using Opik with llama-swap
+
+### Goal
+
+Evaluate whether [Opik](https://github.com/comet-ml/opik) (open-source LLM
+observability / evaluation platform) can be supported, and document the
+zero-code integration path chosen: llama-swap already serves the
+OpenAI-compatible `/v1` endpoint that Opik's model-facing features require.
+
+### Research findings (drove the design of the guide)
+
+- Opik is a full platform (tracing, datasets, experiments, LLM-as-a-judge,
+  prompt management) — embedding it in llama-swap or reimplementing it would
+  be a second product, out of scope for a lightweight proxy.
+- Opik never talks to model servers except through OpenAI-compatible APIs.
+  Two configuration-only integration points exist:
+  1. **AI Providers** (Workspace Settings → "vLLM / Custom provider"):
+     any base URL ending in `/v1`, optional static API key, model list,
+     "Discover models" fetches `/v1/models`. Used by the Prompt Playground
+     and Online Evaluation rules.
+  2. **Python SDK judge metrics** via LiteLLM: `OPENAI_BASE_URL` +
+     `OPENAI_API_KEY` env vars and the `openai/<model-id>` model prefix.
+
+### Change
+
+- New file `docs/kb/guides/api-integration/opik.md` following the KB
+  frontmatter contract (`category: guides`, `config_keys: [apiKeys,
+  hooks.on_startup.preload]`, both verified against `config-schema.json`).
+  Covers both integration points, the Docker networking failure mode
+  (`172.17.0.1`/`host.docker.internal` instead of `localhost`), cold-start
+  latency on first judge call (points at preloading), model-id matching, and
+  why no CORS setup is needed (all calls are server-side).
+- No code, config-schema, or UI changes.
+
+### Verification
+
+- `go test ./internal/docagent/ -run TestKB` — frontmatter + cross-reference
+  validation passes for the new article (one iteration: `config_keys` entry
+  `hooks.onStartup.preload` had to be corrected to the schema's snake_case
+  `hooks.on_startup.preload`).
+- `go test -short ./...` — all green; `gofmt -l .` — clean; `aidc-scan` —
+  clean (semgrep, gitleaks).
+
 ## 2026-09-26 — UI upgrades (models/search, capability pickers, stats split, log concerns) and upstream-review fixes (hw + perf)
 
 ### Addendum (same day): GPU telemetry saw-tooth fix

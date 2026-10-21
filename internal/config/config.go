@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -13,9 +14,35 @@ const DEFAULT_UNLOAD_TIMEOUT = 10
 const (
 	LogToStdoutProxy    = "proxy"
 	LogToStdoutUpstream = "upstream"
+	LogToStdoutHTTP     = "http"
 	LogToStdoutBoth     = "both"
 	LogToStdoutNone     = "none"
 )
+
+// ParseLogToStdout reports which log streams logToStdout sends to stdout. It
+// accepts "none", "both" (every stream), or a comma separated list of
+// "proxy", "upstream" and "http".
+func ParseLogToStdout(value string) (proxy, upstream, http bool, err error) {
+	switch strings.TrimSpace(value) {
+	case LogToStdoutNone:
+		return false, false, false, nil
+	case LogToStdoutBoth:
+		return true, true, true, nil
+	}
+	for item := range strings.SplitSeq(value, ",") {
+		switch strings.TrimSpace(item) {
+		case LogToStdoutProxy:
+			proxy = true
+		case LogToStdoutUpstream:
+			upstream = true
+		case LogToStdoutHTTP:
+			http = true
+		default:
+			return false, false, false, fmt.Errorf("logToStdout must be none, both, or a comma separated list of proxy, upstream, http; got %q", value)
+		}
+	}
+	return proxy, upstream, http, nil
+}
 
 type MacroEntry struct {
 	Name  string
@@ -152,6 +179,7 @@ func (c *ProfileConfig) UnmarshalYAML(value *yaml.Node) error {
 }
 
 type Config struct {
+	Tailcat            *TailcatConfig            `yaml:"tailcat"`
 	HealthCheckTimeout int                       `yaml:"healthCheckTimeout"`
 	LogRequests        bool                      `yaml:"logRequests"`
 	LogLevel           string                    `yaml:"logLevel"`
@@ -215,6 +243,22 @@ type Config struct {
 
 	// security groups CORS and related hardening settings, see issue #1133
 	Security SecurityConfig `yaml:"security"`
+
+	// tailcatEnabled records whether this process started a Tailcat listener.
+	// It is runtime state, not user configuration, so it must never appear in
+	// rendered configuration output.
+	tailcatEnabled bool
+}
+
+// SetTailcatEnabled records whether this process has a Tailcat listener.
+// main owns this startup-only setting from -listen-tailcat.
+func (c *Config) SetTailcatEnabled(enabled bool) {
+	c.tailcatEnabled = enabled
+}
+
+// TailcatEnabled reports whether this process has a Tailcat listener.
+func (c Config) TailcatEnabled() bool {
+	return c.tailcatEnabled
 }
 
 // RoutingConfig is the canonical, normalized routing/scheduling configuration.
